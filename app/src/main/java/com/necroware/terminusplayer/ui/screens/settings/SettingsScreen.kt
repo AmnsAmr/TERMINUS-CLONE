@@ -18,16 +18,26 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -40,7 +50,11 @@ import com.necroware.terminusplayer.ui.theme.ThemePresets
 import kotlinx.coroutines.delay
 
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(
+    viewModel: SettingsViewModel = hiltViewModel(),
+    onNavigateToUpload: () -> Unit = {},
+    onNavigateToGapFinder: () -> Unit = {}
+) {
     val prefs by viewModel.preferences.collectAsStateWithLifecycle()
     val importStatus by viewModel.importStatus.collectAsStateWithLifecycle()
 
@@ -75,6 +89,22 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
 
         item { SectionLabel("THEME") }
         item { ThemeGrid(selected = prefs.themeId, onSelect = viewModel::setTheme) }
+
+        item { SectionLabel("SERVER SETTINGS") }
+        item {
+            ServerSettingsSection(
+                serverUrl = prefs.serverUrl,
+                username = prefs.username,
+                password = prefs.password,
+                onSave = { url, user, pass ->
+                    viewModel.setServerSettings(url, user, pass)
+                }
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            ActionRow(label = "[ UPLOAD ]", sublabel = "Upload files to server", onClick = onNavigateToUpload)
+            Spacer(modifier = Modifier.height(10.dp))
+            ActionRow(label = "[ GAPFINDER ]", sublabel = "Configure GapFinder", onClick = onNavigateToGapFinder)
+        }
 
         item { SectionLabel("EQUALIZER") }
         item {
@@ -411,6 +441,65 @@ private fun ActionRow(label: String, sublabel: String, onClick: () -> Unit) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+@Composable
+private fun ServerSettingsSection(
+    serverUrl: String,
+    username: String,
+    password: String,
+    onSave: (String, String, String) -> Unit
+) {
+    var url by remember(serverUrl) { mutableStateOf(serverUrl) }
+    var user by remember(username) { mutableStateOf(username) }
+    var pass by remember(password) { mutableStateOf(password) }
+
+    TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = url,
+                onValueChange = { url = it },
+                label = { Text("Server URL") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            )
+            OutlinedTextField(
+                value = user,
+                onValueChange = { user = it },
+                label = { Text("Username") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            )
+            OutlinedTextField(
+                value = pass,
+                onValueChange = { pass = it },
+                label = { Text("Password") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            )
+            Button(
+                onClick = { onSave(url, user, pass) },
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Text("SAVE & SYNC")
+            }
         }
     }
 }

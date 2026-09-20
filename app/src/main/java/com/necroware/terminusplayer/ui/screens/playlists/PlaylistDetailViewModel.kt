@@ -32,7 +32,7 @@ class PlaylistDetailViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val rawArg: String = checkNotNull(savedStateHandle["kind"])
-    private val customPlaylistId: Long? = rawArg.removePrefix("custom:").toLongOrNull()
+    private val customPlaylistId: String? = rawArg.removePrefix("custom:")
         .takeIf { rawArg.startsWith("custom:") }
     private val kind: PlaylistKind? = if (customPlaylistId == null) PlaylistKind.valueOf(rawArg) else null
 

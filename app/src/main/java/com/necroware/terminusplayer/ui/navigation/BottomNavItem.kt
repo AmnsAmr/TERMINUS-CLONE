@@ -11,6 +11,8 @@ sealed class Destination(val route: String, val label: String) {
     data object Settings : Destination("settings", "SETTINGS")
     data object NowPlaying : Destination("now_playing", "NOW PLAYING")
     data object Search : Destination("search", "SEARCH")
+    data object Upload : Destination("upload", "UPLOAD")
+    data object GapFinder : Destination("gapfinder", "GAPFINDER")
 
     /** Route pattern registered with NavHost. Album is keyed by TITLE, not
      *  MediaStore albumId — MediaStore fragments one album into several

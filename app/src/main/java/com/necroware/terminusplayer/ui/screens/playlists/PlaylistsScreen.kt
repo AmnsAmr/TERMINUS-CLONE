@@ -23,7 +23,7 @@ import com.necroware.terminusplayer.ui.components.TerminalBorder
 @Composable
 fun PlaylistsScreen(
     onPlaylistClick: (PlaylistKind) -> Unit,
-    onCustomPlaylistClick: (Long) -> Unit,
+    onCustomPlaylistClick: (String) -> Unit,
     viewModel: PlaylistsViewModel = hiltViewModel()
 ) {
     val customPlaylists by viewModel.customPlaylists.collectAsStateWithLifecycle()

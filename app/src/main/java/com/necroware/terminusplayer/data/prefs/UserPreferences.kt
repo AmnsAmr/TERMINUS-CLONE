@@ -48,6 +48,9 @@ data class UserPreferences(
     val crossfade: CrossfadeSettings = CrossfadeSettings(),
     val preferHardwareDecoder: Boolean = true,
     val playbackArtStyle: PlaybackArtStyle = PlaybackArtStyle.STANDARD,
-    val lastPlayedSongId: Long? = null,
-    val lastPlayedPositionMs: Long = 0L
+    val lastPlayedSongId: String? = null,
+    val lastPlayedPositionMs: Long = 0L,
+    val serverUrl: String = "",
+    val username: String = "",
+    val password: String = ""
 )

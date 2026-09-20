@@ -5,7 +5,7 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "playlists")
 data class PlaylistEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    @PrimaryKey val id: String,
     val name: String,
     val createdAt: Long
 )
@@ -18,7 +18,7 @@ data class PlaylistEntity(
  */
 @Entity(tableName = "playlist_songs", primaryKeys = ["playlistId", "songId"])
 data class PlaylistSongEntity(
-    val playlistId: Long,
-    val songId: Long,
+    val playlistId: String,
+    val songId: String,
     val position: Int
 )

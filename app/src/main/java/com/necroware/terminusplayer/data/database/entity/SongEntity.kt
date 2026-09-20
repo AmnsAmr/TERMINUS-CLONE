@@ -5,11 +5,12 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "songs")
 data class SongEntity(
-    @PrimaryKey val mediaStoreId: Long,
+    @PrimaryKey val remoteId: String,
+    val providerId: String,
     val title: String,
     val artist: String,
     val album: String,
-    val albumId: Long,
+    val albumId: String,
     val duration: Long,
     val uriString: String,
     val dateAdded: Long,

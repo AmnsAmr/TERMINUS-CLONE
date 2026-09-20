@@ -18,7 +18,7 @@ import javax.inject.Inject
 
 data class AlbumDetailUiState(
     val isLoading: Boolean = true,
-    val albumId: Long = -1L,
+    val albumId: String = "",
     val representativeUriString: String = "",
     val albumTitle: String = "",
     val artist: String = "",
@@ -53,7 +53,7 @@ class AlbumDetailViewModel @Inject constructor(
                 // Representative albumId (first song's) purely for legacy
                 // reference — actual art now loads per-file via
                 // representativeUriString (see SongArt.kt for why).
-                albumId = songs.firstOrNull()?.albumId ?: -1L,
+                albumId = songs.firstOrNull()?.albumId ?: "",
                 representativeUriString = songs.firstOrNull()?.uriString.orEmpty(),
                 albumTitle = songs.firstOrNull()?.album ?: albumTitle,
                 artist = songs.firstOrNull()?.artist.orEmpty(),

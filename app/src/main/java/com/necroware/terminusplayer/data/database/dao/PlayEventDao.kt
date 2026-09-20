@@ -97,7 +97,7 @@ interface PlayEventDao {
     suspend fun statsForArtist(artist: String): GroupStatsRow?
 
     @Query("SELECT COUNT(*) as totalPlays, COALESCE(SUM(msPlayed),0) as totalMsPlayed FROM play_events WHERE albumId = :albumId")
-    suspend fun statsForAlbum(albumId: Long): GroupStatsRow?
+    suspend fun statsForAlbum(albumId: String): GroupStatsRow?
 
     @Query("SELECT COUNT(*) as totalPlays, COALESCE(SUM(msPlayed),0) as totalMsPlayed FROM play_events WHERE album = :albumTitle COLLATE NOCASE")
     suspend fun statsForAlbumTitle(albumTitle: String): GroupStatsRow?
@@ -124,7 +124,7 @@ interface PlayEventDao {
         LIMIT 1
         """
     )
-    suspend fun topSongForAlbum(albumId: Long): TopSongRow?
+    suspend fun topSongForAlbum(albumId: String): TopSongRow?
 
     @Query(
         """
@@ -143,7 +143,7 @@ interface PlayEventDao {
         """
         SELECT pe.songId as songId, s.title as title, COUNT(*) as playCount
         FROM play_events pe
-        JOIN songs s ON s.mediaStoreId = pe.songId
+        JOIN songs s ON s.remoteId = pe.songId
         WHERE pe.startedAtEpochMs >= :sinceEpochMs
         GROUP BY pe.songId
         ORDER BY playCount DESC
@@ -170,7 +170,7 @@ interface PlayEventDao {
         """
         SELECT pe.songId as songId, s.title as title, COUNT(*) as playCount
         FROM play_events pe
-        JOIN songs s ON s.mediaStoreId = pe.songId
+        JOIN songs s ON s.remoteId = pe.songId
         WHERE pe.startedAtEpochMs >= :startEpochMs AND pe.startedAtEpochMs < :endEpochMs
         GROUP BY pe.songId
         ORDER BY playCount DESC
@@ -193,10 +193,10 @@ interface PlayEventDao {
     suspend fun playsByMonth(sinceEpochMs: Long): List<MonthPlayCount>
 }
 
-data class RecentSongRow(val songId: Long, val lastPlayedAt: Long)
-data class TopSongRow(val songId: Long, val playCount: Int)
+data class RecentSongRow(val songId: String, val lastPlayedAt: Long)
+data class TopSongRow(val songId: String, val playCount: Int)
 data class GroupStatsRow(val totalPlays: Int, val totalMsPlayed: Long)
-data class TopSongTitleRow(val songId: Long, val title: String, val playCount: Int)
+data class TopSongTitleRow(val songId: String, val title: String, val playCount: Int)
 data class LabeledPlayCount(val label: String, val playCount: Int)
 data class MonthPlayCount(val monthLabel: String, val playCount: Int)
 

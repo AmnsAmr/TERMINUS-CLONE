@@ -23,7 +23,7 @@ interface SongDao {
     fun observeSongsByArtist(artist: String): Flow<List<SongEntity>>
 
     @Query("SELECT * FROM songs WHERE albumId = :albumId ORDER BY trackNumber ASC")
-    fun observeSongsByAlbum(albumId: Long): Flow<List<SongEntity>>
+    fun observeSongsByAlbum(albumId: String): Flow<List<SongEntity>>
 
     /**
      * Merges every MediaStore albumId that shares the same album title
@@ -43,14 +43,14 @@ interface SongDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(songs: List<SongEntity>)
 
-    @Query("DELETE FROM songs WHERE mediaStoreId NOT IN (:validIds)")
-    suspend fun pruneDeleted(validIds: List<Long>)
+    @Query("DELETE FROM songs WHERE remoteId NOT IN (:validIds)")
+    suspend fun pruneDeleted(validIds: List<String>)
 
-    @Query("SELECT * FROM songs WHERE mediaStoreId = :id LIMIT 1")
-    suspend fun getById(id: Long): SongEntity?
+    @Query("SELECT * FROM songs WHERE remoteId = :id LIMIT 1")
+    suspend fun getById(id: String): SongEntity?
 
-    @Query("SELECT * FROM songs WHERE mediaStoreId IN (:ids)")
-    suspend fun getByIds(ids: List<Long>): List<SongEntity>
+    @Query("SELECT * FROM songs WHERE remoteId IN (:ids)")
+    suspend fun getByIds(ids: List<String>): List<SongEntity>
 
     @Query("SELECT * FROM songs ORDER BY dateAdded DESC LIMIT :limit")
     suspend fun mostRecentlyAdded(limit: Int): List<SongEntity>

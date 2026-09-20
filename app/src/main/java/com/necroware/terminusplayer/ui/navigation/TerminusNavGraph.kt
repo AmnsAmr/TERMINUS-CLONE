@@ -89,7 +89,9 @@ fun TerminusNavGraph() {
         Destination.AlbumDetail.route,
         Destination.ArtistDetail.route,
         Destination.PlaylistDetail.route,
-        Destination.Search.route
+        Destination.Search.route,
+        Destination.Upload.route,
+        Destination.GapFinder.route
     )
 
     Scaffold(
@@ -174,7 +176,18 @@ fun TerminusNavGraph() {
                 )
             }
             composable(Destination.Stats.route) { StatsScreen() }
-            composable(Destination.Settings.route) { SettingsScreen() }
+            composable(Destination.Settings.route) {
+                SettingsScreen(
+                    onNavigateToUpload = { navController.navigate(Destination.Upload.route) },
+                    onNavigateToGapFinder = { navController.navigate(Destination.GapFinder.route) }
+                )
+            }
+            composable(Destination.Upload.route) {
+                com.necroware.terminusplayer.ui.screens.upload.UploadScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Destination.GapFinder.route) {
+                com.necroware.terminusplayer.ui.screens.gapfinder.GapFinderScreen(onBack = { navController.popBackStack() })
+            }
             composable(
                 route = Destination.NowPlaying.route,
                 enterTransition = {

@@ -38,7 +38,7 @@ data class StatsSummary(
 data class GroupListenStats(
     val totalPlays: Int,
     val totalMsPlayed: Long,
-    val topSongId: Long?
+    val topSongId: String?
 )
 
 data class SessionStats(
@@ -53,10 +53,11 @@ class StatsRepository @Inject constructor(
 ) {
 
     suspend fun recordPlay(
-        songId: Long,
+        songId: String,
         artist: String,
         album: String,
-        albumId: Long,
+        albumId: String,
+        startedAtEpochMs: Long,
         msPlayed: Long,
         completed: Boolean
     ) {
@@ -66,7 +67,7 @@ class StatsRepository @Inject constructor(
                 artist = artist,
                 album = album,
                 albumId = albumId,
-                startedAtEpochMs = System.currentTimeMillis(),
+                startedAtEpochMs = startedAtEpochMs,
                 msPlayed = msPlayed,
                 completed = completed
             )

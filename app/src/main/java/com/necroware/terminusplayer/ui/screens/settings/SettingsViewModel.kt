@@ -112,6 +112,13 @@ class SettingsViewModel @Inject constructor(
         _importStatus.value = ImportStatus.Idle
     }
 
+    fun setServerSettings(url: String, user: String, pass: String) = viewModelScope.launch {
+        preferencesRepository.setNavidromeSettings(url, user, pass)
+        androidx.work.WorkManager.getInstance(context).enqueue(
+            androidx.work.OneTimeWorkRequestBuilder<com.necroware.terminusplayer.sync.LibrarySyncWorker>().build()
+        )
+    }
+
     private fun displayNameFor(uri: Uri): String {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) {

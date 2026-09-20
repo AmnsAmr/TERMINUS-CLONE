@@ -41,7 +41,7 @@ class PlaybackViewModel @Inject constructor(
      * directly off nowPlaying.
      */
     val currentSongUri: StateFlow<String?> = nowPlaying
-        .map { it.mediaId?.toLongOrNull() }
+        .map { it.mediaId }
         .distinctUntilChanged()
         .map { songId -> songId?.let { repository.getSongUri(it) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
@@ -59,7 +59,7 @@ class PlaybackViewModel @Inject constructor(
 
     val isCurrentLiked: StateFlow<Boolean> =
         combine(nowPlaying, repository.observeLikedIds()) { playing, likedIds ->
-            val currentId = playing.mediaId?.toLongOrNull()
+            val currentId = playing.mediaId
             currentId != null && currentId in likedIds
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
@@ -75,7 +75,7 @@ class PlaybackViewModel @Inject constructor(
     fun cycleRepeatMode() = controller.cycleRepeatMode()
 
     fun toggleCurrentLike() {
-        val currentId = nowPlaying.value.mediaId?.toLongOrNull() ?: return
+        val currentId = nowPlaying.value.mediaId ?: return
         viewModelScope.launch { repository.toggleLike(currentId) }
     }
 

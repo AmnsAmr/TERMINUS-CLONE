@@ -22,8 +22,11 @@ private object Keys {
     val CROSSFADE_DURATION_MS = intPreferencesKey("crossfade_duration_ms")
     val PREFER_HW_DECODER = booleanPreferencesKey("prefer_hw_decoder")
     val PLAYBACK_ART_STYLE = stringPreferencesKey("playback_art_style")
-    val LAST_PLAYED_SONG_ID = longPreferencesKey("last_played_song_id")
+    val LAST_PLAYED_SONG_ID = stringPreferencesKey("last_played_song_id_v2")
     val LAST_PLAYED_POSITION_MS = longPreferencesKey("last_played_position_ms")
+    val SERVER_URL = stringPreferencesKey("server_url")
+    val USERNAME = stringPreferencesKey("username")
+    val PASSWORD = stringPreferencesKey("password")
 }
 
 private fun eqBandKey(index: Int) = intPreferencesKey("${Keys.EQ_BAND_PREFIX}$index")
@@ -73,7 +76,7 @@ class UserPreferencesRepository @Inject constructor(
         dataStore.edit { it[Keys.PREFER_HW_DECODER] = enabled }
     }
 
-    suspend fun setLastPlayed(songId: Long?, positionMs: Long) {
+    suspend fun setLastPlayed(songId: String?, positionMs: Long) {
         dataStore.edit { prefs ->
             if (songId != null) {
                 prefs[Keys.LAST_PLAYED_SONG_ID] = songId
@@ -110,7 +113,18 @@ class UserPreferencesRepository @Inject constructor(
             preferHardwareDecoder = this[Keys.PREFER_HW_DECODER] ?: defaults.preferHardwareDecoder,
             playbackArtStyle = playbackArtStyle,
             lastPlayedSongId = this[Keys.LAST_PLAYED_SONG_ID],
-            lastPlayedPositionMs = this[Keys.LAST_PLAYED_POSITION_MS] ?: 0L
+            lastPlayedPositionMs = this[Keys.LAST_PLAYED_POSITION_MS] ?: 0L,
+            serverUrl = this[Keys.SERVER_URL] ?: "",
+            username = this[Keys.USERNAME] ?: "",
+            password = this[Keys.PASSWORD] ?: ""
         )
+    }
+
+    suspend fun setNavidromeSettings(serverUrl: String, username: String, password: String) {
+        dataStore.edit {
+            it[Keys.SERVER_URL] = serverUrl
+            it[Keys.USERNAME] = username
+            it[Keys.PASSWORD] = password
+        }
     }
 }

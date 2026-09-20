@@ -21,6 +21,8 @@ private fun glyphFor(destination: Destination): String = when (destination) {
     Destination.AlbumDetail -> "[○]"
     Destination.ArtistDetail -> "[&]"
     Destination.PlaylistDetail -> "[≣]"
+    Destination.Upload -> "[↑]"
+    Destination.GapFinder -> "[~]"
 }
 
 @Composable

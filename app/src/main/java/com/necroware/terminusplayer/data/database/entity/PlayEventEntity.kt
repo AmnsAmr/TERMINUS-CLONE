@@ -11,10 +11,10 @@ import androidx.room.PrimaryKey
 @Entity(tableName = "play_events")
 data class PlayEventEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val songId: Long,
+    val songId: String,
     val artist: String,
     val album: String,
-    val albumId: Long = -1L,
+    val albumId: String,
     val startedAtEpochMs: Long,
     val msPlayed: Long,
     val completed: Boolean
