@@ -58,7 +58,7 @@ fun TerminalSlider(
         horizontalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         repeat(segmentCount) { index ->
-            val isFilled = if (originSegment != null && originFraction != null) {
+            val isFilled = if (originSegment != null) {
                 if (clamped >= originFraction) index in originSegment..filledSegments.coerceAtLeast(originSegment)
                 else index in filledSegments.coerceAtMost(originSegment)..originSegment
             } else {

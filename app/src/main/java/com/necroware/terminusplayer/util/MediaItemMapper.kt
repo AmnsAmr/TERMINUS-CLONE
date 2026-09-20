@@ -11,7 +11,7 @@ private const val EXTRA_SIZE_BYTES = "com.necroware.terminusplayer.SIZE_BYTES"
 
 fun Song.toMediaItem(): MediaItem {
     val extras = Bundle().apply {
-        putLong(EXTRA_ALBUM_ID, albumId)
+        putString(EXTRA_ALBUM_ID, albumId)
         putLong(EXTRA_SIZE_BYTES, sizeBytes)
     }
 
@@ -23,7 +23,7 @@ fun Song.toMediaItem(): MediaItem {
         .build()
 
     return MediaItem.Builder()
-        .setMediaId(id.toString())
+        .setMediaId(id)
         .setUri(Uri.parse(uriString))
         .setMediaMetadata(metadata)
         .build()
@@ -31,8 +31,8 @@ fun Song.toMediaItem(): MediaItem {
 
 fun List<Song>.toMediaItems(): List<MediaItem> = map { it.toMediaItem() }
 
-/** Reads the albumId stashed in MediaMetadata.extras, or -1 if absent/not a Song-derived item. */
-fun MediaMetadata.albumIdOrNull(): Long? = extras?.getLong(EXTRA_ALBUM_ID, -1L)?.takeIf { it != -1L }
+/** Reads the albumId stashed in MediaMetadata.extras, or null if absent/not a Song-derived item. */
+fun MediaMetadata.albumIdOrNull(): String? = extras?.getString(EXTRA_ALBUM_ID)
 
 /** Reads the file size (bytes) stashed in MediaMetadata.extras, or 0 if absent. */
 fun MediaMetadata.sizeBytesOrZero(): Long = extras?.getLong(EXTRA_SIZE_BYTES, 0L) ?: 0L

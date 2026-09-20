@@ -1,4 +1,4 @@
-package com.necroware.terminusplayer.data.mediastore
+package com.necroware.terminusplayer.data.provider
 
 import android.content.ContentUris
 import android.content.Context
@@ -11,16 +11,14 @@ import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Scans the device's MediaStore for audio files and maps them to SongEntity rows.
- * Runs on Dispatchers.IO; call from a repository, never directly from a Composable.
- */
 @Singleton
-class MediaStoreScanner @Inject constructor(
+class LocalMediaProvider @Inject constructor(
     @ApplicationContext private val context: Context
-) {
+) : MediaProvider {
 
-    suspend fun scanAudioFiles(): List<SongEntity> = withContext(Dispatchers.IO) {
+    override val providerId: String = "local"
+
+    override suspend fun syncLibrary(): List<SongEntity> = withContext(Dispatchers.IO) {
         val songs = mutableListOf<SongEntity>()
 
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
@@ -67,11 +65,12 @@ class MediaStoreScanner @Inject constructor(
                 val contentUri = ContentUris.withAppendedId(collection, id)
 
                 songs += SongEntity(
-                    mediaStoreId = id,
+                    remoteId = id.toString(),
+                    providerId = providerId,
                     title = cursor.getString(titleCol) ?: "Unknown",
                     artist = cursor.getString(artistCol) ?: "Unknown Artist",
                     album = cursor.getString(albumCol) ?: "Unknown Album",
-                    albumId = cursor.getLong(albumIdCol),
+                    albumId = cursor.getLong(albumIdCol).toString(),
                     duration = cursor.getLong(durationCol),
                     uriString = contentUri.toString(),
                     dateAdded = cursor.getLong(dateAddedCol),
@@ -84,5 +83,18 @@ class MediaStoreScanner @Inject constructor(
         }
 
         songs
+    }
+
+    override suspend fun resolveStreamUrl(remoteId: String): String {
+        val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        return ContentUris.withAppendedId(collection, remoteId.toLong()).toString()
+    }
+
+    override suspend fun scrobble(remoteId: String) {
+        // No-op for local provider
+    }
+
+    override suspend fun toggleLike(remoteId: String, isLiked: Boolean) {
+        // No-op for local provider
     }
 }

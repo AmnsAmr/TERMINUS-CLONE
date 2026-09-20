@@ -14,7 +14,7 @@ import com.necroware.terminusplayer.data.database.entity.LikedSongEntity
 import com.necroware.terminusplayer.data.database.entity.PlaylistEntity
 import com.necroware.terminusplayer.data.database.entity.PlaylistSongEntity
 import com.necroware.terminusplayer.data.database.entity.SongEntity
-import com.necroware.terminusplayer.data.mediastore.MediaStoreScanner
+import com.necroware.terminusplayer.data.provider.MediaProvider
 import com.necroware.terminusplayer.data.model.Album
 import com.necroware.terminusplayer.data.model.Artist
 import com.necroware.terminusplayer.data.model.Playlist
@@ -39,20 +39,20 @@ class MusicRepository @Inject constructor(
     private val likedSongDao: LikedSongDao,
     private val playEventDao: PlayEventDao,
     private val playlistDao: PlaylistDao,
-    private val scanner: MediaStoreScanner
+    private val providers: Map<String, @JvmSuppressWildcards MediaProvider>
 ) {
 
-    /** Re-scans MediaStore and syncs the Room cache. Call on app start and pull-to-refresh. */
+    /** Re-scans all providers and syncs the Room cache. Call on app start and pull-to-refresh. */
     suspend fun syncLibrary() {
-        val scanned = scanner.scanAudioFiles()
+        val scanned = providers.values.flatMap { it.syncLibrary() }
         songDao.upsertAll(scanned)
-        songDao.pruneDeleted(scanned.map { it.mediaStoreId })
+        songDao.pruneDeleted(scanned.map { it.remoteId })
     }
 
     fun observeAllSongs(): Flow<List<Song>> =
         combine(songDao.observeAllSongs(), likedSongDao.observeLikedIds()) { songs, likedIds ->
             val likedSet = likedIds.toHashSet()
-            songs.map { it.toSong(isLiked = it.mediaStoreId in likedSet) }
+            songs.map { it.toSong(isLiked = it.remoteId in likedSet) }
         }
 
     fun observeAllArtists(): Flow<List<Artist>> =
@@ -86,16 +86,28 @@ class MusicRepository @Inject constructor(
     fun searchSongs(query: String): Flow<List<Song>> =
         songDao.searchSongs(query).map { entities -> entities.map { it.toSong() } }
 
-    suspend fun toggleLike(songId: Long) {
-        if (likedSongDao.isLiked(songId)) {
+    suspend fun toggleLike(songId: String) {
+        val song = songDao.getById(songId)
+        val isCurrentlyLiked = likedSongDao.isLiked(songId)
+        val newLikedState = !isCurrentlyLiked
+
+        if (isCurrentlyLiked) {
             likedSongDao.unlike(songId)
         } else {
             likedSongDao.like(LikedSongEntity(songId, System.currentTimeMillis()))
         }
+
+        if (song != null) {
+            try {
+                providers[song.providerId]?.toggleLike(song.remoteId, newLikedState)
+            } catch (e: Exception) {
+                // Ignore provider failures (e.g. network issues) for now
+            }
+        }
     }
 
     /** Used by the Now Playing like-button to reflect the current track's liked state. */
-    fun observeLikedIds(): Flow<List<Long>> = likedSongDao.observeLikedIds()
+    fun observeLikedIds(): Flow<List<String>> = likedSongDao.observeLikedIds()
 
     /**
      * Media3's MediaController doesn't preserve a MediaItem's local content
@@ -104,23 +116,39 @@ class MusicRepository @Inject constructor(
      * resolves the current track's real file URI via this lookup instead
      * of trying to read it back off the controller.
      */
-    suspend fun getSongUri(songId: Long): String? = songDao.getById(songId)?.uriString
+    suspend fun getSongUri(songId: String): String? {
+        val song = songDao.getById(songId) ?: return null
+        return try {
+            providers[song.providerId]?.resolveStreamUrl(song.remoteId) ?: song.uriString
+        } catch (e: Exception) {
+            song.uriString
+        }
+    }
+
+    suspend fun scrobble(songId: String) {
+        val song = songDao.getById(songId) ?: return
+        try {
+            providers[song.providerId]?.scrobble(song.remoteId)
+        } catch (e: Exception) {
+            // Ignore scrobble failures
+        }
+    }
 
     suspend fun getSongsForAlbum(albumTitle: String): List<Song> {
         val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
-        return songDao.observeSongsByAlbumTitle(albumTitle).first().map { it.toSong(isLiked = it.mediaStoreId in likedIds) }
+        return songDao.observeSongsByAlbumTitle(albumTitle).first().map { it.toSong(isLiked = it.remoteId in likedIds) }
     }
 
     suspend fun getSongsForArtist(artist: String): List<Song> {
         val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
-        return songDao.observeSongsByArtist(artist).first().map { it.toSong(isLiked = it.mediaStoreId in likedIds) }
+        return songDao.observeSongsByArtist(artist).first().map { it.toSong(isLiked = it.remoteId in likedIds) }
     }
 
     /** Liked songs, most recently liked first — the "Liked Songs" auto-playlist. */
     suspend fun getLikedSongs(): List<Song> {
         val likedIdsOrdered = likedSongDao.getLikedIdsMostRecentFirst()
         if (likedIdsOrdered.isEmpty()) return emptyList()
-        val entitiesById = songDao.getByIds(likedIdsOrdered).associateBy { it.mediaStoreId }
+        val entitiesById = songDao.getByIds(likedIdsOrdered).associateBy { it.remoteId }
         return likedIdsOrdered.mapNotNull { id -> entitiesById[id]?.toSong(isLiked = true) }
     }
 
@@ -129,7 +157,7 @@ class MusicRepository @Inject constructor(
         val rows = playEventDao.topPlayedSongIds(limit)
         if (rows.isEmpty()) return emptyList()
         val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
-        val entitiesById = songDao.getByIds(rows.map { it.songId }).associateBy { it.mediaStoreId }
+        val entitiesById = songDao.getByIds(rows.map { it.songId }).associateBy { it.remoteId }
         return rows.mapNotNull { row ->
             entitiesById[row.songId]?.toSong(isLiked = row.songId in likedIds)
         }
@@ -140,7 +168,7 @@ class MusicRepository @Inject constructor(
         val rows = playEventDao.recentlyPlayedSongIds(limit)
         if (rows.isEmpty()) return emptyList()
         val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
-        val entitiesById = songDao.getByIds(rows.map { it.songId }).associateBy { it.mediaStoreId }
+        val entitiesById = songDao.getByIds(rows.map { it.songId }).associateBy { it.remoteId }
         // Room's IN clause doesn't preserve order, so re-order to match recency.
         return rows.mapNotNull { row ->
             entitiesById[row.songId]?.toSong(isLiked = row.songId in likedIds)
@@ -162,7 +190,7 @@ class MusicRepository @Inject constructor(
         val likedIds = likedSongDao.observeLikedIds().first()
         val topPlayed = playEventDao.topPlayedSongIds(limit = 50)
 
-        val weightedBag = mutableListOf<Long>()
+        val weightedBag = mutableListOf<String>()
         topPlayed.forEach { row ->
             repeat(row.playCount.coerceIn(1, 5)) { weightedBag += row.songId }
         }
@@ -170,8 +198,8 @@ class MusicRepository @Inject constructor(
             repeat(3) { weightedBag += id }
         }
 
-        val candidateIds: List<Long> = if (weightedBag.isEmpty()) {
-            songDao.mostRecentlyAdded(limit * 2).map { it.mediaStoreId }
+        val candidateIds: List<String> = if (weightedBag.isEmpty()) {
+            songDao.mostRecentlyAdded(limit * 2).map { it.remoteId }
         } else {
             weightedBag.shuffled()
         }
@@ -180,7 +208,7 @@ class MusicRepository @Inject constructor(
         if (distinctOrdered.isEmpty()) return emptyList()
 
         val likedSet = likedIds.toHashSet()
-        val entitiesById = songDao.getByIds(distinctOrdered).associateBy { it.mediaStoreId }
+        val entitiesById = songDao.getByIds(distinctOrdered).associateBy { it.remoteId }
         return distinctOrdered
             .mapNotNull { id -> entitiesById[id]?.toSong(isLiked = id in likedSet) }
             .shuffled()
@@ -193,14 +221,14 @@ class MusicRepository @Inject constructor(
             rows.map { Playlist(id = it.id, name = it.name, songCount = it.songCount) }
         }
 
-    suspend fun getSongsForPlaylist(playlistId: Long): List<Song> {
+    suspend fun getSongsForPlaylist(playlistId: String): List<Song> {
         val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
-        return playlistDao.getSongsForPlaylist(playlistId).map { it.toSong(isLiked = it.mediaStoreId in likedIds) }
+        return playlistDao.getSongsForPlaylist(playlistId).map { it.toSong(isLiked = it.remoteId in likedIds) }
     }
 
-    suspend fun getPlaylistName(playlistId: Long): String = playlistDao.getPlaylistName(playlistId) ?: "PLAYLIST"
+    suspend fun getPlaylistName(playlistId: String): String = playlistDao.getPlaylistName(playlistId) ?: "PLAYLIST"
 
-    suspend fun deletePlaylist(playlistId: Long) {
+    suspend fun deletePlaylist(playlistId: String) {
         playlistDao.deletePlaylistSongs(playlistId)
         playlistDao.deletePlaylist(playlistId)
     }
@@ -225,8 +253,9 @@ class MusicRepository @Inject constructor(
         val matched = entries.mapNotNull { entry -> matchM3uEntryToSong(entry, byNormalizedTitle) }
         if (matched.isEmpty()) return@withContext 0 to entries.size
 
-        val playlistId = playlistDao.insertPlaylist(
-            PlaylistEntity(name = name, createdAt = System.currentTimeMillis())
+        val playlistId = java.util.UUID.randomUUID().toString()
+        playlistDao.insertPlaylist(
+            PlaylistEntity(id = playlistId, name = name, createdAt = System.currentTimeMillis())
         )
         playlistDao.insertPlaylistSongs(
             matched.mapIndexed { index, song -> PlaylistSongEntity(playlistId, song.id, index) }
@@ -291,7 +320,8 @@ class MusicRepository @Inject constructor(
 }
 
 private fun SongEntity.toSong(isLiked: Boolean = false): Song = Song(
-    id = mediaStoreId,
+    id = remoteId,
+    providerId = providerId,
     title = title,
     artist = artist,
     album = album,

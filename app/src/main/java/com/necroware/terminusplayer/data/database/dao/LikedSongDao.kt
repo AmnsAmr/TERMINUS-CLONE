@@ -12,17 +12,17 @@ import kotlinx.coroutines.flow.Flow
 interface LikedSongDao {
 
     @Query("SELECT songId FROM liked_songs")
-    fun observeLikedIds(): Flow<List<Long>>
+    fun observeLikedIds(): Flow<List<String>>
 
     @Query("SELECT songId FROM liked_songs ORDER BY likedAt DESC")
-    suspend fun getLikedIdsMostRecentFirst(): List<Long>
+    suspend fun getLikedIdsMostRecentFirst(): List<String>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun like(entity: LikedSongEntity)
 
     @Query("DELETE FROM liked_songs WHERE songId = :songId")
-    suspend fun unlike(songId: Long)
+    suspend fun unlike(songId: String)
 
     @Query("SELECT EXISTS(SELECT 1 FROM liked_songs WHERE songId = :songId)")
-    suspend fun isLiked(songId: Long): Boolean
+    suspend fun isLiked(songId: String): Boolean
 }

@@ -56,10 +56,10 @@ class MusicService : MediaSessionService() {
     private var fadeTickerJob: Job? = null
     private var savePositionJob: Job? = null
 
-    private var trackedSongId: Long? = null
+    private var trackedSongId: String? = null
     private var trackedArtist: String = ""
     private var trackedAlbum: String = ""
-    private var trackedAlbumId: Long = -1L
+    private var trackedAlbumId: String = ""
     private var trackedStartedAtElapsedMs: Long = 0L
     private var trackedDurationMs: Long = 0L
 
@@ -82,7 +82,30 @@ class MusicService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
 
+        val resolver = androidx.media3.datasource.ResolvingDataSource.Resolver { dataSpec ->
+            val uriStr = dataSpec.uri.toString()
+            if (uriStr.startsWith("terminus://")) {
+                val songId = uriStr.removePrefix("terminus://")
+                val resolvedUriStr = kotlinx.coroutines.runBlocking { musicRepository.getSongUri(songId) }
+                if (resolvedUriStr != null) {
+                    dataSpec.buildUpon().setUri(android.net.Uri.parse(resolvedUriStr)).build()
+                } else {
+                    dataSpec
+                }
+            } else {
+                dataSpec
+            }
+        }
+
+        val dataSourceFactory = androidx.media3.datasource.ResolvingDataSource.Factory(
+            androidx.media3.datasource.DefaultDataSource.Factory(this),
+            resolver
+        )
+        val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
+            .setDataSourceFactory(dataSourceFactory)
+
         player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(mediaSourceFactory)
             .setHandleAudioBecomingNoisy(true)
             .build()
         player.addListener(analyticsListener)
@@ -170,10 +193,10 @@ class MusicService : MediaSessionService() {
     }
 
     private fun startTracking(metadata: MediaMetadata?, mediaId: String?) {
-        trackedSongId = mediaId?.toLongOrNull()
+        trackedSongId = mediaId
         trackedArtist = metadata?.artist?.toString().orEmpty()
         trackedAlbum = metadata?.albumTitle?.toString().orEmpty()
-        trackedAlbumId = metadata?.albumIdOrNull() ?: -1L
+        trackedAlbumId = metadata?.albumIdOrNull() ?: ""
         trackedStartedAtElapsedMs = SystemClock.elapsedRealtime()
         trackedDurationMs = player.duration.coerceAtLeast(0L)
     }
@@ -195,9 +218,13 @@ class MusicService : MediaSessionService() {
                 artist = artist,
                 album = album,
                 albumId = albumId,
+                startedAtEpochMs = System.currentTimeMillis() - msPlayed,
                 msPlayed = msPlayed,
                 completed = completed
             )
+            if (completed) {
+                musicRepository.scrobble(songId)
+            }
         }
     }
 

@@ -52,7 +52,7 @@ class LibraryViewModel @Inject constructor(
         playbackController.playSongs(queue.toMediaItems(), index)
     }
 
-    fun toggleLike(songId: Long) {
+    fun toggleLike(songId: String) {
         viewModelScope.launch { repository.toggleLike(songId) }
     }
 }

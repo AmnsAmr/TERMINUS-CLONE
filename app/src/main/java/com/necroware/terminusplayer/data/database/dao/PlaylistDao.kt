@@ -10,7 +10,7 @@ import com.necroware.terminusplayer.data.database.entity.SongEntity
 import kotlinx.coroutines.flow.Flow
 
 data class PlaylistWithCount(
-    val id: Long,
+    val id: String,
     val name: String,
     val createdAt: Long,
     val songCount: Int
@@ -32,7 +32,7 @@ interface PlaylistDao {
     fun observePlaylists(): Flow<List<PlaylistWithCount>>
 
     @Insert
-    suspend fun insertPlaylist(playlist: PlaylistEntity): Long
+    suspend fun insertPlaylist(playlist: PlaylistEntity)
 
     @Insert
     suspend fun insertPlaylistSongs(songs: List<PlaylistSongEntity>)
@@ -40,19 +40,19 @@ interface PlaylistDao {
     @Query(
         """
         SELECT songs.* FROM songs
-        INNER JOIN playlist_songs ON playlist_songs.songId = songs.mediaStoreId
+        INNER JOIN playlist_songs ON playlist_songs.songId = songs.remoteId
         WHERE playlist_songs.playlistId = :playlistId
         ORDER BY playlist_songs.position ASC
         """
     )
-    suspend fun getSongsForPlaylist(playlistId: Long): List<SongEntity>
+    suspend fun getSongsForPlaylist(playlistId: String): List<SongEntity>
 
     @Query("SELECT name FROM playlists WHERE id = :playlistId LIMIT 1")
-    suspend fun getPlaylistName(playlistId: Long): String?
+    suspend fun getPlaylistName(playlistId: String): String?
 
     @Query("DELETE FROM playlists WHERE id = :playlistId")
-    suspend fun deletePlaylist(playlistId: Long)
+    suspend fun deletePlaylist(playlistId: String)
 
     @Query("DELETE FROM playlist_songs WHERE playlistId = :playlistId")
-    suspend fun deletePlaylistSongs(playlistId: Long)
+    suspend fun deletePlaylistSongs(playlistId: String)
 }

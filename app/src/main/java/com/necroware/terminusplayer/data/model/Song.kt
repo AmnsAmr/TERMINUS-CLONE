@@ -1,11 +1,12 @@
 package com.necroware.terminusplayer.data.model
 
 data class Song(
-    val id: Long,
+    val id: String,
+    val providerId: String = "local", // local or remote source
     val title: String,
     val artist: String,
     val album: String,
-    val albumId: Long,
+    val albumId: String,
     val duration: Long,
     val uriString: String,
     val trackNumber: Int = 0,
@@ -17,7 +18,7 @@ data class Song(
 )
 
 data class Album(
-    val id: Long,
+    val id: String,
     val title: String,
     val artist: String,
     val songCount: Int,
@@ -39,7 +40,7 @@ data class Folder(
 )
 
 data class Playlist(
-    val id: Long,
+    val id: String,
     val name: String,
     val songCount: Int
 )
