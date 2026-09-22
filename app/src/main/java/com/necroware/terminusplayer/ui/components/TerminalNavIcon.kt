@@ -23,6 +23,7 @@ private fun glyphFor(destination: Destination): String = when (destination) {
     Destination.PlaylistDetail -> "[≣]"
     Destination.Upload -> "[↑]"
     Destination.GapFinder -> "[~]"
+    Destination.ManageSources -> "[+]"
 }
 
 @Composable

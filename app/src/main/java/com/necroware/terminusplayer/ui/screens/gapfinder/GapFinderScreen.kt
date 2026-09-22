@@ -50,8 +50,9 @@ fun GapFinderScreen(
             modifier = Modifier.clickable { onBack() }
         )
 
-        if (settings != null) {
-            val s = settings!!
+        val currentSettings = settings
+        if (currentSettings != null) {
+            val s = currentSettings
             TerminalBorder(modifier = Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("SETTINGS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)

@@ -46,8 +46,11 @@ class MusicService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private lateinit var player: ExoPlayer
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val exceptionHandler = kotlinx.coroutines.CoroutineExceptionHandler { _, throwable ->
+        android.util.Log.e("MusicService", "Unhandled coroutine exception", throwable)
+    }
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
+    private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + exceptionHandler)
 
     private val equalizerController = EqualizerController()
     private var equalizerSettings = EqualizerSettings()
@@ -86,9 +89,24 @@ class MusicService : MediaSessionService() {
             val uriStr = dataSpec.uri.toString()
             if (uriStr.startsWith("terminus://")) {
                 val songId = uriStr.removePrefix("terminus://")
-                val resolvedUriStr = kotlinx.coroutines.runBlocking { musicRepository.getSongUri(songId) }
+                val resolvedUriStr = try {
+                    kotlinx.coroutines.runBlocking { musicRepository.getSongUri(songId) }
+                } catch (e: InterruptedException) {
+                    throw java.io.InterruptedIOException().apply { initCause(e) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw java.io.InterruptedIOException().apply { initCause(e) }
+                }
                 if (resolvedUriStr != null) {
-                    dataSpec.buildUpon().setUri(android.net.Uri.parse(resolvedUriStr)).build()
+                    val uri = android.net.Uri.parse(resolvedUriStr)
+                    val builder = dataSpec.buildUpon().setUri(uri)
+                    
+                    if (resolvedUriStr.startsWith("http://") || resolvedUriStr.startsWith("https://")) {
+                        val maxBitRate = uri.getQueryParameter("maxBitRate")
+                        val cacheKey = if (maxBitRate != null) "${songId}_$maxBitRate" else songId
+                        builder.setKey(cacheKey)
+                    }
+                    
+                    builder.build()
                 } else {
                     dataSpec
                 }

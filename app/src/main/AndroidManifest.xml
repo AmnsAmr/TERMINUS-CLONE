@@ -19,6 +19,7 @@
         android:label="@string/app_name"
         android:theme="@style/Theme.TerminusPlayer"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         tools:targetApi="34">
 
         <activity

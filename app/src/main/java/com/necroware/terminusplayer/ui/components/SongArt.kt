@@ -47,6 +47,20 @@ fun SongArt(
     modifier: Modifier = Modifier,
     size: Dp = 56.dp
 ) {
+    if (uriString.startsWith("terminus://")) {
+        val songId = uriString.removePrefix("terminus://")
+        val url = "http://localhost/rest/getCoverArt?id=$songId&v=1.16.1&c=Terminus"
+        coil.compose.SubcomposeAsyncImage(
+            model = url,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = modifier.size(size),
+            loading = { SongArtFallback(size) },
+            error = { SongArtFallback(size) }
+        )
+        return
+    }
+
     val context = LocalContext.current
     val density = LocalDensity.current
     val sizePx = with(density) { size.roundToPx() }.coerceAtLeast(1)
@@ -105,6 +119,18 @@ private suspend fun loadThumbnailSafely(context: Context, uriString: String, siz
             val uri = Uri.parse(uriString)
             context.contentResolver.loadThumbnail(uri, android.util.Size(sizePx, sizePx), null)
         } catch (_: Exception) {
+            try {
+                val mmr = android.media.MediaMetadataRetriever()
+                context.contentResolver.openFileDescriptor(Uri.parse(uriString), "r")?.use { pfd ->
+                    mmr.setDataSource(pfd.fileDescriptor)
+                    val pic = mmr.embeddedPicture
+                    if (pic != null) {
+                        return@withContext android.graphics.BitmapFactory.decodeByteArray(pic, 0, pic.size)
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore
+            }
             null
         }
     }
