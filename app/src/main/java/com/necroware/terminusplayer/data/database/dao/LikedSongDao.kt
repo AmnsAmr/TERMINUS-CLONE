@@ -14,6 +14,9 @@ interface LikedSongDao {
     @Query("SELECT songId FROM liked_songs")
     fun observeLikedIds(): Flow<List<String>>
 
+    @Query("SELECT COUNT(*) FROM liked_songs")
+    fun observeLikedSongCount(): Flow<Int>
+
     @Query("SELECT songId FROM liked_songs ORDER BY likedAt DESC")
     suspend fun getLikedIdsMostRecentFirst(): List<String>
 

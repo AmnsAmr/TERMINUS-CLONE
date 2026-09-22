@@ -59,6 +59,17 @@ interface SongDao {
     @Query("SELECT * FROM songs ORDER BY dateAdded DESC LIMIT :limit")
     suspend fun mostRecentlyAdded(limit: Int): List<SongEntity>
 
+    @Query("SELECT artist, COUNT(*) as songCount FROM songs GROUP BY artist ORDER BY artist COLLATE NOCASE ASC")
+    fun observeAllArtistsWithSongCount(): Flow<List<ArtistWithSongCount>>
+
+    @Query("SELECT COUNT(*) FROM songs")
+    fun observeSongCount(): Flow<Int>
+
     @Query("SELECT COUNT(*) FROM songs")
     suspend fun count(): Int
 }
+
+data class ArtistWithSongCount(
+    val artist: String,
+    val songCount: Int
+)
