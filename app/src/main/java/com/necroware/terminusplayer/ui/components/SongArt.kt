@@ -24,11 +24,13 @@ fun SongArt(
     modifier: Modifier = Modifier,
     size: Dp = 56.dp
 ) {
-    val model = if (uriString.startsWith("terminus://")) {
+    val model = if (uriString.isBlank()) {
+        null
+    } else if (uriString.startsWith("terminus://")) {
         val songId = uriString.removePrefix("terminus://")
         "http://localhost/rest/getCoverArt?id=$songId&v=1.16.1&c=Terminus"
     } else {
-        uriString
+        com.necroware.terminusplayer.coil.LocalAudioUri(uriString)
     }
 
     SubcomposeAsyncImage(
