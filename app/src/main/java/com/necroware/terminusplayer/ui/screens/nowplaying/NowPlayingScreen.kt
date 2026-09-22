@@ -41,13 +41,12 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-/**
- * Interpolates position continuously between the ViewModel's actual polled
- * ticks using a per-frame clock, so the seek bar advances smoothly at 60fps
- * regardless of polling cadence. Re-syncs to the authoritative value every
- * time a fresh poll arrives. Returns the state itself (not just a Long) so
- * a manual seek can snap it immediately instead of waiting for the next poll.
- */
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import com.necroware.terminusplayer.ui.components.TerminalBorder
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.height
+
 @Composable
 private fun rememberSmoothPosition(
     actualPositionMs: Long,
@@ -80,6 +79,7 @@ fun NowPlayingScreen(viewModel: PlaybackViewModel, onCollapse: () -> Unit) {
     val isLiked by viewModel.isCurrentLiked.collectAsStateWithLifecycle()
     val currentSongUri by viewModel.currentSongUri.collectAsStateWithLifecycle()
     val artStyle by viewModel.artStyle.collectAsStateWithLifecycle()
+    val currentLyrics by viewModel.currentLyrics.collectAsStateWithLifecycle()
 
     val smoothPositionState = rememberSmoothPosition(positionMs, nowPlaying.isPlaying)
     val smoothPositionMs = smoothPositionState.value.coerceIn(0L, nowPlaying.durationMs.coerceAtLeast(0L))
@@ -88,37 +88,19 @@ fun NowPlayingScreen(viewModel: PlaybackViewModel, onCollapse: () -> Unit) {
     val offsetY = remember { Animatable(0f) }
     var screenHeightPx by remember { mutableStateOf(1f) }
     val dismissThresholdFraction = 0.25f
+    val scrollState = rememberScrollState()
 
-    // Plain Column (NOT a scrollable LazyColumn) — a scrollable child here
-    // competes with the swipe-down-to-dismiss drag gesture below and wins.
     Box(
         modifier = Modifier
             .fillMaxSize()
             .onSizeChanged { screenHeightPx = it.height.toFloat().coerceAtLeast(1f) }
             .offset { IntOffset(0, offsetY.value.roundToInt()) }
-            .pointerInput(Unit) {
-                detectVerticalDragGestures(
-                    onVerticalDrag = { change, dragAmount ->
-                        change.consume()
-                        val newOffset = (offsetY.value + dragAmount).coerceAtLeast(0f)
-                        coroutineScope.launch { offsetY.snapTo(newOffset) }
-                    },
-                    onDragEnd = {
-                        coroutineScope.launch {
-                            if (offsetY.value > screenHeightPx * dismissThresholdFraction) {
-                                onCollapse()
-                            } else {
-                                offsetY.animateTo(0f)
-                            }
-                        }
-                    }
-                )
-            }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 24.dp),
+                .padding(horizontal = 24.dp)
+                .verticalScroll(scrollState),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Top
         ) {
@@ -145,7 +127,24 @@ fun NowPlayingScreen(viewModel: PlaybackViewModel, onCollapse: () -> Unit) {
                 SongArt(
                     uriString = currentSongUri.orEmpty(),
                     size = 300.dp,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp)
+                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onVerticalDrag = { change, dragAmount ->
+                                change.consume()
+                                val newOffset = (offsetY.value + dragAmount).coerceAtLeast(0f)
+                                coroutineScope.launch { offsetY.snapTo(newOffset) }
+                            },
+                            onDragEnd = {
+                                coroutineScope.launch {
+                                    if (offsetY.value > screenHeightPx * dismissThresholdFraction) {
+                                        onCollapse()
+                                    } else {
+                                        offsetY.animateTo(0f)
+                                    }
+                                }
+                            }
+                        )
+                    }
                 )
             } else {
                 PlaybackArt(
@@ -154,7 +153,24 @@ fun NowPlayingScreen(viewModel: PlaybackViewModel, onCollapse: () -> Unit) {
                     artist = nowPlaying.artist,
                     isPlaying = nowPlaying.isPlaying,
                     size = 300.dp,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp)
+                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onVerticalDrag = { change, dragAmount ->
+                                change.consume()
+                                val newOffset = (offsetY.value + dragAmount).coerceAtLeast(0f)
+                                coroutineScope.launch { offsetY.snapTo(newOffset) }
+                            },
+                            onDragEnd = {
+                                coroutineScope.launch {
+                                    if (offsetY.value > screenHeightPx * dismissThresholdFraction) {
+                                        onCollapse()
+                                    } else {
+                                        offsetY.animateTo(0f)
+                                    }
+                                }
+                            }
+                        )
+                    }
                 )
             }
 
@@ -201,7 +217,6 @@ fun NowPlayingScreen(viewModel: PlaybackViewModel, onCollapse: () -> Unit) {
                 modifier = Modifier.fillMaxWidth().padding(top = 20.dp)
             )
 
-            // Audio Monitor now sits below the controls, per feedback.
             val kbps = nowPlaying.bitrateKbps.takeIf { it > 0 }
                 ?: estimateKbpsFromSize(nowPlaying.sizeBytes, nowPlaying.durationMs).takeIf { it > 0 }
             AudioMonitorCard(
@@ -214,6 +229,63 @@ fun NowPlayingScreen(viewModel: PlaybackViewModel, onCollapse: () -> Unit) {
                 isPlaying = nowPlaying.isPlaying,
                 modifier = Modifier.padding(top = 24.dp, bottom = 24.dp)
             )
+
+            val lyrics = currentLyrics
+            if (lyrics != null && lyrics.lines.isNotEmpty()) {
+                TerminalBorder(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(300.dp)
+                        .padding(bottom = 24.dp)
+                ) {
+                androidx.compose.runtime.key(lyrics) {
+                    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+                    val isSynced = remember(lyrics) { lyrics.lines.any { it.startMs > 0L } }
+                    val activeIndex = if (isSynced) {
+                        lyrics.lines.indexOfLast { it.startMs <= smoothPositionMs }
+                    } else {
+                        -1
+                    }
+                    
+                    LaunchedEffect(activeIndex) {
+                        if (activeIndex >= 0 && !listState.isScrollInProgress) {
+                            // Calculate a reasonable offset to center the active item (approximate)
+                            listState.animateScrollToItem(activeIndex.coerceAtLeast(0))
+                        }
+                    }
+
+                    Column {
+                        Text(
+                            text = if (isSynced) "[SYNCED LYRICS]" else "[LYRICS]",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        androidx.compose.foundation.lazy.LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            itemsIndexed(lyrics.lines) { index, line ->
+                                val isActive = isSynced && index == activeIndex
+                                Text(
+                                    text = line.text.ifBlank { " " },
+                                    style = if (isActive) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
+                                    fontWeight = if (isActive) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal,
+                                    color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(enabled = isSynced) {
+                                            smoothPositionState.value = line.startMs
+                                            viewModel.seekTo(line.startMs)
+                                        }
+                                        .padding(vertical = 8.dp, horizontal = 8.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            }
         }
     }
 }

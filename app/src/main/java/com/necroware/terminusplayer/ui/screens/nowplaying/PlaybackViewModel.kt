@@ -7,6 +7,7 @@ import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.playback.NowPlayingState
 import com.necroware.terminusplayer.playback.PlaybackController
+import com.necroware.terminusplayer.data.model.SyncedLyrics
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
@@ -43,7 +44,13 @@ class PlaybackViewModel @Inject constructor(
     val currentSongUri: StateFlow<String?> = nowPlaying
         .map { it.mediaId }
         .distinctUntilChanged()
-        .map { songId -> songId?.let { repository.getSongUri(it) } }
+        .map { songId -> songId?.let { repository.getSong(it)?.uriString } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val currentLyrics: StateFlow<SyncedLyrics?> = nowPlaying
+        .map { it.mediaId }
+        .distinctUntilChanged()
+        .map { songId -> songId?.let { repository.getLyrics(it) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     // Only actively polls while something is collecting positionMs (i.e.
