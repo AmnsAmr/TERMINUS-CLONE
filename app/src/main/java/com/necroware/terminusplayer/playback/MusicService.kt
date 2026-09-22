@@ -126,6 +126,8 @@ class MusicService : MediaSessionService() {
             .setMediaSourceFactory(mediaSourceFactory)
             .setHandleAudioBecomingNoisy(true)
             .build()
+        
+        player.preloadConfiguration = ExoPlayer.PreloadConfiguration(10_000_000L)
         player.addListener(analyticsListener)
         player.addAnalyticsListener(object : AnalyticsListener {
             override fun onAudioSessionIdChanged(eventTime: AnalyticsListener.EventTime, audioSessionId: Int) {
