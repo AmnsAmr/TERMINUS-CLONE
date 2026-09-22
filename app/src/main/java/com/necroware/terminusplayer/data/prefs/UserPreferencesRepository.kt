@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -27,6 +28,9 @@ private object Keys {
     val SERVER_URL = stringPreferencesKey("server_url")
     val USERNAME = stringPreferencesKey("username")
     val PASSWORD = stringPreferencesKey("password")
+    val EXCLUDED_FOLDERS = stringSetPreferencesKey("excluded_folders")
+    val HAS_SETUP_DEFAULT_EXCLUDES = booleanPreferencesKey("has_setup_default_excludes")
+    val MAX_BIT_RATE = intPreferencesKey("max_bit_rate")
 }
 
 private fun eqBandKey(index: Int) = intPreferencesKey("${Keys.EQ_BAND_PREFIX}$index")
@@ -98,6 +102,7 @@ class UserPreferencesRepository @Inject constructor(
         val playbackArtStyle = this[Keys.PLAYBACK_ART_STYLE]?.let { runCatching { PlaybackArtStyle.valueOf(it) }.getOrNull() }
             ?: defaults.playbackArtStyle
         val eqBands = List(5) { index -> this[eqBandKey(index)] ?: 0 }
+        val maxBitRate = this[Keys.MAX_BIT_RATE]
 
         return UserPreferences(
             themeId = themeId,
@@ -116,7 +121,10 @@ class UserPreferencesRepository @Inject constructor(
             lastPlayedPositionMs = this[Keys.LAST_PLAYED_POSITION_MS] ?: 0L,
             serverUrl = this[Keys.SERVER_URL] ?: "",
             username = this[Keys.USERNAME] ?: "",
-            password = this[Keys.PASSWORD] ?: ""
+            password = this[Keys.PASSWORD] ?: "",
+            excludedFolders = this[Keys.EXCLUDED_FOLDERS] ?: emptySet(),
+            hasSetupDefaultExcludes = this[Keys.HAS_SETUP_DEFAULT_EXCLUDES] ?: false,
+            maxBitRate = maxBitRate
         )
     }
 
@@ -125,6 +133,24 @@ class UserPreferencesRepository @Inject constructor(
             it[Keys.SERVER_URL] = serverUrl
             it[Keys.USERNAME] = username
             it[Keys.PASSWORD] = password
+        }
+    }
+
+    suspend fun setExcludedFolders(folders: Set<String>) {
+        dataStore.edit { it[Keys.EXCLUDED_FOLDERS] = folders }
+    }
+
+    suspend fun setHasSetupDefaultExcludes(setup: Boolean) {
+        dataStore.edit { it[Keys.HAS_SETUP_DEFAULT_EXCLUDES] = setup }
+    }
+
+    suspend fun setMaxBitRate(bitRate: Int?) {
+        dataStore.edit { prefs ->
+            if (bitRate != null) {
+                prefs[Keys.MAX_BIT_RATE] = bitRate
+            } else {
+                prefs.remove(Keys.MAX_BIT_RATE)
+            }
         }
     }
 }
