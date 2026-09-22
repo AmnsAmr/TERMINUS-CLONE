@@ -53,7 +53,8 @@ import kotlinx.coroutines.delay
 fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
     onNavigateToUpload: () -> Unit = {},
-    onNavigateToGapFinder: () -> Unit = {}
+    onNavigateToGapFinder: () -> Unit = {},
+    onNavigateToManageSources: () -> Unit = {}
 ) {
     val prefs by viewModel.preferences.collectAsStateWithLifecycle()
     val importStatus by viewModel.importStatus.collectAsStateWithLifecycle()
@@ -104,6 +105,8 @@ fun SettingsScreen(
             ActionRow(label = "[ UPLOAD ]", sublabel = "Upload files to server", onClick = onNavigateToUpload)
             Spacer(modifier = Modifier.height(10.dp))
             ActionRow(label = "[ GAPFINDER ]", sublabel = "Configure GapFinder", onClick = onNavigateToGapFinder)
+            Spacer(modifier = Modifier.height(10.dp))
+            ActionRow(label = "[ MANAGE SOURCES ]", sublabel = "Include or exclude local audio folders", onClick = onNavigateToManageSources)
         }
 
         item { SectionLabel("EQUALIZER") }
@@ -134,6 +137,14 @@ fun SettingsScreen(
                 sublabel = "Falls back to software automatically if unsupported",
                 checked = prefs.preferHardwareDecoder,
                 onCheckedChange = viewModel::setPreferHardwareDecoder
+            )
+        }
+
+        item { SectionLabel("STREAMING QUALITY") }
+        item {
+            QualitySection(
+                selectedBitRate = prefs.maxBitRate,
+                onSelect = viewModel::setMaxBitRate
             )
         }
 
@@ -374,6 +385,33 @@ private fun ToggleRow(label: String, sublabel: String, checked: Boolean, onCheck
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary
             )
+        }
+    }
+}
+
+@Composable
+private fun QualitySection(
+    selectedBitRate: Int?,
+    onSelect: (Int?) -> Unit
+) {
+    TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            val options = listOf(null to "Original", 320 to "320 kbps", 128 to "128 kbps", 64 to "64 kbps")
+            options.forEach { (bitRate, label) ->
+                Text(
+                    text = (if (bitRate == selectedBitRate) "> " else "  ") + label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (bitRate == selectedBitRate) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(bitRate) }
+                        .padding(vertical = 6.dp)
+                )
+            }
         }
     }
 }
