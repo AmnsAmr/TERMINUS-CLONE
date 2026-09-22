@@ -3,6 +3,8 @@ package com.necroware.terminusplayer.data.provider
 import com.necroware.terminusplayer.data.api.subsonic.SubsonicApiService
 import com.necroware.terminusplayer.data.database.entity.SongEntity
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
+import com.necroware.terminusplayer.data.model.SyncedLyrics
+import com.necroware.terminusplayer.data.model.LyricLine
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -51,7 +53,7 @@ class NavidromeProvider @Inject constructor(
                 artist = song.artist ?: "Unknown Artist",
                 album = song.album ?: "Unknown Album",
                 albumId = song.albumId ?: "",
-                duration = song.duration?.toLong() ?: 0L,
+                duration = (song.duration?.toLong() ?: 0L) * 1000L,
                 uriString = "terminus://${song.id}",
                 trackNumber = song.track ?: 0,
                 year = song.year ?: 0,
@@ -76,7 +78,11 @@ class NavidromeProvider @Inject constructor(
         val salt = generateSalt()
         val token = generateToken(password, salt)
 
-        return "$serverUrl/rest/stream?id=$remoteId&u=$username&t=$token&s=$salt&v=1.16.1&c=Terminus&f=json"
+        var url = "$serverUrl/rest/stream?id=$remoteId&u=$username&t=$token&s=$salt&v=1.16.1&c=Terminus&f=json"
+        if (prefs.maxBitRate != null) {
+            url += "&maxBitRate=${prefs.maxBitRate}"
+        }
+        return url
     }
 
     override suspend fun scrobble(remoteId: String) {
@@ -126,5 +132,64 @@ class NavidromeProvider @Inject constructor(
         val input = password + salt
         val hashBytes = md.digest(input.toByteArray())
         return hashBytes.joinToString("") { "%02x".format(it) }
+    }
+
+    override suspend fun getLyrics(remoteId: String): SyncedLyrics? {
+        val prefs = prefsRepo.preferences.first()
+        val username = prefs.username
+        val password = prefs.password
+
+        if (username.isBlank() || password.isBlank()) return null
+
+        val salt = generateSalt()
+        val token = generateToken(password, salt)
+
+        return try {
+            val response = apiService.getLyricsBySongId(
+                id = remoteId,
+                user = username,
+                token = token,
+                salt = salt
+            )
+            val data = response.response
+            if (data.status != "ok") return null
+            
+            // Navidrome might return lyricsList as an array of structuredLyrics objects directly, 
+            // or as a Map containing a "structuredLyrics" key depending on the version/spec.
+            val structuredLyricsList = when (val listObj = data.lyricsList) {
+                is List<*> -> listObj // Navidrome direct array
+                is Map<*, *> -> listObj["structuredLyrics"] as? List<*> // Standard OpenSubsonic Map
+                else -> null
+            }
+            
+            val linesList = structuredLyricsList?.filterIsInstance<Map<*, *>>()?.flatMap { (it["line"] as? List<*>) ?: emptyList() }
+            val mappedLines = linesList?.filterIsInstance<Map<*, *>>()?.mapNotNull { 
+                val text = it["value"] as? String ?: return@mapNotNull null
+                
+                val startVal = it["start"]
+                val startMs = try {
+                    startVal.toString().toDouble().toLong()
+                } catch (e: Exception) {
+                    0L
+                }
+                
+                LyricLine(startMs, text)
+            }
+            
+            if (!mappedLines.isNullOrEmpty() && mappedLines.any { it.startMs > 0L }) {
+                return SyncedLyrics(mappedLines)
+            }
+            
+            // Fallback to unstructured lyrics if synced lyrics aren't available
+            val unstructured = (data.lyrics as? Map<*, *>)?.get("value") as? String
+            if (!unstructured.isNullOrBlank()) {
+                val lines = unstructured.split("\n").map { LyricLine(0L, it) }
+                return SyncedLyrics(lines)
+            }
+
+            return null
+        } catch (e: Exception) {
+            null
+        }
     }
 }

@@ -22,6 +22,7 @@ import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.util.matchM3uEntryToSong
 import com.necroware.terminusplayer.util.normalizeForMatch
 import com.necroware.terminusplayer.util.parseM3u
+import com.necroware.terminusplayer.data.model.SyncedLyrics
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -44,7 +45,35 @@ class MusicRepository @Inject constructor(
 
     /** Re-scans all providers and syncs the Room cache. Call on app start and pull-to-refresh. */
     suspend fun syncLibrary() {
-        val scanned = providers.values.flatMap { it.syncLibrary() }
+        val allScanned = providers.values.flatMap { it.syncLibrary() }
+        
+        val localSongs = allScanned.filter { it.providerId == "local" }
+        val remoteSongs = allScanned.filter { it.providerId != "local" }
+        
+        val remoteSongsByKey = remoteSongs.associateBy { 
+            "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}"
+        }
+        
+        val localKeys = localSongs.map { 
+            "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}"
+        }.toSet()
+        
+        val deduplicatedLocalSongs = localSongs.map { local ->
+            val key = "${local.title.trim().lowercase()}|${local.artist.trim().lowercase()}"
+            val match = remoteSongsByKey[key]
+            if (match != null) {
+                local.copy(navidromeId = match.remoteId)
+            } else {
+                local
+            }
+        }
+        
+        val remainingRemoteSongs = remoteSongs.filterNot { remote ->
+            val key = "${remote.title.trim().lowercase()}|${remote.artist.trim().lowercase()}"
+            localKeys.contains(key)
+        }
+        
+        val scanned = deduplicatedLocalSongs + remainingRemoteSongs
         songDao.upsertAll(scanned)
         songDao.pruneDeleted(scanned.map { it.remoteId })
     }
@@ -99,7 +128,11 @@ class MusicRepository @Inject constructor(
 
         if (song != null) {
             try {
-                providers[song.providerId]?.toggleLike(song.remoteId, newLikedState)
+                if (song.navidromeId != null) {
+                    providers["navidrome"]?.toggleLike(song.navidromeId, newLikedState)
+                } else {
+                    providers[song.providerId]?.toggleLike(song.remoteId, newLikedState)
+                }
             } catch (e: Exception) {
                 // Ignore provider failures (e.g. network issues) for now
             }
@@ -125,10 +158,33 @@ class MusicRepository @Inject constructor(
         }
     }
 
+    suspend fun getSong(songId: String): Song? {
+        val song = songDao.getById(songId) ?: return null
+        val isLiked = likedSongDao.isLiked(songId)
+        return song.toSong(isLiked = isLiked)
+    }
+
+    suspend fun getLyrics(songId: String): SyncedLyrics? {
+        val song = songDao.getById(songId) ?: return null
+        return try {
+            if (song.navidromeId != null) {
+                providers["navidrome"]?.getLyrics(song.navidromeId)
+            } else {
+                providers[song.providerId]?.getLyrics(song.remoteId)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     suspend fun scrobble(songId: String) {
         val song = songDao.getById(songId) ?: return
         try {
-            providers[song.providerId]?.scrobble(song.remoteId)
+            if (song.navidromeId != null) {
+                providers["navidrome"]?.scrobble(song.navidromeId)
+            } else {
+                providers[song.providerId]?.scrobble(song.remoteId)
+            }
         } catch (e: Exception) {
             // Ignore scrobble failures
         }

@@ -52,5 +52,8 @@ data class UserPreferences(
     val lastPlayedPositionMs: Long = 0L,
     val serverUrl: String = "",
     val username: String = "",
-    val password: String = ""
+    val password: String = "",
+    val excludedFolders: Set<String> = emptySet(),
+    val hasSetupDefaultExcludes: Boolean = false,
+    val maxBitRate: Int? = null
 )

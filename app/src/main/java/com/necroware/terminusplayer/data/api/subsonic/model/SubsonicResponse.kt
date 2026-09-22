@@ -13,7 +13,9 @@ data class SubsonicResponseData(
     @Json(name = "status") val status: String,
     @Json(name = "version") val version: String,
     @Json(name = "error") val error: SubsonicError? = null,
-    @Json(name = "searchResult3") val searchResult3: SearchResult3? = null
+    @Json(name = "searchResult3") val searchResult3: SearchResult3? = null,
+    @Json(name = "lyrics") val lyrics: Any? = null,
+    @Json(name = "lyricsList") val lyricsList: Any? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -41,3 +43,5 @@ data class SongItem(
     @Json(name = "path") val path: String?,
     @Json(name = "albumId") val albumId: String?
 )
+
+

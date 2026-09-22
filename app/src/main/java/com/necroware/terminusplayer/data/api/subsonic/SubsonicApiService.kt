@@ -62,4 +62,15 @@ interface SubsonicApiService {
         @Query("c") client: String = "Terminus",
         @Query("f") format: String = "json"
     ): SubsonicResponse
+
+    @GET("rest/getLyricsBySongId")
+    suspend fun getLyricsBySongId(
+        @Query("id") id: String,
+        @Query("u") user: String,
+        @Query("t") token: String,
+        @Query("s") salt: String,
+        @Query("v") version: String = "1.16.1",
+        @Query("c") client: String = "Terminus",
+        @Query("f") format: String = "json"
+    ): SubsonicResponse
 }
