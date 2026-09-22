@@ -82,6 +82,10 @@ class SettingsViewModel @Inject constructor(
         preferencesRepository.setPreferHardwareDecoder(enabled)
     }
 
+    fun setMaxBitRate(bitRate: Int?) = viewModelScope.launch {
+        preferencesRepository.setMaxBitRate(bitRate)
+    }
+
     fun importFiles(uris: List<Uri>) {
         if (uris.isEmpty()) return
         _importStatus.value = ImportStatus.Running
