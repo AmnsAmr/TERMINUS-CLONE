@@ -2,3 +2,17 @@
 *.db-shm
 *.db-wal
 *.sqlite
+# Gradle / Android build outputs — never commit these
+.gradle/
+build/
+app/build/
+# Local SDK / machine config
+local.properties
+# IDE
+.idea/
+*.iml
+# Kotlin incremental caches
+.kotlin/
+# OS noise
+.DS_Store
+Thumbs.db
