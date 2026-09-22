@@ -93,4 +93,5 @@ dependencies {
     ksp(libs.moshi.ksp)
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.work.runtime.ktx)
+    testImplementation("junit:junit:4.13.2")
 }

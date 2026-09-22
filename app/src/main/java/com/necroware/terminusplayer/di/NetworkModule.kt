@@ -37,7 +37,13 @@ object NetworkModule {
             .addInterceptor(logging)
             .addInterceptor { chain ->
                 val request = chain.request()
-                val prefs = runBlocking { prefsRepo.preferences.first() }
+                val prefs = try {
+                    runBlocking { prefsRepo.preferences.first() }
+                } catch (e: InterruptedException) {
+                    throw java.io.InterruptedIOException().apply { initCause(e) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw java.io.InterruptedIOException().apply { initCause(e) }
+                }
                 val rawUrl = prefs.serverUrl.trimEnd('/')
                 val username = prefs.username
                 val password = prefs.password
@@ -51,10 +57,19 @@ object NetworkModule {
                     }
                     val newUrl = urlWithScheme.toHttpUrlOrNull()
                     if (newUrl != null) {
-                        val finalUrl = newUrl.newBuilder()
+                        val finalUrlBuilder = newUrl.newBuilder()
                             .addEncodedPathSegments(request.url.encodedPath.removePrefix("/"))
                             .encodedQuery(request.url.encodedQuery)
-                            .build()
+                            
+                        // Append Subsonic auth params if missing (required for Coil image requests)
+                        if (username.isNotBlank() && password.isNotBlank()) {
+                            if (request.url.queryParameter("u") == null) {
+                                finalUrlBuilder.addQueryParameter("u", username)
+                                finalUrlBuilder.addQueryParameter("p", password)
+                            }
+                        }
+                        
+                        val finalUrl = finalUrlBuilder.build()
                         
                         val builder = request.newBuilder().url(finalUrl)
                         if (username.isNotBlank() && password.isNotBlank()) {
