@@ -74,8 +74,29 @@ class MusicRepository @Inject constructor(
         }
         
         val scanned = deduplicatedLocalSongs + remainingRemoteSongs
-        songDao.upsertAll(scanned)
-        songDao.pruneDeleted(scanned.map { it.remoteId })
+        
+        // Diffing mechanism to prevent unnecessary UI recompositions
+        val existingSongs = songDao.getAllSongs().associateBy { it.remoteId }
+        val scannedIds = scanned.map { it.remoteId }.toSet()
+        
+        val toUpsert = scanned.filter { scannedSong ->
+            val existing = existingSongs[scannedSong.remoteId]
+            existing == null || existing != scannedSong
+        }
+        
+        val toDelete = existingSongs.keys.filterNot { it in scannedIds }
+        
+        if (toUpsert.isNotEmpty()) {
+            toUpsert.chunked(999).forEach { chunk ->
+                songDao.upsertAll(chunk)
+            }
+        }
+        
+        if (toDelete.isNotEmpty()) {
+            toDelete.chunked(999).forEach { chunk ->
+                songDao.deleteByIds(chunk)
+            }
+        }
     }
 
     fun observeAllSongs(): Flow<List<Song>> =

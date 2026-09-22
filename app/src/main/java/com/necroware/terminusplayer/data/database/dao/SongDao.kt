@@ -43,14 +43,18 @@ interface SongDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(songs: List<SongEntity>)
 
-    @Query("DELETE FROM songs WHERE remoteId NOT IN (:validIds)")
-    suspend fun pruneDeleted(validIds: List<String>)
 
     @Query("SELECT * FROM songs WHERE remoteId = :id LIMIT 1")
     suspend fun getById(id: String): SongEntity?
 
     @Query("SELECT * FROM songs WHERE remoteId IN (:ids)")
     suspend fun getByIds(ids: List<String>): List<SongEntity>
+
+    @Query("SELECT * FROM songs")
+    suspend fun getAllSongs(): List<SongEntity>
+
+    @Query("DELETE FROM songs WHERE remoteId IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
 
     @Query("SELECT * FROM songs ORDER BY dateAdded DESC LIMIT :limit")
     suspend fun mostRecentlyAdded(limit: Int): List<SongEntity>
