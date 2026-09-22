@@ -16,6 +16,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -36,6 +37,7 @@ class LibraryViewModel @Inject constructor(
 
     val songs: StateFlow<List<Song>> =
         combine(repository.observeAllSongs(), sortOrder) { songs, order -> songs.sortedWith(order) }
+            .flowOn(kotlinx.coroutines.Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val albums: StateFlow<List<Album>> = repository.observeAllAlbums()

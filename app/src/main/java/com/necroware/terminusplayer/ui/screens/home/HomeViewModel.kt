@@ -34,11 +34,13 @@ class HomeViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            repository.observeAllSongs().collect { songs ->
-                _uiState.value = _uiState.value.copy(
-                    songCount = songs.size,
-                    likedCount = songs.count { it.isLiked }
-                )
+            repository.observeSongCount().collect { count ->
+                _uiState.value = _uiState.value.copy(songCount = count)
+            }
+        }
+        viewModelScope.launch {
+            repository.observeLikedSongCount().collect { count ->
+                _uiState.value = _uiState.value.copy(likedCount = count)
             }
         }
         refreshLibrary()
