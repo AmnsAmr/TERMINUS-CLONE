@@ -8,11 +8,16 @@ build/
 app/build/
 # Local SDK / machine config
 local.properties
-# IDE
-.idea/
-*.iml
+# IDE (keep .idea/.gitignore + .idea/.name only; ignore the rest)
+.idea/*
+!.idea/.gitignore
+!.idea/.name
 # Kotlin incremental caches
 .kotlin/
 # OS noise
 .DS_Store
 Thumbs.db
+# JDK / toolchains accidentally downloaded into repo root
+jdk-17.0.2/
+openjdk*.tar.gz
+*.tar.gz
