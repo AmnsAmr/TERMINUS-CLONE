@@ -20,6 +20,9 @@ class TerminusApplication : Application(), Configuration.Provider, ImageLoaderFa
     override fun newImageLoader(): ImageLoader {
         return ImageLoader.Builder(this)
             .okHttpClient(okHttpClient)
+            .components {
+                add(com.necroware.terminusplayer.coil.LocalAudioArtFetcher.Factory(this@TerminusApplication))
+            }
             .build()
     }
 
