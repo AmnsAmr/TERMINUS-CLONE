@@ -4,21 +4,30 @@ import android.content.ContentUris
 import android.content.Context
 import android.provider.MediaStore
 import com.necroware.terminusplayer.data.database.entity.SongEntity
+import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
+import com.necroware.terminusplayer.data.model.SyncedLyrics
 
 @Singleton
 class LocalMediaProvider @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val userPrefsRepo: UserPreferencesRepository
 ) : MediaProvider {
 
     override val providerId: String = "local"
 
     override suspend fun syncLibrary(): List<SongEntity> = withContext(Dispatchers.IO) {
+        val prefs = userPrefsRepo.preferences.first()
+        var excludedFolders = prefs.excludedFolders
+        val hasSetupDefaults = prefs.hasSetupDefaultExcludes
+        val defaultExcludedFound = mutableSetOf<String>()
+
         val songs = mutableListOf<SongEntity>()
 
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
@@ -62,6 +71,17 @@ class LocalMediaProvider @Inject constructor(
                 val id = cursor.getLong(idCol)
                 val path = cursor.getString(dataCol) ?: ""
                 val folderPath = File(path).parent ?: ""
+                
+                if (!hasSetupDefaults) {
+                    if (folderPath.contains("WhatsApp", ignoreCase = true) || folderPath.contains("Voice Recorder", ignoreCase = true)) {
+                        defaultExcludedFound.add(folderPath)
+                    }
+                }
+
+                if (folderPath in excludedFolders || folderPath in defaultExcludedFound) {
+                    continue
+                }
+
                 val contentUri = ContentUris.withAppendedId(collection, id)
 
                 songs += SongEntity(
@@ -82,6 +102,12 @@ class LocalMediaProvider @Inject constructor(
             }
         }
 
+        if (!hasSetupDefaults) {
+            val updatedExcludes = excludedFolders + defaultExcludedFound
+            userPrefsRepo.setExcludedFolders(updatedExcludes)
+            userPrefsRepo.setHasSetupDefaultExcludes(true)
+        }
+
         songs
     }
 
@@ -96,5 +122,9 @@ class LocalMediaProvider @Inject constructor(
 
     override suspend fun toggleLike(remoteId: String, isLiked: Boolean) {
         // No-op for local provider
+    }
+
+    override suspend fun getLyrics(remoteId: String): SyncedLyrics? {
+        return null
     }
 }
