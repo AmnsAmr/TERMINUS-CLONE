@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
@@ -19,7 +20,11 @@ import com.necroware.terminusplayer.util.toCodecLabel
 import com.necroware.terminusplayer.util.toSampleRateLabel
 import com.necroware.terminusplayer.util.selectedAudioFormat
 import com.necroware.terminusplayer.util.toAudioFormatLabel
+import com.necroware.terminusplayer.util.providerIdOrNull
+import com.necroware.terminusplayer.util.streamOffsetMsOrZero
+import com.necroware.terminusplayer.util.withStreamUriAndOffset
 import com.necroware.terminusplayer.data.repository.MusicRepository
+import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -30,6 +35,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -65,7 +71,8 @@ data class NowPlayingState(
 @Singleton
 class PlaybackController @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val musicRepository: MusicRepository
+    private val musicRepository: MusicRepository,
+    private val preferencesRepository: UserPreferencesRepository
 ) {
 
     private var controller: MediaController? = null
@@ -73,6 +80,7 @@ class PlaybackController @Inject constructor(
     private val readyCallbacks = mutableListOf<() -> Unit>()
     private val playbackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var queueResolutionJob: Job? = null
+    private var seekResolutionJob: Job? = null
 
     private val controllerListener = object : MediaController.Listener {
         override fun onDisconnected(controller: MediaController) {
@@ -93,6 +101,14 @@ class PlaybackController @Inject constructor(
 
     private val listener = object : Player.Listener {
         override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+            updateFromController()
+        }
+
+        override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+            updateFromController()
+        }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             updateFromController()
         }
 
@@ -203,7 +219,59 @@ class PlaybackController @Inject constructor(
 
     fun skipToNext() = controller?.seekToNext()
     fun skipToPrevious() = controller?.seekToPrevious()
-    fun seekTo(positionMs: Long) = controller?.seekTo(positionMs)
+    fun seekTo(positionMs: Long) {
+        val targetPositionMs = positionMs.coerceAtLeast(0L)
+        val activeController = controller ?: return
+        val currentItem = activeController.currentMediaItem ?: return
+        if (currentItem.mediaMetadata.providerIdOrNull() != "navidrome") {
+            activeController.seekTo(targetPositionMs)
+            return
+        }
+
+        seekResolutionJob?.cancel()
+        seekResolutionJob = playbackScope.launch {
+            val maxBitRate = preferencesRepository.preferences.first().maxBitRate
+            if (maxBitRate == null) {
+                withContext(Dispatchers.Main.immediate) {
+                    if (controller === activeController && controller?.currentMediaItem?.mediaId == currentItem.mediaId) {
+                        activeController.seekTo(targetPositionMs)
+                    }
+                }
+                return@launch
+            }
+
+            val snapshot = withContext(Dispatchers.Main.immediate) {
+                if (controller !== activeController || activeController.currentMediaItem?.mediaId != currentItem.mediaId) {
+                    return@withContext null
+                }
+                val items = (0 until activeController.mediaItemCount).map(activeController::getMediaItemAt)
+                Triple(items, activeController.currentMediaItemIndex, activeController.playWhenReady)
+            } ?: return@launch
+
+            val streamOffsetMs = (targetPositionMs / 1000L) * 1000L
+            val uri = musicRepository.getSongUri(currentItem.mediaId, streamOffsetMs) ?: return@launch
+            if (!uri.startsWith("http://") && !uri.startsWith("https://")) return@launch
+            val resolvedItems = snapshot.first.map { item ->
+                if (item.mediaId == currentItem.mediaId) {
+                    item.withStreamUriAndOffset(uri, streamOffsetMs)
+                } else {
+                    item
+                }
+            }
+
+            withContext(Dispatchers.Main.immediate) {
+                if (controller !== activeController ||
+                    activeController.currentMediaItem?.mediaId != currentItem.mediaId ||
+                    (0 until activeController.mediaItemCount).map { activeController.getMediaItemAt(it).mediaId } !=
+                    snapshot.first.map { it.mediaId }
+                ) return@withContext
+
+                activeController.setMediaItems(resolvedItems, snapshot.second, 0L)
+                activeController.prepare()
+                activeController.playWhenReady = snapshot.third
+            }
+        }
+    }
 
     fun toggleShuffle() {
         controller?.apply { shuffleModeEnabled = !shuffleModeEnabled }
@@ -219,12 +287,20 @@ class PlaybackController @Inject constructor(
         }
     }
 
-    fun currentPositionMs(): Long = controller?.currentPosition ?: 0L
+    fun currentPositionMs(): Long = controller?.let { player ->
+        player.currentPosition + (player.currentMediaItem?.mediaMetadata?.streamOffsetMsOrZero() ?: 0L)
+    } ?: 0L
     fun durationMs(): Long = controller?.duration?.coerceAtLeast(0L) ?: 0L
 
     private fun updateFromController() {
         val c = controller ?: return
         val metadata = c.mediaMetadata
+        val itemMetadata = c.currentMediaItem?.mediaMetadata
+        val actualDurationMs = c.duration
+        val streamOffsetMs = itemMetadata?.streamOffsetMsOrZero() ?: 0L
+        val knownDurationMs = itemMetadata?.durationMs
+            ?: metadata.durationMs
+            ?: 0L
         _state.value = _state.value.copy(
             mediaId = c.currentMediaItem?.mediaId,
             title = metadata.title?.toString().orEmpty(),
@@ -233,7 +309,11 @@ class PlaybackController @Inject constructor(
             albumId = metadata.albumIdOrNull() ?: "",
             artworkUri = metadata.artworkUri?.toString(),
             sizeBytes = metadata.sizeBytesOrZero(),
-            durationMs = c.duration.coerceAtLeast(0L),
+            durationMs = when {
+                knownDurationMs > 0L -> knownDurationMs
+                actualDurationMs > 0L -> actualDurationMs + streamOffsetMs
+                else -> 0L
+            },
             isPlaying = c.isPlaying,
             shuffleEnabled = c.shuffleModeEnabled,
             repeatMode = c.repeatMode
