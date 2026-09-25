@@ -178,6 +178,13 @@ class MusicRepository @Inject constructor(
 
     fun observeAllFolders(): Flow<List<String>> = songDao.observeAllFolders()
 
+    /** Removes cached local tracks immediately when a source folder is excluded. */
+    suspend fun removeLocalSongsInFolder(folderPath: String) {
+        syncMutex.withLock {
+            songDao.deleteLocalSongsInFolder(folderPath)
+        }
+    }
+
     fun searchSongs(query: String): Flow<List<Song>> =
         songDao.searchSongs(query).map { entities -> entities.map { it.toSong() } }
 
@@ -216,10 +223,18 @@ class MusicRepository @Inject constructor(
      * resolves the current track's real file URI via this lookup instead
      * of trying to read it back off the controller.
      */
-    suspend fun getSongUri(songId: String): String? {
+    suspend fun getSongUri(songId: String, timeOffsetMs: Long? = null): String? {
         val song = songDao.getById(songId) ?: return null
         return try {
-            resolveSongUri(song)
+            val uri = resolveSongUri(song)
+            if (song.providerId == "navidrome" && timeOffsetMs != null && timeOffsetMs > 0L) {
+                Uri.parse(uri).buildUpon()
+                    .appendQueryParameter("timeOffset", (timeOffsetMs / 1000L).toString())
+                    .build()
+                    .toString()
+            } else {
+                uri
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

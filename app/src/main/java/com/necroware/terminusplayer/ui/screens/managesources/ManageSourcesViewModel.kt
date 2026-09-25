@@ -4,8 +4,12 @@ import android.content.Context
 import android.provider.MediaStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.repository.MusicRepository
+import com.necroware.terminusplayer.sync.LibrarySyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -13,6 +17,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -33,6 +39,10 @@ class ManageSourcesViewModel @Inject constructor(
 
     private val _excludedFolders = MutableStateFlow<Set<String>>(emptySet())
     val excludedFolders: StateFlow<Set<String>> = _excludedFolders.asStateFlow()
+
+    private val _folderUpdateError = MutableStateFlow<String?>(null)
+    val folderUpdateError: StateFlow<String?> = _folderUpdateError.asStateFlow()
+    private val folderUpdateMutex = Mutex()
 
     init {
         loadFolders()
@@ -85,22 +95,26 @@ class ManageSourcesViewModel @Inject constructor(
         }
     }
 
-    private var syncJob: kotlinx.coroutines.Job? = null
-
     fun toggleFolder(folderPath: String, isIncluded: Boolean) {
-        viewModelScope.launch {
-            userPrefsRepo.setFolderExcluded(folderPath, excluded = !isIncluded)
-            
-            syncJob?.cancel()
-            syncJob = viewModelScope.launch(Dispatchers.IO) {
-                kotlinx.coroutines.delay(1000)
-                try {
-                    musicRepository.syncLibrary()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    // Keep the source preferences; a later sync can retry the scan.
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                folderUpdateMutex.withLock {
+                    userPrefsRepo.setFolderExcluded(folderPath, excluded = !isIncluded)
+                    if (!isIncluded) {
+                        musicRepository.removeLocalSongsInFolder(folderPath)
+                    }
+                    val request = OneTimeWorkRequestBuilder<LibrarySyncWorker>().build()
+                    WorkManager.getInstance(context).enqueueUniqueWork(
+                        "library-sync",
+                        ExistingWorkPolicy.REPLACE,
+                        request
+                    )
+                    _folderUpdateError.value = null
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _folderUpdateError.value = "Couldn't update this source. Try again."
             }
         }
     }
