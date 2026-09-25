@@ -10,11 +10,13 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class HomeUiState(
-    val isSyncing: Boolean = true,
+    val isSyncing: Boolean = false,
+    val syncError: String? = null,
     val songCount: Int = 0,
     val likedCount: Int = 0,
     val weekPlays: Int = 0,
@@ -43,16 +45,28 @@ class HomeViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(likedCount = count)
             }
         }
-        refreshLibrary()
+        refreshMixAndRecents()
     }
 
     fun refreshLibrary() {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isSyncing = true)
-            repository.syncLibrary()
-            reloadMixAndRecents()
-            reloadWeekSummary()
-            _uiState.value = _uiState.value.copy(isSyncing = false)
+            _uiState.value = _uiState.value.copy(isSyncing = true, syncError = null)
+            try {
+                val result = repository.syncLibrary()
+                if (result.failedProviders.isNotEmpty()) {
+                    _uiState.value = _uiState.value.copy(
+                        syncError = "Unavailable sources: ${result.failedProviders.joinToString()}"
+                    )
+                }
+                reloadMixAndRecents()
+                reloadWeekSummary()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(syncError = e.message ?: "Library sync failed")
+            } finally {
+                _uiState.value = _uiState.value.copy(isSyncing = false)
+            }
         }
     }
 

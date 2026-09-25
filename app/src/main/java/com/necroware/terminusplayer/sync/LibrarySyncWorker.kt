@@ -8,6 +8,7 @@ import com.necroware.terminusplayer.data.repository.MusicRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 
 @HiltWorker
@@ -19,8 +20,14 @@ class LibrarySyncWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
-            musicRepository.syncLibrary()
-            Result.success()
+            val result = musicRepository.syncLibrary()
+            when {
+                result.retryableFailures.isNotEmpty() -> Result.retry()
+                result.failedProviders.isNotEmpty() -> Result.failure()
+                else -> Result.success()
+            }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             e.printStackTrace()
             Result.retry()

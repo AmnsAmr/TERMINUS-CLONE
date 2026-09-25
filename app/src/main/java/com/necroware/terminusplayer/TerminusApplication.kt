@@ -45,8 +45,5 @@ class TerminusApplication : Application(), Configuration.Provider, ImageLoaderFa
             periodicRequest
         )
         
-        // Force an immediate sync so database metadata (like fixed durations) updates instantly
-        val oneTimeRequest = androidx.work.OneTimeWorkRequestBuilder<com.necroware.terminusplayer.sync.LibrarySyncWorker>().build()
-        workManager.enqueueUniqueWork("ImmediateSync", androidx.work.ExistingWorkPolicy.REPLACE, oneTimeRequest)
     }
 }

@@ -6,7 +6,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -19,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.necroware.terminusplayer.data.prefs.MotionPreference
 import androidx.compose.ui.unit.sp
 import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
 
@@ -29,18 +33,23 @@ fun PlaybackArt(
     artist: String,
     isPlaying: Boolean,
     modifier: Modifier = Modifier,
-    size: Dp = 300.dp
+    size: Dp = 300.dp,
+    motionPreference: MotionPreference = MotionPreference.FULL
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "reels")
-    val rotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(if (isPlaying) 3000 else 0, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "rotation"
-    )
+    val rotation: State<Float> = if (isPlaying && motionPreference == MotionPreference.FULL) {
+        val infiniteTransition = rememberInfiniteTransition(label = "reels")
+        infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(3000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "rotation"
+        )
+    } else {
+        remember { mutableFloatStateOf(0f) }
+    }
 
     Box(
         modifier = modifier
@@ -61,7 +70,7 @@ fun PlaybackArt(
 }
 
 @Composable
-private fun CassettePlayer(title: String, artist: String, rotation: Float) {
+private fun CassettePlayer(title: String, artist: String, rotation: State<Float>) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
@@ -89,13 +98,13 @@ private fun CassettePlayer(title: String, artist: String, rotation: Float) {
         )
 
         // Left Reel
-        rotate(rotation, pivot = Offset(w * 0.35f, h * 0.75f)) {
+        rotate(rotation.value, pivot = Offset(w * 0.35f, h * 0.75f)) {
             drawCircle(Color.Gray, radius = 20f, center = Offset(w * 0.35f, h * 0.75f))
             drawLine(Color.White, Offset(w * 0.35f, h * 0.72f), Offset(w * 0.35f, h * 0.78f), strokeWidth = 4f)
         }
         
         // Right Reel
-        rotate(rotation, pivot = Offset(w * 0.65f, h * 0.75f)) {
+        rotate(rotation.value, pivot = Offset(w * 0.65f, h * 0.75f)) {
             drawCircle(Color.Gray, radius = 20f, center = Offset(w * 0.65f, h * 0.75f))
             drawLine(Color.White, Offset(w * 0.65f, h * 0.72f), Offset(w * 0.65f, h * 0.78f), strokeWidth = 4f)
         }
@@ -131,7 +140,7 @@ private fun CassettePlayer(title: String, artist: String, rotation: Float) {
 }
 
 @Composable
-private fun ReelToReel(rotation: Float) {
+private fun ReelToReel(rotation: State<Float>) {
     val primary = MaterialTheme.colorScheme.primary
     
     Canvas(modifier = Modifier.fillMaxSize()) {
@@ -142,7 +151,7 @@ private fun ReelToReel(rotation: Float) {
         drawRect(Color(0xFFE0E0E0), size = size)
         
         // Left Large Reel
-        rotate(rotation, pivot = Offset(w * 0.28f, h * 0.4f)) {
+        rotate(rotation.value, pivot = Offset(w * 0.28f, h * 0.4f)) {
             drawCircle(Color.White, radius = w * 0.25f, center = Offset(w * 0.28f, h * 0.4f))
             drawCircle(Color.Black, radius = w * 0.25f, center = Offset(w * 0.28f, h * 0.4f), style = androidx.compose.ui.graphics.drawscope.Stroke(2f))
             for (i in 0..2) {
@@ -153,7 +162,7 @@ private fun ReelToReel(rotation: Float) {
         }
 
         // Right Large Reel
-        rotate(rotation, pivot = Offset(w * 0.72f, h * 0.4f)) {
+        rotate(rotation.value, pivot = Offset(w * 0.72f, h * 0.4f)) {
             drawCircle(Color.White, radius = w * 0.25f, center = Offset(w * 0.72f, h * 0.4f))
             drawCircle(Color.Black, radius = w * 0.25f, center = Offset(w * 0.72f, h * 0.4f), style = androidx.compose.ui.graphics.drawscope.Stroke(2f))
             for (i in 0..2) {
@@ -172,7 +181,7 @@ private fun ReelToReel(rotation: Float) {
 }
 
 @Composable
-private fun VinylRecord(rotation: Float) {
+private fun VinylRecord(rotation: State<Float>) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val center = Offset(size.width / 2, size.height / 2)
         val radius = size.minDimension / 2.2f
@@ -191,7 +200,7 @@ private fun VinylRecord(rotation: Float) {
         }
         
         // Label
-        rotate(rotation) {
+        rotate(rotation.value) {
             drawCircle(Color(0xFFD32F2F), radius = radius * 0.35f, center = center)
             drawCircle(Color.White, radius = 10f, center = center)
             drawLine(Color.White, Offset(center.x - 20, center.y - 30), Offset(center.x + 20, center.y - 30), strokeWidth = 2f)
@@ -208,7 +217,7 @@ private fun VinylRecord(rotation: Float) {
 }
 
 @Composable
-private fun VhsTape(title: String, artist: String, rotation: Float) {
+private fun VhsTape(title: String, artist: String, rotation: State<Float>) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
@@ -228,11 +237,11 @@ private fun VhsTape(title: String, artist: String, rotation: Float) {
         )
         
         // Reels visible through window
-        rotate(rotation, pivot = Offset(w * 0.3f, h * 0.42f)) {
+        rotate(rotation.value, pivot = Offset(w * 0.3f, h * 0.42f)) {
             drawCircle(Color.White.copy(alpha = 0.9f), radius = w * 0.12f, center = Offset(w * 0.3f, h * 0.42f))
             drawCircle(Color.Black, radius = 15f, center = Offset(w * 0.3f, h * 0.42f))
         }
-        rotate(rotation, pivot = Offset(w * 0.7f, h * 0.42f)) {
+        rotate(rotation.value, pivot = Offset(w * 0.7f, h * 0.42f)) {
             drawCircle(Color.White.copy(alpha = 0.9f), radius = w * 0.12f, center = Offset(w * 0.7f, h * 0.42f))
             drawCircle(Color.Black, radius = 15f, center = Offset(w * 0.7f, h * 0.42f))
         }

@@ -98,6 +98,16 @@ fun ArtistDetailScreen(
             )
         }
 
+        if (!state.isLoading && state.songs.isEmpty()) {
+            item {
+                Text(
+                    text = state.errorMessage ?: "[ no tracks found for this artist ]",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
         items(state.songs, key = { it.id }) { song ->
             ArtistTrackRow(
                 song = song,

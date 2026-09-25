@@ -26,6 +26,7 @@ fun ManageSourcesScreen(
 ) {
     val folders by viewModel.folders.collectAsStateWithLifecycle()
     val excludedFolders by viewModel.excludedFolders.collectAsStateWithLifecycle()
+    val folderLoadError by viewModel.folderLoadError.collectAsStateWithLifecycle()
 
     Column(modifier = Modifier.padding(20.dp)) {
         Row(
@@ -51,6 +52,15 @@ fun ManageSourcesScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 16.dp)
         )
+
+        if (folderLoadError != null) {
+            Text(
+                text = folderLoadError.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+        }
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(folders) { folder ->

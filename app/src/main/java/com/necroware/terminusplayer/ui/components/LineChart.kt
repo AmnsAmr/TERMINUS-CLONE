@@ -25,6 +25,8 @@ fun LineChart(
     height: Dp = 140.dp,
     gridLines: Int = 4
 ) {
+    requireNonNegativeChartValues(values, "LineChart")
+    val safeGridLines = safeGridLineCount(gridLines)
     val lineColor = MaterialTheme.colorScheme.primary
     val gridColor = MaterialTheme.colorScheme.outline
 
@@ -38,8 +40,8 @@ fun LineChart(
 
         // Dashed horizontal grid lines.
         val dashEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
-        for (i in 0..gridLines) {
-            val y = size.height * (i.toFloat() / gridLines)
+        for (i in 0..safeGridLines) {
+            val y = size.height * (i.toFloat() / safeGridLines)
             drawLine(
                 color = gridColor,
                 start = Offset(0f, y),

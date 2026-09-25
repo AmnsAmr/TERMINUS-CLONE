@@ -1,6 +1,8 @@
 package com.necroware.terminusplayer.ui.navigation
 
 import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -29,6 +31,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.necroware.terminusplayer.data.model.Song
+import com.necroware.terminusplayer.data.prefs.MotionPreference
 import com.necroware.terminusplayer.ui.components.MiniPlayerBar
 import com.necroware.terminusplayer.ui.components.TerminalNavIcon
 import com.necroware.terminusplayer.ui.screens.albumdetail.AlbumDetailScreen
@@ -47,30 +50,58 @@ import com.necroware.terminusplayer.util.toMediaItems
 /** Index within the bottom-nav tab order, used to pick left/right slide direction. -1 if not a tab route. */
 private fun tabIndex(route: String?): Int = bottomNavItems.indexOfFirst { it.route == route }
 
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabSlideEnter() =
-    run {
+private fun MotionPreference.duration(fullDurationMs: Int): Int = when (this) {
+    MotionPreference.FULL -> fullDurationMs
+    MotionPreference.REDUCED -> (fullDurationMs / 2).coerceAtLeast(1)
+    MotionPreference.OFF -> 0
+}
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabSlideEnter(motion: MotionPreference): EnterTransition =
+    if (motion == MotionPreference.OFF) EnterTransition.None else run {
         val fromIndex = tabIndex(initialState.destination.route)
         val toIndex = tabIndex(targetState.destination.route)
         val movingForward = toIndex >= fromIndex
+        val duration = motion.duration(220)
         slideInHorizontally(
             initialOffsetX = { fullWidth -> if (movingForward) fullWidth else -fullWidth },
-            animationSpec = tween(220)
-        ) + fadeIn(animationSpec = tween(220))
+            animationSpec = tween(duration)
+        ) + fadeIn(animationSpec = tween(duration))
     }
 
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabSlideExit() =
-    run {
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabSlideExit(motion: MotionPreference): ExitTransition =
+    if (motion == MotionPreference.OFF) ExitTransition.None else run {
         val fromIndex = tabIndex(initialState.destination.route)
         val toIndex = tabIndex(targetState.destination.route)
         val movingForward = toIndex >= fromIndex
+        val duration = motion.duration(220)
         slideOutHorizontally(
             targetOffsetX = { fullWidth -> if (movingForward) -fullWidth else fullWidth },
-            animationSpec = tween(220)
-        ) + fadeOut(animationSpec = tween(220))
+            animationSpec = tween(duration)
+        ) + fadeOut(animationSpec = tween(duration))
+    }
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailEnter(motion: MotionPreference): EnterTransition =
+    if (motion == MotionPreference.OFF) EnterTransition.None else {
+        val duration = motion.duration(240)
+        slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(duration)) + fadeIn(tween(duration))
+    }
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailExit(motion: MotionPreference): ExitTransition =
+    if (motion == MotionPreference.OFF) ExitTransition.None
+    else fadeOut(tween(motion.duration(160)))
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailPopEnter(motion: MotionPreference): EnterTransition =
+    if (motion == MotionPreference.OFF) EnterTransition.None
+    else fadeIn(tween(motion.duration(160)))
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailPopExit(motion: MotionPreference): ExitTransition =
+    if (motion == MotionPreference.OFF) ExitTransition.None else {
+        val duration = motion.duration(240)
+        slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(duration)) + fadeOut(tween(duration))
     }
 
 @Composable
-fun TerminusNavGraph() {
+fun TerminusNavGraph(motionPreference: MotionPreference = MotionPreference.FULL) {
     val navController = rememberNavController()
     // Single PlaybackViewModel instance (Hilt, Activity-scoped by default when
     // requested at this top-level composable) shared by the mini bar and the
@@ -152,10 +183,10 @@ fun TerminusNavGraph() {
             navController = navController,
             startDestination = Destination.Home.route,
             modifier = Modifier.padding(innerPadding),
-            enterTransition = { tabSlideEnter() },
-            exitTransition = { tabSlideExit() },
-            popEnterTransition = { tabSlideEnter() },
-            popExitTransition = { tabSlideExit() }
+            enterTransition = { tabSlideEnter(motionPreference) },
+            exitTransition = { tabSlideExit(motionPreference) },
+            popEnterTransition = { tabSlideEnter(motionPreference) },
+            popExitTransition = { tabSlideExit(motionPreference) }
         ) {
             composable(Destination.Home.route) {
                 HomeScreen(
@@ -196,77 +227,86 @@ fun TerminusNavGraph() {
             composable(
                 route = Destination.NowPlaying.route,
                 enterTransition = {
-                    slideInVertically(
-                        initialOffsetY = { fullHeight -> fullHeight },
-                        animationSpec = tween(280)
-                    ) + fadeIn(animationSpec = tween(280))
+                    if (motionPreference == MotionPreference.OFF) EnterTransition.None else {
+                        val duration = motionPreference.duration(280)
+                        slideInVertically(
+                            initialOffsetY = { fullHeight -> fullHeight },
+                            animationSpec = tween(duration)
+                        ) + fadeIn(animationSpec = tween(duration))
+                    }
                 },
                 exitTransition = {
-                    fadeOut(animationSpec = tween(180))
+                    if (motionPreference == MotionPreference.OFF) ExitTransition.None
+                    else fadeOut(animationSpec = tween(motionPreference.duration(180)))
                 },
                 popEnterTransition = {
-                    fadeIn(animationSpec = tween(180))
+                    if (motionPreference == MotionPreference.OFF) EnterTransition.None
+                    else fadeIn(animationSpec = tween(motionPreference.duration(180)))
                 },
                 popExitTransition = {
-                    slideOutVertically(
-                        targetOffsetY = { fullHeight -> fullHeight },
-                        animationSpec = tween(280)
-                    ) + fadeOut(animationSpec = tween(280))
+                    if (motionPreference == MotionPreference.OFF) ExitTransition.None else {
+                        val duration = motionPreference.duration(280)
+                        slideOutVertically(
+                            targetOffsetY = { fullHeight -> fullHeight },
+                            animationSpec = tween(duration)
+                        ) + fadeOut(animationSpec = tween(duration))
+                    }
                 }
             ) {
                 NowPlayingScreen(
                     viewModel = playbackViewModel,
-                    onCollapse = { navController.popBackStack() }
+                    onCollapse = { navController.popBackStack() },
+                    motionPreference = motionPreference
                 )
             }
             composable(
                 route = Destination.AlbumDetail.route,
                 arguments = listOf(navArgument("albumTitle") { type = NavType.StringType }),
-                enterTransition = {
-                    slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(240)) + fadeIn(tween(240))
-                },
-                exitTransition = { fadeOut(tween(160)) },
-                popEnterTransition = { fadeIn(tween(160)) },
-                popExitTransition = {
-                    slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(240)) + fadeOut(tween(240))
-                }
+                enterTransition = { detailEnter(motionPreference) },
+                exitTransition = { detailExit(motionPreference) },
+                popEnterTransition = { detailPopEnter(motionPreference) },
+                popExitTransition = { detailPopExit(motionPreference) }
             ) {
                 AlbumDetailScreen(onBack = { navController.popBackStack() })
             }
             composable(
                 route = Destination.ArtistDetail.route,
                 arguments = listOf(navArgument("artist") { type = NavType.StringType }),
-                enterTransition = {
-                    slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(240)) + fadeIn(tween(240))
-                },
-                exitTransition = { fadeOut(tween(160)) },
-                popEnterTransition = { fadeIn(tween(160)) },
-                popExitTransition = {
-                    slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(240)) + fadeOut(tween(240))
-                }
+                enterTransition = { detailEnter(motionPreference) },
+                exitTransition = { detailExit(motionPreference) },
+                popEnterTransition = { detailPopEnter(motionPreference) },
+                popExitTransition = { detailPopExit(motionPreference) }
             ) {
                 ArtistDetailScreen(onBack = { navController.popBackStack() })
             }
             composable(
                 route = Destination.PlaylistDetail.route,
                 arguments = listOf(navArgument("kind") { type = NavType.StringType }),
-                enterTransition = {
-                    slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(240)) + fadeIn(tween(240))
-                },
-                exitTransition = { fadeOut(tween(160)) },
-                popEnterTransition = { fadeIn(tween(160)) },
-                popExitTransition = {
-                    slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(240)) + fadeOut(tween(240))
-                }
+                enterTransition = { detailEnter(motionPreference) },
+                exitTransition = { detailExit(motionPreference) },
+                popEnterTransition = { detailPopEnter(motionPreference) },
+                popExitTransition = { detailPopExit(motionPreference) }
             ) {
                 PlaylistDetailScreen(onBack = { navController.popBackStack() })
             }
             composable(
                 route = Destination.Search.route,
-                enterTransition = { fadeIn(tween(160)) },
-                exitTransition = { fadeOut(tween(160)) },
-                popEnterTransition = { fadeIn(tween(160)) },
-                popExitTransition = { fadeOut(tween(160)) }
+                enterTransition = {
+                    if (motionPreference == MotionPreference.OFF) EnterTransition.None
+                    else fadeIn(tween(motionPreference.duration(160)))
+                },
+                exitTransition = {
+                    if (motionPreference == MotionPreference.OFF) ExitTransition.None
+                    else fadeOut(tween(motionPreference.duration(160)))
+                },
+                popEnterTransition = {
+                    if (motionPreference == MotionPreference.OFF) EnterTransition.None
+                    else fadeIn(tween(motionPreference.duration(160)))
+                },
+                popExitTransition = {
+                    if (motionPreference == MotionPreference.OFF) ExitTransition.None
+                    else fadeOut(tween(motionPreference.duration(160)))
+                }
             ) {
                 SearchScreen(
                     onSongClick = { song, queue -> playSongAndOpenPlayer(song, queue, playbackViewModel, navController) },

@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Transaction
 import com.necroware.terminusplayer.data.database.entity.PlaylistEntity
 import com.necroware.terminusplayer.data.database.entity.PlaylistSongEntity
 import com.necroware.terminusplayer.data.database.entity.SongEntity
@@ -36,6 +37,12 @@ interface PlaylistDao {
 
     @Insert
     suspend fun insertPlaylistSongs(songs: List<PlaylistSongEntity>)
+
+    @Transaction
+    suspend fun insertPlaylistWithSongs(playlist: PlaylistEntity, songs: List<PlaylistSongEntity>) {
+        insertPlaylist(playlist)
+        songs.chunked(400).forEach { insertPlaylistSongs(it) }
+    }
 
     @Query(
         """

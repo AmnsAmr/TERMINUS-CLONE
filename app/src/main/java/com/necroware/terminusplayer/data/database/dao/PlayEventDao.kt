@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 data class ArtistPlayCount(val artist: String, val playCount: Int, val msPlayed: Long)
 data class DayPlayCount(val dayEpoch: Long, val playCount: Int, val msPlayed: Long)
 data class HourHistogramRow(val hourOfDay: Int, val playCount: Int)
+data class SessionEventRow(val startedAtEpochMs: Long, val msPlayed: Long)
 
 @Dao
 interface PlayEventDao {
@@ -18,6 +19,9 @@ interface PlayEventDao {
 
     @Query("SELECT * FROM play_events WHERE startedAtEpochMs >= :sinceEpochMs ORDER BY startedAtEpochMs ASC")
     fun observeEventsSince(sinceEpochMs: Long): Flow<List<PlayEventEntity>>
+
+    @Query("SELECT startedAtEpochMs, msPlayed FROM play_events WHERE startedAtEpochMs >= :sinceEpochMs ORDER BY startedAtEpochMs ASC")
+    suspend fun sessionEventsSince(sinceEpochMs: Long): List<SessionEventRow>
 
     @Query(
         """
@@ -199,4 +203,3 @@ data class GroupStatsRow(val totalPlays: Int, val totalMsPlayed: Long)
 data class TopSongTitleRow(val songId: String, val title: String, val playCount: Int)
 data class LabeledPlayCount(val label: String, val playCount: Int)
 data class MonthPlayCount(val monthLabel: String, val playCount: Int)
-

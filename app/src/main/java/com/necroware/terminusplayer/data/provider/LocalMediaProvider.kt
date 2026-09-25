@@ -43,6 +43,7 @@ class LocalMediaProvider @Inject constructor(
             MediaStore.Audio.Media.TRACK,
             MediaStore.Audio.Media.YEAR,
             MediaStore.Audio.Media.DATA,
+            MediaStore.Audio.Media.RELATIVE_PATH,
             MediaStore.Audio.Media.SIZE
         )
 
@@ -64,13 +65,19 @@ class LocalMediaProvider @Inject constructor(
             val dateAddedCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
             val trackCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
             val yearCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.YEAR)
-            val dataCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
+            val dataCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+            val relativePathCol = cursor.getColumnIndex(MediaStore.Audio.Media.RELATIVE_PATH)
+            if (dataCol < 0 && relativePathCol < 0) {
+                throw ProviderSyncException("MediaStore exposes neither DATA nor RELATIVE_PATH", retryable = false)
+            }
             val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
-                val path = cursor.getString(dataCol) ?: ""
-                val folderPath = File(path).parent ?: ""
+                val path = if (dataCol >= 0) cursor.getString(dataCol) else null
+                val folderPath = path?.let { File(it).parent }
+                    ?: (if (relativePathCol >= 0) cursor.getString(relativePathCol)?.trimEnd('/') else null)
+                    ?: ""
                 
                 if (!hasSetupDefaults) {
                     if (folderPath.contains("WhatsApp", ignoreCase = true) || folderPath.contains("Voice Recorder", ignoreCase = true)) {
@@ -103,8 +110,7 @@ class LocalMediaProvider @Inject constructor(
         }
 
         if (!hasSetupDefaults) {
-            val updatedExcludes = excludedFolders + defaultExcludedFound
-            userPrefsRepo.setExcludedFolders(updatedExcludes)
+            userPrefsRepo.addExcludedFolders(defaultExcludedFound)
             userPrefsRepo.setHasSetupDefaultExcludes(true)
         }
 

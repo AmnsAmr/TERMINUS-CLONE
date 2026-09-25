@@ -12,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,7 +32,10 @@ fun GapFinderScreen(
     val status by viewModel.status.collectAsStateWithLifecycle()
     val error by viewModel.errorMessage.collectAsStateWithLifecycle()
 
-    var thresholdStr by remember(settings) { mutableStateOf(settings?.threshold?.toString() ?: "0.0") }
+    var thresholdStr by remember { mutableStateOf(settings?.threshold?.toString() ?: "0.0") }
+    LaunchedEffect(settings?.threshold) {
+        settings?.threshold?.let { thresholdStr = it.toString() }
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(20.dp),

@@ -28,7 +28,9 @@ fun SongArt(
         null
     } else if (uriString.startsWith("terminus://")) {
         val songId = uriString.removePrefix("terminus://")
-        "http://localhost/rest/getCoverArt?id=$songId&v=1.16.1&c=Terminus"
+        // NetworkModule replaces this sentinel with the configured server URL.
+        // It must never point at device localhost when configuration is absent.
+        "https://terminus.invalid/rest/getCoverArt?id=$songId&v=1.16.1&c=Terminus"
     } else {
         com.necroware.terminusplayer.coil.LocalAudioUri(uriString)
     }

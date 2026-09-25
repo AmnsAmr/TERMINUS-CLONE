@@ -31,6 +31,7 @@ fun AreaChart(
     modifier: Modifier = Modifier,
     height: Dp = 140.dp
 ) {
+    requireNonNegativeChartValues(points.map { it.value }, "AreaChart")
     val lineColor = MaterialTheme.colorScheme.primary
     val gridColor = MaterialTheme.colorScheme.outline
 

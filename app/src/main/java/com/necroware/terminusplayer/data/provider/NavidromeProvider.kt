@@ -6,9 +6,10 @@ import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.model.SyncedLyrics
 import com.necroware.terminusplayer.data.model.LyricLine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 import javax.inject.Singleton
-import java.security.MessageDigest
+import java.io.IOException
 
 @Singleton
 class NavidromeProvider @Inject constructor(
@@ -24,23 +25,41 @@ class NavidromeProvider @Inject constructor(
         val username = prefs.username
         val password = prefs.password
 
-        if (serverUrl.isBlank() || username.isBlank() || password.isBlank()) {
+        if (serverUrl.isBlank() && username.isBlank() && password.isBlank()) {
             return emptyList()
         }
 
-        val salt = generateSalt()
-        val token = generateToken(password, salt)
+        if (username.isBlank() || password.isBlank() || parseNavidromeBaseUrl(serverUrl) == null) {
+            throw ProviderSyncException("Navidrome server settings are incomplete or invalid", retryable = false)
+        }
 
-        val response = apiService.search(
-            query = "",
-            songCount = 10000,
-            user = username,
-            token = token,
-            salt = salt
-        )
+        val salt = newSubsonicSalt()
+        val token = buildSubsonicToken(password, salt)
+
+        val response = try {
+            apiService.search(
+                query = "",
+                songCount = 10000,
+                user = username,
+                token = token,
+                salt = salt
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: retrofit2.HttpException) {
+            throw ProviderSyncException(
+                "Navidrome request failed with HTTP ${e.code()}",
+                retryable = e.code() != 401 && e.code() != 403
+            )
+        }
 
         if (response.response.status != "ok") {
-            throw Exception("Subsonic API error: ${response.response.error?.message}")
+            val error = response.response.error
+            val permanent = error?.code == 40 || error?.code == 50 || error?.code == 60
+            throw ProviderSyncException(
+                "Subsonic API error: ${error?.message ?: "unknown error"}",
+                retryable = !permanent
+            )
         }
 
         val songs = response.response.searchResult3?.song ?: emptyList()
@@ -65,24 +84,32 @@ class NavidromeProvider @Inject constructor(
     }
 
     override suspend fun resolveStreamUrl(remoteId: String): String {
-        val prefs = prefsRepo.preferences.first()
-        val rawUrl = prefs.serverUrl.trimEnd('/')
-        val serverUrl = if (rawUrl.isNotBlank() && !rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
-            "http://$rawUrl"
-        } else {
-            rawUrl
+        val config = prefsRepo.serverConnectionConfig.value.takeIf { it.isLoaded }
+            ?: prefsRepo.awaitServerConnectionConfig()
+        val serverUrl = parseNavidromeBaseUrl(config.serverUrl)
+            ?: throw IOException("Navidrome server URL is missing or invalid")
+        val username = config.username
+        val password = config.password
+        if (username.isBlank() || password.isBlank()) throw IOException("Navidrome credentials are missing")
+        val bitRate = config.maxBitRate
+        if (bitRate != null && bitRate !in setOf(64, 128, 320)) {
+            throw IOException("Configured stream bitrate is invalid")
         }
-        val username = prefs.username
-        val password = prefs.password
 
-        val salt = generateSalt()
-        val token = generateToken(password, salt)
-
-        var url = "$serverUrl/rest/stream?id=$remoteId&u=$username&t=$token&s=$salt&v=1.16.1&c=Terminus&f=json"
-        if (prefs.maxBitRate != null) {
-            url += "&maxBitRate=${prefs.maxBitRate}"
-        }
-        return url
+        val salt = newSubsonicSalt()
+        val token = buildSubsonicToken(password, salt)
+        return serverUrl.newBuilder()
+            .addPathSegments("rest/stream")
+            .addQueryParameter("id", remoteId)
+            .addQueryParameter("u", username)
+            .addQueryParameter("t", token)
+            .addQueryParameter("s", salt)
+            .addQueryParameter("v", "1.16.1")
+            .addQueryParameter("c", "Terminus")
+            .addQueryParameter("f", "json")
+            .apply { bitRate?.let { addQueryParameter("maxBitRate", it.toString()) } }
+            .build()
+            .toString()
     }
 
     override suspend fun scrobble(remoteId: String) {
@@ -92,8 +119,8 @@ class NavidromeProvider @Inject constructor(
 
         if (username.isBlank() || password.isBlank()) return
 
-        val salt = generateSalt()
-        val token = generateToken(password, salt)
+        val salt = newSubsonicSalt()
+        val token = buildSubsonicToken(password, salt)
 
         apiService.scrobble(
             id = remoteId,
@@ -112,26 +139,14 @@ class NavidromeProvider @Inject constructor(
 
         if (username.isBlank() || password.isBlank()) return
 
-        val salt = generateSalt()
-        val token = generateToken(password, salt)
+        val salt = newSubsonicSalt()
+        val token = buildSubsonicToken(password, salt)
 
         if (isLiked) {
             apiService.star(id = remoteId, user = username, token = token, salt = salt)
         } else {
             apiService.unstar(id = remoteId, user = username, token = token, salt = salt)
         }
-    }
-
-    private fun generateSalt(): String {
-        val allowedChars = ('a'..'z') + ('A'..'Z') + ('0'..'9')
-        return (1..6).map { allowedChars.random() }.joinToString("")
-    }
-
-    private fun generateToken(password: String, salt: String): String {
-        val md = MessageDigest.getInstance("MD5")
-        val input = password + salt
-        val hashBytes = md.digest(input.toByteArray())
-        return hashBytes.joinToString("") { "%02x".format(it) }
     }
 
     override suspend fun getLyrics(remoteId: String): SyncedLyrics? {
@@ -141,8 +156,8 @@ class NavidromeProvider @Inject constructor(
 
         if (username.isBlank() || password.isBlank()) return null
 
-        val salt = generateSalt()
-        val token = generateToken(password, salt)
+        val salt = newSubsonicSalt()
+        val token = buildSubsonicToken(password, salt)
 
         return try {
             val response = apiService.getLyricsBySongId(
@@ -188,6 +203,8 @@ class NavidromeProvider @Inject constructor(
             }
 
             return null
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             null
         }

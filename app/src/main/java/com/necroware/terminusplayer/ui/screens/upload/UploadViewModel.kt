@@ -11,7 +11,11 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.IOException
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -35,31 +39,38 @@ class UploadViewModel @Inject constructor(
     }
 
     private fun fetchQuota() = viewModelScope.launch {
-        runCatching {
+        try {
             val response = api.getUploadQuota()
             if (response.isSuccessful) {
                 _quota.value = response.body()
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Quota is optional UI information; a later request can retry.
         }
     }
 
     fun uploadFile(uri: Uri) = viewModelScope.launch {
         _uploadStatus.value = "Uploading..."
-        runCatching {
-            val name = displayNameFor(uri)
+        try {
+            val name = withContext(Dispatchers.IO) { displayNameFor(uri) }
             
-            val testStream = context.contentResolver.openInputStream(uri)
-            if (testStream == null) {
+            val canRead = withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(uri)?.use { true } ?: false
+            }
+            if (!canRead) {
                 _uploadStatus.value = "Error: Unreadable file"
                 return@launch
             }
-            testStream.close()
             
             val reqFile = object : okhttp3.RequestBody() {
                 override fun contentType() = "audio/*".toMediaTypeOrNull()
                 override fun writeTo(sink: okio.BufferedSink) {
-                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                        inputStream.source().use { source ->
+                    val inputStream = context.contentResolver.openInputStream(uri)
+                        ?: throw IOException("Selected file is no longer available")
+                    inputStream.use {
+                        it.source().use { source ->
                             sink.writeAll(source)
                         }
                     }
@@ -75,8 +86,10 @@ class UploadViewModel @Inject constructor(
             } else {
                 _uploadStatus.value = "Failed: ${response.code()}"
             }
-        }.onFailure {
-            _uploadStatus.value = "Error: ${it.message}"
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _uploadStatus.value = "Error: ${e.message}"
         }
     }
 

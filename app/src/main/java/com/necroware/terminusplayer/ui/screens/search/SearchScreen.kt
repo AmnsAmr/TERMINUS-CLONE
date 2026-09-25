@@ -100,7 +100,7 @@ fun SearchScreen(
             )
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(results, key = { it.id }) { song ->
-                    SearchResultRow(song = song) { viewModel.playSong(song, results) }
+                    SearchResultRow(song = song) { onSongClick(song, results) }
                 }
             }
         }

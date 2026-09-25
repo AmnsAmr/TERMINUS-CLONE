@@ -18,6 +18,7 @@ import javax.inject.Inject
  *  "custom:<id>" for a user-imported playlist — see [Destination.PlaylistDetail]. */
 data class PlaylistDetailUiState(
     val isLoading: Boolean = true,
+    val errorMessage: String? = null,
     val kind: PlaylistKind? = null,
     val title: String = "",
     val emptyMessage: String = "",
@@ -31,10 +32,10 @@ class PlaylistDetailViewModel @Inject constructor(
     private val playbackController: PlaybackController
 ) : ViewModel() {
 
-    private val rawArg: String = checkNotNull(savedStateHandle["kind"])
+    private val rawArg: String = savedStateHandle.get<String>("kind").orEmpty()
     private val customPlaylistId: String? = rawArg.removePrefix("custom:")
-        .takeIf { rawArg.startsWith("custom:") }
-    private val kind: PlaylistKind? = if (customPlaylistId == null) PlaylistKind.valueOf(rawArg) else null
+        .takeIf { rawArg.startsWith("custom:") && it.isNotBlank() }
+    private val kind: PlaylistKind? = if (customPlaylistId == null) parsePlaylistKind(rawArg) else null
 
     private val _uiState = MutableStateFlow(PlaylistDetailUiState(kind = kind))
     val uiState: StateFlow<PlaylistDetailUiState> = _uiState.asStateFlow()
@@ -53,7 +54,16 @@ class PlaylistDetailViewModel @Inject constructor(
                     songs = songs
                 )
             } else {
-                val resolvedKind = checkNotNull(kind)
+                val resolvedKind = kind
+                if (resolvedKind == null) {
+                    _uiState.value = PlaylistDetailUiState(
+                        isLoading = false,
+                        title = "Unavailable",
+                        emptyMessage = "[ this playlist link is no longer valid ]",
+                        errorMessage = "Playlist details are unavailable."
+                    )
+                    return@launch
+                }
                 val songs = when (resolvedKind) {
                     PlaylistKind.LIKED -> repository.getLikedSongs()
                     PlaylistKind.RECENT -> repository.getRecentlyPlayed(limit = 100)
@@ -85,3 +95,6 @@ class PlaylistDetailViewModel @Inject constructor(
         playbackController.playSongs(songs.toMediaItems(), index)
     }
 }
+
+internal fun parsePlaylistKind(rawArg: String): PlaylistKind? =
+    PlaylistKind.values().firstOrNull { it.name == rawArg }

@@ -4,6 +4,8 @@ import com.necroware.terminusplayer.data.database.dao.ArtistPlayCount
 import com.necroware.terminusplayer.data.database.dao.DayPlayCount
 import com.necroware.terminusplayer.data.database.dao.HourHistogramRow
 import com.necroware.terminusplayer.data.database.dao.PlayEventDao
+import com.necroware.terminusplayer.data.database.TerminusDatabase
+import androidx.room.withTransaction
 import com.necroware.terminusplayer.data.database.entity.PlayEventEntity
 import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
@@ -24,7 +26,10 @@ enum class TopCategory(val label: String) {
     ARTIST("ARTIST")
 }
 
-data class TopCategoryItem(val label: String, val playCount: Int)
+data class TopCategoryItem(val label: String, val playCount: Int, val id: String)
+
+internal fun topSongCategoryItem(songId: String, title: String, playCount: Int) =
+    TopCategoryItem(title, playCount, "song:$songId")
 
 data class StatsSummary(
     val totalPlays: Int,
@@ -49,7 +54,8 @@ data class SessionStats(
 
 @Singleton
 class StatsRepository @Inject constructor(
-    private val playEventDao: PlayEventDao
+    private val playEventDao: PlayEventDao,
+    private val database: TerminusDatabase
 ) {
 
     suspend fun recordPlay(
@@ -76,21 +82,23 @@ class StatsRepository @Inject constructor(
 
     suspend fun getSummary(range: StatsRange): StatsSummary {
         val since = sinceEpochMsFor(range)
-        return StatsSummary(
-            totalPlays = playEventDao.totalPlays(since),
-            totalMsPlayed = playEventDao.totalMsPlayed(since),
-            topArtists = playEventDao.topArtists(since),
-            playsByDay = playEventDao.playsByDay(since),
-            playsByHour = playEventDao.playsByHourOfDay(since)
-        )
+        return database.withTransaction {
+            StatsSummary(
+                totalPlays = playEventDao.totalPlays(since),
+                totalMsPlayed = playEventDao.totalMsPlayed(since),
+                topArtists = playEventDao.topArtists(since),
+                playsByDay = playEventDao.playsByDay(since),
+                playsByHour = playEventDao.playsByHourOfDay(since)
+            )
+        }
     }
 
     suspend fun getTopCategory(range: StatsRange, category: TopCategory, limit: Int = 10): List<TopCategoryItem> {
         val since = sinceEpochMsFor(range)
         return when (category) {
-            TopCategory.SONG -> playEventDao.topSongsWithTitles(since, limit).map { TopCategoryItem(it.title, it.playCount) }
-            TopCategory.ALBUM -> playEventDao.topAlbums(since, limit).map { TopCategoryItem(it.label, it.playCount) }
-            TopCategory.ARTIST -> playEventDao.topArtists(since, limit).map { TopCategoryItem(it.artist, it.playCount) }
+            TopCategory.SONG -> playEventDao.topSongsWithTitles(since, limit).map { topSongCategoryItem(it.songId, it.title, it.playCount) }
+            TopCategory.ALBUM -> playEventDao.topAlbums(since, limit).map { TopCategoryItem(it.label, it.playCount, "album:${it.label}") }
+            TopCategory.ARTIST -> playEventDao.topArtists(since, limit).map { TopCategoryItem(it.artist, it.playCount, "artist:${it.artist}") }
         }
     }
 
@@ -135,7 +143,7 @@ class StatsRepository @Inject constructor(
      */
     suspend fun getSessionStats(range: StatsRange): SessionStats {
         val since = sinceEpochMsFor(range)
-        val events = playEventDao.observeEventsSince(since).first().sortedBy { it.startedAtEpochMs }
+        val events = playEventDao.sessionEventsSince(since)
         if (events.isEmpty()) return SessionStats(0, 0L, 0L)
 
         val gapThresholdMs = TimeUnit.MINUTES.toMillis(30)

@@ -15,6 +15,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
+import com.necroware.terminusplayer.data.prefs.MotionPreference
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 
 private data class AudioDeviceReadout(val audioDevice: String, val cpuPercent: Int)
@@ -28,13 +31,14 @@ fun AudioMonitorCard(
     isLossless: Boolean,
     repeatMode: Int,
     modifier: Modifier = Modifier,
-    isPlaying: Boolean = false
+    isPlaying: Boolean = false,
+    motionPreference: MotionPreference = MotionPreference.FULL
 ) {
     val context = LocalContext.current
 
     val volumePercent by produceState(initialValue = 0, context) {
         while (true) {
-            value = readVolumePercent(context)
+            value = withContext(Dispatchers.IO) { readVolumePercent(context) }
             delay(2000)
         }
     }
@@ -44,14 +48,17 @@ fun AudioMonitorCard(
         var lastWallTimeMs = System.currentTimeMillis()
         while (true) {
             delay(2000)
-            val cpuTimeMs = Process.getElapsedCpuTime()
-            val wallTimeMs = System.currentTimeMillis()
-            val cpuDelta = (cpuTimeMs - lastCpuTimeMs).coerceAtLeast(0L)
-            val wallDelta = (wallTimeMs - lastWallTimeMs).coerceAtLeast(1L)
-            val percent = ((cpuDelta.toFloat() / wallDelta) * 100).toInt().coerceIn(0, 100)
+            val (readout, cpuTimeMs, wallTimeMs) = withContext(Dispatchers.IO) {
+                val nextCpuTimeMs = Process.getElapsedCpuTime()
+                val nextWallTimeMs = System.currentTimeMillis()
+                val cpuDelta = (nextCpuTimeMs - lastCpuTimeMs).coerceAtLeast(0L)
+                val wallDelta = (nextWallTimeMs - lastWallTimeMs).coerceAtLeast(1L)
+                val percent = ((cpuDelta.toFloat() / wallDelta) * 100).toInt().coerceIn(0, 100)
+                Triple(AudioDeviceReadout(audioOutputDeviceLabel(context), percent), nextCpuTimeMs, nextWallTimeMs)
+            }
             lastCpuTimeMs = cpuTimeMs
             lastWallTimeMs = wallTimeMs
-            value = AudioDeviceReadout(audioOutputDeviceLabel(context), percent)
+            value = readout
         }
     }
 
@@ -87,7 +94,10 @@ fun AudioMonitorCard(
             MonitorRow("device", deviceReadout.audioDevice, "VOL $volumePercent%")
             MonitorRow("cpu", "${deviceReadout.cpuPercent}%", "")
 
-            SimulatedSpectrum(isPlaying = isPlaying, modifier = Modifier.padding(top = 8.dp))
+            SimulatedSpectrum(
+                isPlaying = isPlaying && motionPreference == MotionPreference.FULL,
+                modifier = Modifier.padding(top = 8.dp)
+            )
 
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -110,6 +120,15 @@ fun AudioMonitorCard(
 @Composable
 private fun SimulatedSpectrum(isPlaying: Boolean, modifier: Modifier = Modifier) {
     val barCount = 12
+    val animationSpecs = remember(barCount) {
+        List(barCount) { index ->
+            tween<Float>(
+                durationMillis = (400..800).random(),
+                delayMillis = (0..200).random(),
+                easing = FastOutSlowInEasing
+            )
+        }
+    }
     val infiniteTransition = rememberInfiniteTransition(label = "spectrum")
     
     Row(
@@ -120,21 +139,20 @@ private fun SimulatedSpectrum(isPlaying: Boolean, modifier: Modifier = Modifier)
         verticalAlignment = Alignment.Bottom
     ) {
         repeat(barCount) { index ->
-            val heightPercent by infiniteTransition.animateFloat(
-                initialValue = 0.1f,
-                targetValue = 1f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(
-                        durationMillis = (400..800).random(),
-                        delayMillis = (0..200).random(),
-                        easing = FastOutSlowInEasing
+            val displayHeight = if (isPlaying) {
+                val heightPercent by infiniteTransition.animateFloat(
+                    initialValue = 0.1f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = animationSpecs[index],
+                        repeatMode = RepeatMode.Reverse
                     ),
-                    repeatMode = RepeatMode.Reverse
-                ),
-                label = "bar_$index"
-            )
-            
-            val displayHeight = if (isPlaying) heightPercent else 0.1f
+                    label = "bar_$index"
+                )
+                heightPercent
+            } else {
+                0.1f
+            }
             
             Box(
                 modifier = Modifier

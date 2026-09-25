@@ -3,6 +3,7 @@ package com.necroware.terminusplayer
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.necroware.terminusplayer.data.prefs.ThemePresetId
+import com.necroware.terminusplayer.data.prefs.MotionPreference
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
@@ -19,4 +20,8 @@ class MainActivityViewModel @Inject constructor(
     val themeId: StateFlow<ThemePresetId> = preferencesRepository.preferences
         .map { it.themeId }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ThemePresetId.TERMINAL)
+
+    val motionPreference: StateFlow<MotionPreference> = preferencesRepository.preferences
+        .map { it.motionPreference }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MotionPreference.FULL)
 }

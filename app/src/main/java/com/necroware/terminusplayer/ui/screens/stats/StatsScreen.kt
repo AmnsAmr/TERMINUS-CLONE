@@ -224,7 +224,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
             }
         }
 
-        items(state.topCategoryItems, key = { it.label }) { item ->
+        items(state.topCategoryItems, key = { it.id }) { item ->
             TopCategoryRow(item)
         }
     }

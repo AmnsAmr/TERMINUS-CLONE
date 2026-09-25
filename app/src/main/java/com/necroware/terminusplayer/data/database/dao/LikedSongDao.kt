@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import com.necroware.terminusplayer.data.database.entity.LikedSongEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -28,4 +29,11 @@ interface LikedSongDao {
 
     @Query("SELECT EXISTS(SELECT 1 FROM liked_songs WHERE songId = :songId)")
     suspend fun isLiked(songId: String): Boolean
+
+    @Transaction
+    suspend fun toggle(songId: String, likedAt: Long): Boolean {
+        val newState = !isLiked(songId)
+        if (newState) like(LikedSongEntity(songId, likedAt)) else unlike(songId)
+        return newState
+    }
 }

@@ -3,6 +3,7 @@ package com.necroware.terminusplayer.di
 import android.content.Context
 import androidx.room.Room
 import com.necroware.terminusplayer.data.database.TerminusDatabase
+import com.necroware.terminusplayer.BuildConfig
 import com.necroware.terminusplayer.data.database.dao.LikedSongDao
 import com.necroware.terminusplayer.data.database.dao.PlayEventDao
 import com.necroware.terminusplayer.data.database.dao.PlaylistDao
@@ -20,18 +21,16 @@ object DatabaseModule {
 
     @Provides
     @Singleton
-    fun provideDatabase(@ApplicationContext context: Context): TerminusDatabase =
-        Room.databaseBuilder(
+    fun provideDatabase(@ApplicationContext context: Context): TerminusDatabase {
+        val builder = Room.databaseBuilder(
             context,
             TerminusDatabase::class.java,
             TerminusDatabase.DATABASE_NAME
         )
-            // Schema is still actively changing during Phase 1.5 development —
-            // destructive migration wipes local data (liked songs, listening
-            // history) on a version bump instead of crashing. Fine now; must
-            // be replaced with real Migration objects before any real release.
-            .fallbackToDestructiveMigration()
-            .build()
+            .addMigrations(TerminusDatabase.MIGRATION_5_6)
+        if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
+        return builder.build()
+    }
 
     @Provides
     fun provideSongDao(db: TerminusDatabase): SongDao = db.songDao()

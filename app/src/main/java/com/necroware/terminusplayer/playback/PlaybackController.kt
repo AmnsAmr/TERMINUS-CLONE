@@ -2,12 +2,14 @@ package com.necroware.terminusplayer.playback
 
 import android.content.ComponentName
 import android.content.Context
+import android.net.Uri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
+import com.google.common.util.concurrent.ListenableFuture
 import com.necroware.terminusplayer.util.albumIdOrNull
 import com.necroware.terminusplayer.util.bitrateKbpsOrNegative
 import com.necroware.terminusplayer.util.isLosslessFormat
@@ -17,7 +19,15 @@ import com.necroware.terminusplayer.util.toCodecLabel
 import com.necroware.terminusplayer.util.toSampleRateLabel
 import com.necroware.terminusplayer.util.selectedAudioFormat
 import com.necroware.terminusplayer.util.toAudioFormatLabel
+import com.necroware.terminusplayer.data.repository.MusicRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
@@ -41,7 +51,9 @@ data class NowPlayingState(
     val isLossless: Boolean = false,
     val bitDepthLabel: String = "—",
     val bitrateKbps: Int = -1,
-    val sizeBytes: Long = 0L
+    val sizeBytes: Long = 0L,
+    val isConnected: Boolean = false,
+    val connectionError: String? = null
 )
 
 /**
@@ -52,10 +64,29 @@ data class NowPlayingState(
  */
 @Singleton
 class PlaybackController @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val musicRepository: MusicRepository
 ) {
 
     private var controller: MediaController? = null
+    private var connectionFuture: ListenableFuture<MediaController>? = null
+    private val readyCallbacks = mutableListOf<() -> Unit>()
+    private val playbackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var queueResolutionJob: Job? = null
+
+    private val controllerListener = object : MediaController.Listener {
+        override fun onDisconnected(controller: MediaController) {
+            if (this@PlaybackController.controller === controller) {
+                controller.removeListener(listener)
+                this@PlaybackController.controller = null
+                _state.value = _state.value.copy(
+                    isConnected = false,
+                    isPlaying = false,
+                    connectionError = "Playback service disconnected"
+                )
+            }
+        }
+    }
 
     private val _state = MutableStateFlow(NowPlayingState())
     val state: StateFlow<NowPlayingState> = _state
@@ -95,26 +126,72 @@ class PlaybackController @Inject constructor(
             onReady()
             return
         }
+        readyCallbacks += onReady
+        if (connectionFuture != null) return
         val sessionToken = SessionToken(context, ComponentName(context, MusicService::class.java))
-        val future = MediaController.Builder(context, sessionToken).buildAsync()
+        val future = MediaController.Builder(context, sessionToken)
+            .setListener(controllerListener)
+            .buildAsync()
+        connectionFuture = future
         future.addListener({
-            controller = future.get().also { it.addListener(listener) }
-            updateFromController()
-            onReady()
+            try {
+                val connectedController = future.get()
+                connectionFuture = null
+                controller = connectedController
+                connectedController.addListener(listener)
+                _state.value = _state.value.copy(isConnected = true, connectionError = null)
+                updateFromController()
+                readyCallbacks.toList().also { readyCallbacks.clear() }.forEach { it() }
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                connectionFailed("Playback service connection was interrupted")
+            } catch (e: Exception) {
+                connectionFailed(e.cause?.message ?: e.message ?: "Unable to connect to playback service")
+            }
         }, MoreExecutors.directExecutor())
     }
 
+    fun reconnect(onReady: () -> Unit = {}) = connect(onReady)
+
+    private fun connectionFailed(message: String) {
+        connectionFuture = null
+        readyCallbacks.clear()
+        controller = null
+        _state.value = _state.value.copy(isConnected = false, connectionError = message)
+    }
+
     fun release() {
+        connectionFuture?.cancel(true)
+        connectionFuture = null
+        readyCallbacks.clear()
+        queueResolutionJob?.cancel()
+        queueResolutionJob = null
         controller?.removeListener(listener)
         controller?.release()
         controller = null
+        _state.value = _state.value.copy(isConnected = false, isPlaying = false)
     }
 
     fun playSongs(items: List<MediaItem>, startIndex: Int) {
-        controller?.apply {
-            setMediaItems(items, startIndex, 0L)
-            prepare()
-            play()
+        queueResolutionJob?.cancel()
+        queueResolutionJob = playbackScope.launch {
+            try {
+                val resolvedUris = musicRepository.getSongUris(items.map { it.mediaId })
+                val resolvedItems = items.map { item ->
+                    resolvedUris[item.mediaId]?.let { item.buildUpon().setUri(Uri.parse(it)).build() } ?: item
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    controller?.apply {
+                        setMediaItems(resolvedItems, startIndex, 0L)
+                        prepare()
+                        play()
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(connectionError = e.message ?: "Unable to prepare playback")
+            }
         }
     }
 
