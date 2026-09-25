@@ -20,6 +20,7 @@ import com.necroware.terminusplayer.util.albumIdOrNull
 import com.necroware.terminusplayer.util.toMediaItem
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -50,6 +52,10 @@ class MusicService : MediaSessionService() {
         android.util.Log.e("MusicService", "Unhandled coroutine exception", throwable)
     }
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
+    private val playEventScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
+    private val playEventJobs = mutableSetOf<Job>()
+    private val playEventJobsLock = Any()
+    private var serviceDestroying = false
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + exceptionHandler)
 
     private val equalizerController = EqualizerController()
@@ -59,16 +65,11 @@ class MusicService : MediaSessionService() {
     private var fadeTickerJob: Job? = null
     private var savePositionJob: Job? = null
 
-    private var trackedSongId: String? = null
-    private var trackedArtist: String = ""
-    private var trackedAlbum: String = ""
-    private var trackedAlbumId: String = ""
-    private var trackedStartedAtElapsedMs: Long = 0L
-    private var trackedDurationMs: Long = 0L
+    private val activePlayTracker = ActivePlayTracker()
 
     private val analyticsListener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            flushCurrentTrack()
+            flushCurrentTrack(completedAtEnd = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO)
             startTracking(mediaItem?.mediaMetadata, mediaItem?.mediaId)
             if (crossfadeSettings.enabled && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
                 startFadeIn()
@@ -77,48 +78,23 @@ class MusicService : MediaSessionService() {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
-                flushCurrentTrack()
+                flushCurrentTrack(completedAtEnd = true)
             }
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            activePlayTracker.onIsPlayingChanged(
+                isPlaying = isPlaying,
+                nowElapsedMs = SystemClock.elapsedRealtime(),
+                nowEpochMs = System.currentTimeMillis()
+            )
         }
     }
 
     override fun onCreate() {
         super.onCreate()
 
-        val resolver = androidx.media3.datasource.ResolvingDataSource.Resolver { dataSpec ->
-            val uriStr = dataSpec.uri.toString()
-            if (uriStr.startsWith("terminus://")) {
-                val songId = uriStr.removePrefix("terminus://")
-                val resolvedUriStr = try {
-                    kotlinx.coroutines.runBlocking { musicRepository.getSongUri(songId) }
-                } catch (e: InterruptedException) {
-                    throw java.io.InterruptedIOException().apply { initCause(e) }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw java.io.InterruptedIOException().apply { initCause(e) }
-                }
-                if (resolvedUriStr != null) {
-                    val uri = android.net.Uri.parse(resolvedUriStr)
-                    val builder = dataSpec.buildUpon().setUri(uri)
-                    
-                    if (resolvedUriStr.startsWith("http://") || resolvedUriStr.startsWith("https://")) {
-                        val maxBitRate = uri.getQueryParameter("maxBitRate")
-                        val cacheKey = if (maxBitRate != null) "${songId}_$maxBitRate" else songId
-                        builder.setKey(cacheKey)
-                    }
-                    
-                    builder.build()
-                } else {
-                    dataSpec
-                }
-            } else {
-                dataSpec
-            }
-        }
-
-        val dataSourceFactory = androidx.media3.datasource.ResolvingDataSource.Factory(
-            androidx.media3.datasource.DefaultDataSource.Factory(this),
-            resolver
-        )
+        val dataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this)
         val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
             .setDataSourceFactory(dataSourceFactory)
 
@@ -171,11 +147,22 @@ class MusicService : MediaSessionService() {
             val lastId = prefs.lastPlayedSongId
             if (lastId != null) {
                 val songs = musicRepository.observeAllSongs().first()
+                // Preferences may still contain a pre-namespacing song ID after
+                // a database migration. Resolve it only when unambiguous, then
+                // persist the new database identity for the next restore.
                 val song = songs.find { it.id == lastId }
+                    ?: songs.singleOrNull { it.providerRemoteId == lastId }
                 if (song != null) {
+                    if (song.id != lastId) {
+                        preferencesRepository.setLastPlayed(song.id, prefs.lastPlayedPositionMs)
+                    }
+                    val uri = musicRepository.getSongUri(song.id)
+                    val item = song.toMediaItem().buildUpon()
+                        .setUri(android.net.Uri.parse(uri ?: song.uriString))
+                        .build()
                     withContext(Dispatchers.Main) {
                         if (player.mediaItemCount == 0) {
-                            player.setMediaItem(song.toMediaItem(), prefs.lastPlayedPositionMs)
+                            player.setMediaItem(item, prefs.lastPlayedPositionMs)
                             player.prepare()
                         }
                     }
@@ -197,7 +184,11 @@ class MusicService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        synchronized(playEventJobsLock) { serviceDestroying = true }
         flushCurrentTrack()
+        synchronized(playEventJobsLock) {
+            if (playEventJobs.isEmpty()) playEventScope.cancel()
+        }
         fadeInJob?.cancel()
         fadeTickerJob?.cancel()
         savePositionJob?.cancel()
@@ -213,39 +204,45 @@ class MusicService : MediaSessionService() {
     }
 
     private fun startTracking(metadata: MediaMetadata?, mediaId: String?) {
-        trackedSongId = mediaId
-        trackedArtist = metadata?.artist?.toString().orEmpty()
-        trackedAlbum = metadata?.albumTitle?.toString().orEmpty()
-        trackedAlbumId = metadata?.albumIdOrNull() ?: ""
-        trackedStartedAtElapsedMs = SystemClock.elapsedRealtime()
-        trackedDurationMs = player.duration.coerceAtLeast(0L)
+        activePlayTracker.start(
+            songId = mediaId,
+            artist = metadata?.artist?.toString().orEmpty(),
+            album = metadata?.albumTitle?.toString().orEmpty(),
+            albumId = metadata?.albumIdOrNull() ?: "",
+            durationMs = player.duration,
+            isPlaying = player.isPlaying,
+            nowElapsedMs = SystemClock.elapsedRealtime(),
+            nowEpochMs = System.currentTimeMillis()
+        )
     }
 
-    private fun flushCurrentTrack() {
-        val songId = trackedSongId ?: return
-        val msPlayed = (SystemClock.elapsedRealtime() - trackedStartedAtElapsedMs).coerceAtLeast(0L)
+    private fun flushCurrentTrack(completedAtEnd: Boolean = false) {
+        val finished = activePlayTracker.finish(SystemClock.elapsedRealtime(), completedAtEnd) ?: return
 
-        if (msPlayed < 3_000L) return
-
-        val completed = trackedDurationMs > 0 && msPlayed >= (trackedDurationMs * 0.9).toLong()
-        val artist = trackedArtist
-        val album = trackedAlbum
-        val albumId = trackedAlbumId
-
-        serviceScope.launch {
-            statsRepository.recordPlay(
-                songId = songId,
-                artist = artist,
-                album = album,
-                albumId = albumId,
-                startedAtEpochMs = System.currentTimeMillis() - msPlayed,
-                msPlayed = msPlayed,
-                completed = completed
-            )
-            if (completed) {
-                musicRepository.scrobble(songId)
+        val job = playEventScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                statsRepository.recordPlay(
+                    songId = finished.songId,
+                    artist = finished.artist,
+                    album = finished.album,
+                    albumId = finished.albumId,
+                    startedAtEpochMs = finished.startedAtEpochMs,
+                    msPlayed = finished.activeMs,
+                    completed = finished.completed
+                )
+                if (finished.completed) {
+                    musicRepository.scrobble(finished.songId)
+                }
+            } finally {
+                val completedJob = coroutineContext[Job]
+                synchronized(playEventJobsLock) {
+                    completedJob?.let(playEventJobs::remove)
+                    if (serviceDestroying && playEventJobs.isEmpty()) playEventScope.cancel()
+                }
             }
         }
+        synchronized(playEventJobsLock) { playEventJobs += job }
+        job.start()
     }
 
     private fun startSavePositionTicker() {
@@ -253,7 +250,7 @@ class MusicService : MediaSessionService() {
         savePositionJob = serviceScope.launch {
             while (isActive) {
                 delay(5000)
-                val currentId = trackedSongId
+                val currentId = player.currentMediaItem?.mediaId
                 if (currentId != null) {
                     val pos = withContext(Dispatchers.Main) { player.currentPosition }
                     preferencesRepository.setLastPlayed(currentId, pos)

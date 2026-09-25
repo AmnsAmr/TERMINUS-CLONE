@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.necroware.terminusplayer.data.prefs.LibrarySortOrder
+import com.necroware.terminusplayer.data.prefs.MotionPreference
 import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
 import com.necroware.terminusplayer.data.prefs.SortDirection
 import com.necroware.terminusplayer.data.prefs.SortField
@@ -21,6 +22,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 sealed interface ImportStatus {
@@ -58,6 +62,10 @@ class SettingsViewModel @Inject constructor(
         preferencesRepository.setPlaybackArtStyle(style)
     }
 
+    fun setMotionPreference(preference: MotionPreference) = viewModelScope.launch {
+        preferencesRepository.setMotionPreference(preference)
+    }
+
     fun setEqualizerEnabled(enabled: Boolean) = viewModelScope.launch {
         preferencesRepository.setEqualizerEnabled(enabled)
     }
@@ -90,8 +98,11 @@ class SettingsViewModel @Inject constructor(
         if (uris.isEmpty()) return
         _importStatus.value = ImportStatus.Running
         viewModelScope.launch {
-            val count = runCatching { repository.importAudioFiles(uris) }
-                .getOrElse {
+            val count = try {
+                repository.importAudioFiles(uris)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
                     _importStatus.value = ImportStatus.Failed("Couldn't import those files")
                     return@launch
                 }
@@ -102,9 +113,14 @@ class SettingsViewModel @Inject constructor(
     fun importPlaylist(uri: Uri) {
         _importStatus.value = ImportStatus.Running
         viewModelScope.launch {
-            val name = displayNameFor(uri).substringBeforeLast('.').ifBlank { "IMPORTED PLAYLIST" }
-            val (matched, total) = runCatching { repository.importPlaylistFromM3u(uri, name) }
-                .getOrElse {
+            val name = withContext(Dispatchers.IO) {
+                displayNameFor(uri).substringBeforeLast('.').ifBlank { "IMPORTED PLAYLIST" }
+            }
+            val (matched, total) = try {
+                repository.importPlaylistFromM3u(uri, name)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
                     _importStatus.value = ImportStatus.Failed("Couldn't read that playlist file")
                     return@launch
                 }

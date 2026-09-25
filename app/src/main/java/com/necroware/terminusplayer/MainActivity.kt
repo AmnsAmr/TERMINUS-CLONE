@@ -49,6 +49,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val activityViewModel: MainActivityViewModel = hiltViewModel()
             val themeId by activityViewModel.themeId.collectAsStateWithLifecycle()
+            val motionPreference by activityViewModel.motionPreference.collectAsStateWithLifecycle()
 
             TerminusTheme(preset = themePresetById(themeId)) {
                 Surface(color = MaterialTheme.colorScheme.background) {
@@ -61,7 +62,7 @@ class MainActivity : ComponentActivity() {
                     ) { granted -> hasEssentialPermission = granted || isGranted(essentialAudioPermission) }
 
                     if (hasEssentialPermission) {
-                        TerminusNavGraph()
+                        TerminusNavGraph(motionPreference = motionPreference)
                     } else {
                         PermissionGate(onRequestPermission = { permissionLauncher.launch(essentialAudioPermission) })
                     }

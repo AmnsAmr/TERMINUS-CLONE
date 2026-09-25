@@ -2,20 +2,18 @@ package com.necroware.terminusplayer.di
 
 import com.necroware.terminusplayer.data.api.subsonic.SubsonicApiService
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
+import com.necroware.terminusplayer.data.provider.buildSubsonicToken
+import com.necroware.terminusplayer.data.provider.newSubsonicSalt
+import com.necroware.terminusplayer.data.provider.parseNavidromeBaseUrl
 import com.squareup.moshi.Moshi
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import javax.inject.Singleton
-
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -30,56 +28,36 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(prefsRepo: UserPreferencesRepository): OkHttpClient {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
-        }
         return OkHttpClient.Builder()
-            .addInterceptor(logging)
             .addInterceptor { chain ->
                 val request = chain.request()
-                val prefs = try {
-                    runBlocking { prefsRepo.preferences.first() }
-                } catch (e: InterruptedException) {
-                    throw java.io.InterruptedIOException().apply { initCause(e) }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw java.io.InterruptedIOException().apply { initCause(e) }
+                val config = prefsRepo.serverConnectionConfig.value
+                if (!config.isLoaded) {
+                    throw java.io.IOException("Server configuration is still loading")
                 }
-                val rawUrl = prefs.serverUrl.trimEnd('/')
-                val username = prefs.username
-                val password = prefs.password
-
-                var finalRequest = request
-                if (rawUrl.isNotBlank()) {
-                    val urlWithScheme = if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
-                        "http://$rawUrl"
-                    } else {
-                        rawUrl
-                    }
-                    val newUrl = urlWithScheme.toHttpUrlOrNull()
-                    if (newUrl != null) {
-                        val finalUrlBuilder = newUrl.newBuilder()
-                            .addEncodedPathSegments(request.url.encodedPath.removePrefix("/"))
-                            .encodedQuery(request.url.encodedQuery)
-                            
-                        // Append Subsonic auth params if missing (required for Coil image requests)
-                        if (username.isNotBlank() && password.isNotBlank()) {
-                            if (request.url.queryParameter("u") == null) {
-                                finalUrlBuilder.addQueryParameter("u", username)
-                                finalUrlBuilder.addQueryParameter("p", password)
-                            }
-                        }
-                        
-                        val finalUrl = finalUrlBuilder.build()
-                        
-                        val builder = request.newBuilder().url(finalUrl)
-                        if (username.isNotBlank() && password.isNotBlank()) {
-                            val credential = okhttp3.Credentials.basic(username, password)
-                            builder.header("Authorization", credential)
-                        }
-                        finalRequest = builder.build()
-                    }
+                val serverUrl = parseNavidromeBaseUrl(config.serverUrl)
+                    ?: throw java.io.IOException("Navidrome server URL is missing or invalid")
+                val username = config.username
+                val password = config.password
+                val finalUrlBuilder = serverUrl.newBuilder()
+                    .addEncodedPathSegments(request.url.encodedPath.removePrefix("/"))
+                    .encodedQuery(request.url.encodedQuery)
+                // Artwork requests carry no Retrofit arguments, so authorize them
+                // with Subsonic's salted token instead of putting the password in
+                // the URL. API methods already provide their own token parameters.
+                if (finalUrlBuilder.build().queryParameter("u") == null && username.isNotBlank() && password.isNotBlank()) {
+                    val salt = newSubsonicSalt()
+                    finalUrlBuilder.addQueryParameter("u", username)
+                        .addQueryParameter("t", buildSubsonicToken(password, salt))
+                        .addQueryParameter("s", salt)
                 }
-                chain.proceed(finalRequest)
+                val builder = request.newBuilder().url(finalUrlBuilder.build())
+                // Subsonic REST requests are authenticated by their salted token;
+                // avoid sending the reusable password in Basic auth as well.
+                if (!request.url.encodedPath.startsWith("/rest/") && username.isNotBlank() && password.isNotBlank()) {
+                    builder.header("Authorization", okhttp3.Credentials.basic(username, password))
+                }
+                chain.proceed(builder.build())
             }
             .build()
     }
@@ -88,7 +66,7 @@ object NetworkModule {
     @Singleton
     fun provideRetrofit(okHttpClient: OkHttpClient, moshi: Moshi): Retrofit {
         return Retrofit.Builder()
-            .baseUrl("http://localhost/") // Dummy base URL, replaced by interceptor
+            .baseUrl("https://terminus.invalid/") // Unreachable sentinel; interceptor requires a configured host.
             .client(okHttpClient)
             .addConverterFactory(MoshiConverterFactory.create(moshi))
             .build()

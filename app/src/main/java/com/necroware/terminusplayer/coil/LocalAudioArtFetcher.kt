@@ -52,25 +52,31 @@ class LocalAudioArtFetcher(
                 val height = (this.height as? coil.size.Dimension.Pixels)?.px ?: 512
                 maxOf(width, height)
             }
-        }
+        }.coerceIn(32, 1024)
 
         try {
             return context.contentResolver.loadThumbnail(uri, Size(reqSize, reqSize), null)
         } catch (_: Exception) {
             try {
                 val mmr = MediaMetadataRetriever()
-                context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                    mmr.setDataSource(pfd.fileDescriptor)
-                    val pic = mmr.embeddedPicture
-                    if (pic != null) {
-                        val decodeOptions = BitmapFactory.Options().apply {
-                            inJustDecodeBounds = true
+                try {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        mmr.setDataSource(pfd.fileDescriptor)
+                        val pic = mmr.embeddedPicture
+                        if (pic != null && pic.size <= MAX_EMBEDDED_ART_BYTES) {
+                            val decodeOptions = BitmapFactory.Options().apply {
+                                inJustDecodeBounds = true
+                            }
+                            BitmapFactory.decodeByteArray(pic, 0, pic.size, decodeOptions)
+                            if (decodeOptions.outWidth > 0 && decodeOptions.outHeight > 0) {
+                                decodeOptions.inSampleSize = calculateInSampleSize(decodeOptions, reqSize, reqSize)
+                                decodeOptions.inJustDecodeBounds = false
+                                return BitmapFactory.decodeByteArray(pic, 0, pic.size, decodeOptions)
+                            }
                         }
-                        BitmapFactory.decodeByteArray(pic, 0, pic.size, decodeOptions)
-                        decodeOptions.inSampleSize = calculateInSampleSize(decodeOptions, reqSize, reqSize)
-                        decodeOptions.inJustDecodeBounds = false
-                        return BitmapFactory.decodeByteArray(pic, 0, pic.size, decodeOptions)
                     }
+                } finally {
+                    mmr.release()
                 }
             } catch (e: Exception) {
                 // Ignore
@@ -91,6 +97,10 @@ class LocalAudioArtFetcher(
             }
         }
         return inSampleSize
+    }
+
+    private companion object {
+        const val MAX_EMBEDDED_ART_BYTES = 10 * 1024 * 1024
     }
 
     class Factory(private val context: Context) : Fetcher.Factory<LocalAudioUri> {

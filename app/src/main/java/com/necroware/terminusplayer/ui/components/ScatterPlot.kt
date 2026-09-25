@@ -22,6 +22,7 @@ fun ScatterPlot(
     modifier: Modifier = Modifier,
     height: Dp = 140.dp
 ) {
+    requireNonNegativeChartValues(values, "ScatterPlot")
     val dotColor = MaterialTheme.colorScheme.primary
     val gridColor = MaterialTheme.colorScheme.outline
 

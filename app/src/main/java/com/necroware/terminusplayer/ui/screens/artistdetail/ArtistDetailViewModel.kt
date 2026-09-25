@@ -18,6 +18,7 @@ import javax.inject.Inject
 
 data class ArtistDetailUiState(
     val isLoading: Boolean = true,
+    val errorMessage: String? = null,
     val artist: String = "",
     val songs: List<Song> = emptyList(),
     val stats: GroupListenStats = GroupListenStats(0, 0L, null),
@@ -32,13 +33,21 @@ class ArtistDetailViewModel @Inject constructor(
     private val playbackController: PlaybackController
 ) : ViewModel() {
 
-    private val artist: String = checkNotNull(savedStateHandle["artist"])
+    private val artist: String = savedStateHandle.get<String>("artist").orEmpty()
 
     private val _uiState = MutableStateFlow(ArtistDetailUiState(artist = artist))
     val uiState: StateFlow<ArtistDetailUiState> = _uiState.asStateFlow()
 
     init {
         viewModelScope.launch {
+            if (artist.isBlank()) {
+                _uiState.value = ArtistDetailUiState(
+                    isLoading = false,
+                    artist = "Unavailable",
+                    errorMessage = "Artist details are unavailable."
+                )
+                return@launch
+            }
             val songs = repository.getSongsForArtist(artist)
             val stats = statsRepository.getStatsForArtist(artist)
             val topSongTitle = stats.topSongId?.let { id -> songs.firstOrNull { it.id == id }?.title }

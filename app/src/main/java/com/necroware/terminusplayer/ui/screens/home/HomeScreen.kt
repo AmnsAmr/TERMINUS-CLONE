@@ -2,7 +2,6 @@ package com.necroware.terminusplayer.ui.screens.home
 
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,7 +21,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,7 +33,6 @@ import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.ui.components.SongArt
 import com.necroware.terminusplayer.ui.components.SystemInfoCard
 import com.necroware.terminusplayer.ui.components.TerminalBorder
-import kotlinx.coroutines.isActive
 
 @Composable
 fun HomeScreen(
@@ -64,6 +61,17 @@ fun HomeScreen(
         contentPadding = PaddingValues(top = 20.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
+        if (state.syncError != null) {
+            item {
+                Text(
+                    text = "[ sync warning: ${state.syncError} ]",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 20.dp)
+                )
+            }
+        }
+
         item {
             SystemInfoCard(
                 trackCount = state.songCount,
@@ -99,22 +107,6 @@ fun HomeScreen(
             item {
                 val listState = rememberLazyListState()
                 
-                // Continuous slow scroll animation
-                LaunchedEffect(state.recentlyPlayed) {
-                    if (state.recentlyPlayed.size <= 1) return@LaunchedEffect
-                    while (isActive) {
-                        listState.scrollBy(1f) // Slow creep
-                        kotlinx.coroutines.delay(16) // ~60fps
-                        
-                        // If reached end, jump back to start (or just let it be if not looping)
-                        // For a simple "moving" effect, we can just let it scroll.
-                        // Better: auto-reset if it stops moving or reaches end.
-                        if (!listState.canScrollForward) {
-                            listState.scrollToItem(0)
-                        }
-                    }
-                }
-
                 LazyRow(
                     state = listState,
                     contentPadding = PaddingValues(horizontal = 20.dp),
@@ -131,12 +123,23 @@ fun HomeScreen(
         }
 
         item {
-            Text(
-                text = "[ ${state.songCount} tracks indexed ]",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 20.dp)
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "[ ${state.songCount} tracks indexed ]",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = if (state.isSyncing) "[ SCANNING ]" else "[ RESCAN ]",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable(enabled = !state.isSyncing) { viewModel.refreshLibrary() }
+                )
+            }
         }
     }
 }

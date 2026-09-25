@@ -9,7 +9,18 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.catch
+import androidx.datastore.preferences.core.emptyPreferences
+import java.io.IOException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,6 +34,7 @@ private object Keys {
     val CROSSFADE_DURATION_MS = intPreferencesKey("crossfade_duration_ms")
     val PREFER_HW_DECODER = booleanPreferencesKey("prefer_hw_decoder")
     val PLAYBACK_ART_STYLE = stringPreferencesKey("playback_art_style")
+    val MOTION_PREFERENCE = stringPreferencesKey("motion_preference")
     val LAST_PLAYED_SONG_ID = stringPreferencesKey("last_played_song_id_v2")
     val LAST_PLAYED_POSITION_MS = longPreferencesKey("last_played_position_ms")
     val SERVER_URL = stringPreferencesKey("server_url")
@@ -35,11 +47,42 @@ private object Keys {
 
 private fun eqBandKey(index: Int) = intPreferencesKey("${Keys.EQ_BAND_PREFIX}$index")
 
+data class ServerConnectionConfig(
+    val serverUrl: String = "",
+    val username: String = "",
+    val password: String = "",
+    val maxBitRate: Int? = null,
+    val isLoaded: Boolean = false
+)
+
 @Singleton
 class UserPreferencesRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>
 ) {
-    val preferences: Flow<UserPreferences> = dataStore.data.map { prefs -> prefs.toUserPreferences() }
+    val preferences: Flow<UserPreferences> = dataStore.data
+        .catch { error ->
+            if (error is IOException) emit(emptyPreferences()) else throw error
+        }
+        .map { prefs -> prefs.toUserPreferences() }
+    private val _serverConnectionConfig = MutableStateFlow(ServerConnectionConfig())
+    val serverConnectionConfig = _serverConnectionConfig.asStateFlow()
+
+    init {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            preferences.collect { prefs ->
+                _serverConnectionConfig.value = ServerConnectionConfig(
+                    serverUrl = prefs.serverUrl,
+                    username = prefs.username,
+                    password = prefs.password,
+                    maxBitRate = prefs.maxBitRate,
+                    isLoaded = true
+                )
+            }
+        }
+    }
+
+    suspend fun awaitServerConnectionConfig(): ServerConnectionConfig =
+        serverConnectionConfig.first { it.isLoaded }
 
     suspend fun setTheme(themeId: ThemePresetId) {
         dataStore.edit { it[Keys.THEME_ID] = themeId.name }
@@ -54,6 +97,10 @@ class UserPreferencesRepository @Inject constructor(
 
     suspend fun setPlaybackArtStyle(style: PlaybackArtStyle) {
         dataStore.edit { it[Keys.PLAYBACK_ART_STYLE] = style.name }
+    }
+
+    suspend fun setMotionPreference(preference: MotionPreference) {
+        dataStore.edit { it[Keys.MOTION_PREFERENCE] = preference.name }
     }
 
     suspend fun setEqualizerEnabled(enabled: Boolean) {
@@ -117,6 +164,7 @@ class UserPreferencesRepository @Inject constructor(
             ),
             preferHardwareDecoder = this[Keys.PREFER_HW_DECODER] ?: defaults.preferHardwareDecoder,
             playbackArtStyle = playbackArtStyle,
+            motionPreference = parseMotionPreference(this[Keys.MOTION_PREFERENCE]),
             lastPlayedSongId = this[Keys.LAST_PLAYED_SONG_ID],
             lastPlayedPositionMs = this[Keys.LAST_PLAYED_POSITION_MS] ?: 0L,
             serverUrl = this[Keys.SERVER_URL] ?: "",
@@ -129,15 +177,36 @@ class UserPreferencesRepository @Inject constructor(
     }
 
     suspend fun setNavidromeSettings(serverUrl: String, username: String, password: String) {
+        val currentConfig = awaitServerConnectionConfig()
         dataStore.edit {
             it[Keys.SERVER_URL] = serverUrl
             it[Keys.USERNAME] = username
             it[Keys.PASSWORD] = password
         }
+        _serverConnectionConfig.value = currentConfig.copy(
+            serverUrl = serverUrl,
+            username = username,
+            password = password
+        )
     }
 
     suspend fun setExcludedFolders(folders: Set<String>) {
         dataStore.edit { it[Keys.EXCLUDED_FOLDERS] = folders }
+    }
+
+    suspend fun setFolderExcluded(folderPath: String, excluded: Boolean) {
+        dataStore.edit { prefs ->
+            val updated = (prefs[Keys.EXCLUDED_FOLDERS] ?: emptySet()).toMutableSet()
+            if (excluded) updated.add(folderPath) else updated.remove(folderPath)
+            prefs[Keys.EXCLUDED_FOLDERS] = updated
+        }
+    }
+
+    suspend fun addExcludedFolders(folders: Set<String>) {
+        if (folders.isEmpty()) return
+        dataStore.edit { prefs ->
+            prefs[Keys.EXCLUDED_FOLDERS] = (prefs[Keys.EXCLUDED_FOLDERS] ?: emptySet()) + folders
+        }
     }
 
     suspend fun setHasSetupDefaultExcludes(setup: Boolean) {
@@ -152,5 +221,7 @@ class UserPreferencesRepository @Inject constructor(
                 prefs.remove(Keys.MAX_BIT_RATE)
             }
         }
+        val currentConfig = awaitServerConnectionConfig()
+        _serverConnectionConfig.value = currentConfig.copy(maxBitRate = bitRate)
     }
 }

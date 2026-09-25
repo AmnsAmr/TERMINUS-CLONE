@@ -73,7 +73,7 @@ fun PlaylistDetailScreen(
         if (!state.isLoading && state.songs.isEmpty()) {
             item {
                 Text(
-                    text = state.emptyMessage,
+                    text = state.errorMessage ?: state.emptyMessage,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

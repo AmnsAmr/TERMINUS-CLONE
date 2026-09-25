@@ -31,7 +31,7 @@ interface SongDao {
      * per track when per-track artist/feature tags differ, which otherwise
      * fragments one real album into many list entries.
      */
-    @Query("SELECT * FROM songs WHERE album = :albumTitle COLLATE NOCASE ORDER BY trackNumber ASC")
+    @Query("SELECT * FROM songs WHERE TRIM(album) = TRIM(:albumTitle) COLLATE NOCASE ORDER BY trackNumber ASC")
     fun observeSongsByAlbumTitle(albumTitle: String): Flow<List<SongEntity>>
 
     @Query("SELECT DISTINCT folderPath FROM songs ORDER BY folderPath ASC")

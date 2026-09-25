@@ -32,6 +32,7 @@ fun BlockyBarChart(
     chartHeight: Dp = 120.dp,
     barColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary
 ) {
+    requireNonNegativeChartValues(data.map { it.value }, "BlockyBarChart")
     val maxValue = data.maxOfOrNull { it.value }?.takeIf { it > 0f } ?: 1f
 
     Row(
@@ -48,7 +49,7 @@ fun BlockyBarChart(
                         .height(chartHeight),
                     contentAlignment = Alignment.BottomCenter
                 ) {
-                    val barHeight = chartHeight * (datum.value / maxValue).coerceIn(0.02f, 1f)
+                    val barHeight = chartHeight * (datum.value / maxValue).coerceIn(0f, 1f)
                     Box(
                         modifier = Modifier
                             .width(20.dp)

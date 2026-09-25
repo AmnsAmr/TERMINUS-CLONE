@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import javax.inject.Inject
 
 data class StatsUiState(
@@ -39,6 +40,7 @@ class StatsViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(StatsUiState())
     val uiState: StateFlow<StatsUiState> = _uiState.asStateFlow()
+    private var loadJob: Job? = null
 
     init {
         loadInsightsOnce()
@@ -54,8 +56,9 @@ class StatsViewModel @Inject constructor(
     }
 
     private fun load(range: StatsRange, category: TopCategory) {
-        viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(range = range, category = category, isLoading = true)
+        loadJob?.cancel()
+        _uiState.value = _uiState.value.copy(range = range, category = category, isLoading = true)
+        loadJob = viewModelScope.launch {
             val summary = statsRepository.getSummary(range)
             val topItems = statsRepository.getTopCategory(range, category)
             val sessionStats = statsRepository.getSessionStats(range)

@@ -3,6 +3,7 @@ package com.necroware.terminusplayer.data.model
 data class Song(
     val id: String,
     val providerId: String = "local", // local or remote source
+    val providerRemoteId: String = id,
     val title: String,
     val artist: String,
     val album: String,

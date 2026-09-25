@@ -10,11 +10,13 @@ import com.necroware.terminusplayer.data.database.dao.LikedSongDao
 import com.necroware.terminusplayer.data.database.dao.PlayEventDao
 import com.necroware.terminusplayer.data.database.dao.PlaylistDao
 import com.necroware.terminusplayer.data.database.dao.SongDao
+import com.necroware.terminusplayer.data.database.TerminusDatabase
 import com.necroware.terminusplayer.data.database.entity.LikedSongEntity
 import com.necroware.terminusplayer.data.database.entity.PlaylistEntity
 import com.necroware.terminusplayer.data.database.entity.PlaylistSongEntity
 import com.necroware.terminusplayer.data.database.entity.SongEntity
 import com.necroware.terminusplayer.data.provider.MediaProvider
+import com.necroware.terminusplayer.data.provider.ProviderSyncException
 import com.necroware.terminusplayer.data.model.Album
 import com.necroware.terminusplayer.data.model.Artist
 import com.necroware.terminusplayer.data.model.Playlist
@@ -25,13 +27,22 @@ import com.necroware.terminusplayer.util.parseM3u
 import com.necroware.terminusplayer.data.model.SyncedLyrics
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import androidx.room.withTransaction
 import javax.inject.Inject
 import javax.inject.Singleton
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
+import com.necroware.terminusplayer.sync.LikeSyncWorker
 
 @Singleton
 class MusicRepository @Inject constructor(
@@ -40,12 +51,47 @@ class MusicRepository @Inject constructor(
     private val likedSongDao: LikedSongDao,
     private val playEventDao: PlayEventDao,
     private val playlistDao: PlaylistDao,
+    private val database: TerminusDatabase,
     private val providers: Map<String, @JvmSuppressWildcards MediaProvider>
 ) {
 
+    private val syncMutex = Mutex()
+
+    data class SyncResult(
+        val successfulProviders: Set<String>,
+        val failedProviders: Set<String>,
+        val retryableFailures: Set<String>
+    )
+
     /** Re-scans all providers and syncs the Room cache. Call on app start and pull-to-refresh. */
-    suspend fun syncLibrary() = withContext(Dispatchers.Default) {
-        val allScanned = providers.values.flatMap { it.syncLibrary() }
+    suspend fun syncLibrary(): SyncResult = withContext(Dispatchers.Default) {
+        syncMutex.withLock {
+        val scans = mutableMapOf<String, List<SongEntity>>()
+        val failedProviders = mutableSetOf<String>()
+        val retryableFailures = mutableSetOf<String>()
+        providers.forEach { (providerId, provider) ->
+            try {
+                scans[providerId] = provider.syncLibrary()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ProviderSyncException) {
+                failedProviders += providerId
+                if (e.retryable) retryableFailures += providerId
+            } catch (_: Exception) {
+                failedProviders += providerId
+                retryableFailures += providerId
+            }
+        }
+
+        val existingSongs = songDao.getAllSongs().associateBy { it.remoteId }
+        val retainedFailedProviderSongs = existingSongs.values.filter { it.providerId in failedProviders }
+        val allScanned = scans.values.flatten().map { song ->
+            song.copy(
+                remoteId = namespacedSongId(song.providerId, song.providerRemoteId),
+                providerRemoteId = song.providerRemoteId,
+                album = song.album.trim()
+            )
+        } + retainedFailedProviderSongs
         
         val localSongs = allScanned.filter { it.providerId == "local" }
         val remoteSongs = allScanned.filter { it.providerId != "local" }
@@ -62,7 +108,7 @@ class MusicRepository @Inject constructor(
             val key = "${local.title.trim().lowercase()}|${local.artist.trim().lowercase()}"
             val match = remoteSongsByKey[key]
             if (match != null) {
-                local.copy(navidromeId = match.remoteId)
+                local.copy(navidromeId = match.providerRemoteId)
             } else {
                 local
             }
@@ -76,26 +122,24 @@ class MusicRepository @Inject constructor(
         val scanned = deduplicatedLocalSongs + remainingRemoteSongs
         
         // Diffing mechanism to prevent unnecessary UI recompositions
-        val existingSongs = songDao.getAllSongs().associateBy { it.remoteId }
         val scannedIds = scanned.map { it.remoteId }.toSet()
         
-        val toUpsert = scanned.filter { scannedSong ->
-            val existing = existingSongs[scannedSong.remoteId]
-            existing == null || existing != scannedSong
-        }
-        
-        val toDelete = existingSongs.keys.filterNot { it in scannedIds }
-        
-        if (toUpsert.isNotEmpty()) {
-            toUpsert.chunked(999).forEach { chunk ->
-                songDao.upsertAll(chunk)
+        database.withTransaction {
+            val currentSongs = songDao.getAllSongs().associateBy { it.remoteId }
+            val currentToUpsert = scanned.filter { currentSongs[it.remoteId] != it }
+            val currentToDelete = currentSongs.values
+                .filter { it.providerId !in failedProviders && it.remoteId !in scannedIds }
+                .map { it.remoteId }
+
+            if (currentToUpsert.isNotEmpty()) {
+                currentToUpsert.chunked(900).forEach { songDao.upsertAll(it) }
+            }
+            if (currentToDelete.isNotEmpty()) {
+                currentToDelete.chunked(900).forEach { songDao.deleteByIds(it) }
             }
         }
-        
-        if (toDelete.isNotEmpty()) {
-            toDelete.chunked(999).forEach { chunk ->
-                songDao.deleteByIds(chunk)
-            }
+
+        SyncResult(scans.keys.toSet(), failedProviders, retryableFailures)
         }
     }
 
@@ -139,26 +183,27 @@ class MusicRepository @Inject constructor(
 
     suspend fun toggleLike(songId: String) {
         val song = songDao.getById(songId)
-        val isCurrentlyLiked = likedSongDao.isLiked(songId)
-        val newLikedState = !isCurrentlyLiked
+        val newLikedState = likedSongDao.toggle(songId, System.currentTimeMillis())
+        if (song == null) return
 
-        if (isCurrentlyLiked) {
-            likedSongDao.unlike(songId)
-        } else {
-            likedSongDao.like(LikedSongEntity(songId, System.currentTimeMillis()))
-        }
+        val remoteId = if (song.navidromeId != null) song.navidromeId else song.providerRemoteId
+        val providerId = if (song.navidromeId != null) "navidrome" else song.providerId
+        val request = OneTimeWorkRequestBuilder<LikeSyncWorker>()
+            .setInputData(workDataOf(
+                LikeSyncWorker.KEY_PROVIDER_ID to providerId,
+                LikeSyncWorker.KEY_PROVIDER_REMOTE_ID to remoteId,
+                LikeSyncWorker.KEY_IS_LIKED to newLikedState
+            ))
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "like-sync:$songId",
+            ExistingWorkPolicy.REPLACE,
+            request
+        )
+    }
 
-        if (song != null) {
-            try {
-                if (song.navidromeId != null) {
-                    providers["navidrome"]?.toggleLike(song.navidromeId, newLikedState)
-                } else {
-                    providers[song.providerId]?.toggleLike(song.remoteId, newLikedState)
-                }
-            } catch (e: Exception) {
-                // Ignore provider failures (e.g. network issues) for now
-            }
-        }
+    suspend fun syncLike(providerId: String, providerRemoteId: String, isLiked: Boolean) {
+        providers[providerId]?.toggleLike(providerRemoteId, isLiked)
     }
 
     /** Used by the Now Playing like-button to reflect the current track's liked state. */
@@ -174,11 +219,35 @@ class MusicRepository @Inject constructor(
     suspend fun getSongUri(songId: String): String? {
         val song = songDao.getById(songId) ?: return null
         return try {
-            providers[song.providerId]?.resolveStreamUrl(song.remoteId) ?: song.uriString
+            resolveSongUri(song)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             song.uriString
         }
     }
+
+    suspend fun getSongUris(songIds: List<String>): Map<String, String> = withContext(Dispatchers.IO) {
+        if (songIds.isEmpty()) return@withContext emptyMap()
+        val songsById = songIds.distinct().chunked(800)
+            .flatMap { songDao.getByIds(it) }
+            .associateBy { it.remoteId }
+        buildMap {
+            songIds.distinct().forEach { songId ->
+                val song = songsById[songId] ?: return@forEach
+                try {
+                    put(songId, resolveSongUri(song))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    put(songId, song.uriString)
+                }
+            }
+        }
+    }
+
+    private suspend fun resolveSongUri(song: SongEntity): String =
+        providers[song.providerId]?.resolveStreamUrl(song.providerRemoteId) ?: song.uriString
 
     suspend fun getSong(songId: String): Song? {
         val song = songDao.getById(songId) ?: return null
@@ -192,8 +261,10 @@ class MusicRepository @Inject constructor(
             if (song.navidromeId != null) {
                 providers["navidrome"]?.getLyrics(song.navidromeId)
             } else {
-                providers[song.providerId]?.getLyrics(song.remoteId)
+        providers[song.providerId]?.getLyrics(song.providerRemoteId)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             null
         }
@@ -205,8 +276,10 @@ class MusicRepository @Inject constructor(
             if (song.navidromeId != null) {
                 providers["navidrome"]?.scrobble(song.navidromeId)
             } else {
-                providers[song.providerId]?.scrobble(song.remoteId)
+                providers[song.providerId]?.scrobble(song.providerRemoteId)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             // Ignore scrobble failures
         }
@@ -226,7 +299,9 @@ class MusicRepository @Inject constructor(
     suspend fun getLikedSongs(): List<Song> = withContext(Dispatchers.Default) {
         val likedIdsOrdered = likedSongDao.getLikedIdsMostRecentFirst()
         if (likedIdsOrdered.isEmpty()) return@withContext emptyList()
-        val entitiesById = songDao.getByIds(likedIdsOrdered).associateBy { it.remoteId }
+        val entitiesById = likedIdsOrdered.chunked(800)
+            .flatMap { songDao.getByIds(it) }
+            .associateBy { it.remoteId }
         likedIdsOrdered.mapNotNull { id -> entitiesById[id]?.toSong(isLiked = true) }
     }
 
@@ -331,14 +406,15 @@ class MusicRepository @Inject constructor(
         val matched = entries.mapNotNull { entry -> matchM3uEntryToSong(entry, byNormalizedTitle) }
         if (matched.isEmpty()) return@withContext 0 to entries.size
 
+        // Playlist membership is unique by (playlistId, songId); repeated M3U rows
+        // therefore keep the first occurrence and are not stored a second time.
         val playlistId = java.util.UUID.randomUUID().toString()
-        playlistDao.insertPlaylist(
-            PlaylistEntity(id = playlistId, name = name, createdAt = System.currentTimeMillis())
+        val distinctMatched = matched.distinctBy { it.id }
+        playlistDao.insertPlaylistWithSongs(
+            PlaylistEntity(id = playlistId, name = name, createdAt = System.currentTimeMillis()),
+            distinctMatched.mapIndexed { index, song -> PlaylistSongEntity(playlistId, song.id, index) }
         )
-        playlistDao.insertPlaylistSongs(
-            matched.mapIndexed { index, song -> PlaylistSongEntity(playlistId, song.id, index) }
-        )
-        matched.size to entries.size
+        distinctMatched.size to entries.size
     }
 
     // ---- Add files ---------------------------------------------------
@@ -369,6 +445,8 @@ class MusicRepository @Inject constructor(
                 resolver.openInputStream(sourceUri)?.use { input ->
                     resolver.openOutputStream(destUri)?.use { output -> input.copyTo(output) }
                 } != null
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 false
             }
@@ -400,6 +478,7 @@ class MusicRepository @Inject constructor(
 private fun SongEntity.toSong(isLiked: Boolean = false): Song = Song(
     id = remoteId,
     providerId = providerId,
+    providerRemoteId = providerRemoteId,
     title = title,
     artist = artist,
     album = album,
@@ -413,3 +492,6 @@ private fun SongEntity.toSong(isLiked: Boolean = false): Song = Song(
     dateAdded = dateAdded,
     isLiked = isLiked
 )
+
+private fun namespacedSongId(providerId: String, providerRemoteId: String): String =
+    "$providerId:$providerRemoteId"

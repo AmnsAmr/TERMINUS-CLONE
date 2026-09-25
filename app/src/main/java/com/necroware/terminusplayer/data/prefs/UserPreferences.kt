@@ -23,6 +23,12 @@ enum class PlaybackArtStyle {
     VHS
 }
 
+enum class MotionPreference { FULL, REDUCED, OFF }
+
+internal fun parseMotionPreference(value: String?): MotionPreference =
+    value?.let { candidate -> MotionPreference.entries.firstOrNull { it.name == candidate } }
+        ?: MotionPreference.FULL
+
 data class LibrarySortOrder(
     val field: SortField = SortField.TITLE,
     val direction: SortDirection = SortDirection.ASC
@@ -48,6 +54,7 @@ data class UserPreferences(
     val crossfade: CrossfadeSettings = CrossfadeSettings(),
     val preferHardwareDecoder: Boolean = true,
     val playbackArtStyle: PlaybackArtStyle = PlaybackArtStyle.STANDARD,
+    val motionPreference: MotionPreference = MotionPreference.FULL,
     val lastPlayedSongId: String? = null,
     val lastPlayedPositionMs: Long = 0L,
     val serverUrl: String = "",

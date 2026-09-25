@@ -1,6 +1,7 @@
 package com.necroware.terminusplayer.data.database.entity
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
@@ -8,7 +9,7 @@ import androidx.room.PrimaryKey
  * so every chart type (bar/line/pie/histogram/scatter/box/area) can be
  * derived from the same table without separate rollup tables.
  */
-@Entity(tableName = "play_events")
+@Entity(tableName = "play_events", indices = [Index(value = ["startedAtEpochMs"]), Index(value = ["songId"])])
 data class PlayEventEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val songId: String,

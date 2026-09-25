@@ -31,6 +31,7 @@ fun PieChart(
     modifier: Modifier = Modifier,
     diameter: Dp = 160.dp
 ) {
+    requireNonNegativeChartValues(slices.map { it.value }, "PieChart")
     val accent = MaterialTheme.colorScheme.primary
     val total = slices.sumOf { it.value.toDouble() }.toFloat().coerceAtLeast(0.0001f)
     val alphas = listOf(1f, 0.75f, 0.55f, 0.4f, 0.28f, 0.18f)

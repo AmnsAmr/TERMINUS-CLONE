@@ -18,6 +18,7 @@ import javax.inject.Inject
 
 data class AlbumDetailUiState(
     val isLoading: Boolean = true,
+    val errorMessage: String? = null,
     val albumId: String = "",
     val representativeUriString: String = "",
     val albumTitle: String = "",
@@ -37,13 +38,21 @@ class AlbumDetailViewModel @Inject constructor(
 
     // Keyed by TITLE, not MediaStore albumId — see Destination.AlbumDetail
     // for why (MediaStore fragments one album across several albumIds).
-    private val albumTitle: String = checkNotNull(savedStateHandle["albumTitle"])
+    private val albumTitle: String = savedStateHandle.get<String>("albumTitle").orEmpty()
 
     private val _uiState = MutableStateFlow(AlbumDetailUiState(albumTitle = albumTitle))
     val uiState: StateFlow<AlbumDetailUiState> = _uiState.asStateFlow()
 
     init {
         viewModelScope.launch {
+            if (albumTitle.isBlank()) {
+                _uiState.value = AlbumDetailUiState(
+                    isLoading = false,
+                    errorMessage = "Album details are unavailable.",
+                    albumTitle = "Unavailable"
+                )
+                return@launch
+            }
             val songs = repository.getSongsForAlbum(albumTitle)
             val stats = statsRepository.getStatsForAlbum(albumTitle)
             val topSongTitle = stats.topSongId?.let { id -> songs.firstOrNull { it.id == id }?.title }

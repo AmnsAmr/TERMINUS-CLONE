@@ -43,6 +43,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.data.prefs.SortDirection
 import com.necroware.terminusplayer.data.prefs.SortField
+import com.necroware.terminusplayer.data.prefs.MotionPreference
 import com.necroware.terminusplayer.data.prefs.ThemePresetId
 import com.necroware.terminusplayer.ui.components.TerminalBorder
 import com.necroware.terminusplayer.ui.components.TerminalSlider
@@ -90,6 +91,14 @@ fun SettingsScreen(
 
         item { SectionLabel("THEME") }
         item { ThemeGrid(selected = prefs.themeId, onSelect = viewModel::setTheme) }
+
+        item { SectionLabel("ANIMATIONS") }
+        item {
+            MotionPreferenceSection(
+                selected = prefs.motionPreference,
+                onSelect = viewModel::setMotionPreference
+            )
+        }
 
         item { SectionLabel("SERVER SETTINGS") }
         item {
@@ -390,6 +399,41 @@ private fun ToggleRow(label: String, sublabel: String, checked: Boolean, onCheck
 }
 
 @Composable
+private fun MotionPreferenceSection(
+    selected: MotionPreference,
+    onSelect: (MotionPreference) -> Unit
+) {
+    TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            MotionPreference.entries.forEach { preference ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(preference) }
+                        .padding(vertical = 8.dp)
+                ) {
+                    Text(
+                        text = (if (preference == selected) "> " else "  ") + preference.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (preference == selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = when (preference) {
+                            MotionPreference.FULL -> "Playback visuals and full screen transitions"
+                            MotionPreference.REDUCED -> "No looping visuals; shorter screen transitions"
+                            MotionPreference.OFF -> "Apply screen changes without optional motion"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun QualitySection(
     selectedBitRate: Int?,
     onSelect: (Int?) -> Unit
@@ -490,9 +534,12 @@ private fun ServerSettingsSection(
     password: String,
     onSave: (String, String, String) -> Unit
 ) {
-    var url by remember(serverUrl) { mutableStateOf(serverUrl) }
-    var user by remember(username) { mutableStateOf(username) }
-    var pass by remember(password) { mutableStateOf(password) }
+    var url by remember { mutableStateOf(serverUrl) }
+    var user by remember { mutableStateOf(username) }
+    var pass by remember { mutableStateOf(password) }
+    LaunchedEffect(serverUrl) { url = serverUrl }
+    LaunchedEffect(username) { user = username }
+    LaunchedEffect(password) { pass = password }
 
     TerminalBorder(modifier = Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

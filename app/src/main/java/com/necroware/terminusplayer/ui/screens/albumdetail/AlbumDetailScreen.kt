@@ -109,6 +109,16 @@ fun AlbumDetailScreen(
             )
         }
 
+        if (!state.isLoading && state.songs.isEmpty()) {
+            item {
+                Text(
+                    text = state.errorMessage ?: "[ no tracks found for this album ]",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
         items(state.songs, key = { it.id }) { song ->
             AlbumTrackRow(
                 song = song,

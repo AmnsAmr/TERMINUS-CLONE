@@ -16,3 +16,8 @@ interface MediaProvider {
 
     suspend fun getLyrics(remoteId: String): SyncedLyrics?
 }
+
+class ProviderSyncException(
+    message: String,
+    val retryable: Boolean
+) : Exception(message)
