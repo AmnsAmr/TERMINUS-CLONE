@@ -2,6 +2,7 @@ package com.necroware.terminusplayer.ui.screens.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -60,6 +61,16 @@ fun SettingsScreen(
     val prefs by viewModel.preferences.collectAsStateWithLifecycle()
     val importStatus by viewModel.importStatus.collectAsStateWithLifecycle()
 
+    var expandedSections by remember { mutableStateOf(setOf<String>()) }
+    val toggleSection: (String) -> Unit = { section ->
+        expandedSections = if (expandedSections.contains(section)) {
+            expandedSections - section
+        } else {
+            expandedSections + section
+        }
+    }
+
+
     val addFilesLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
     ) { uris -> viewModel.importFiles(uris) }
@@ -89,113 +100,171 @@ fun SettingsScreen(
             )
         }
 
-        item { SectionLabel("THEME") }
-        item { ThemeGrid(selected = prefs.themeId, onSelect = viewModel::setTheme) }
-
-        item { SectionLabel("ANIMATIONS") }
         item {
-            MotionPreferenceSection(
-                selected = prefs.motionPreference,
-                onSelect = viewModel::setMotionPreference
-            )
+            SettingsDropdown(
+                label = "THEME",
+                expanded = expandedSections.contains("THEME"),
+                onToggle = { toggleSection("THEME") },
+                motionPreference = prefs.motionPreference
+            ) {
+                ThemeGrid(selected = prefs.themeId, onSelect = viewModel::setTheme)
+            }
         }
 
-        item { SectionLabel("SERVER SETTINGS") }
         item {
-            ServerSettingsSection(
-                serverUrl = prefs.serverUrl,
-                username = prefs.username,
-                password = prefs.password,
-                onSave = { url, user, pass ->
-                    viewModel.setServerSettings(url, user, pass)
-                }
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-            ActionRow(label = "[ UPLOAD ]", sublabel = "Upload files to server", onClick = onNavigateToUpload)
-            Spacer(modifier = Modifier.height(10.dp))
-            ActionRow(label = "[ GAPFINDER ]", sublabel = "Configure GapFinder", onClick = onNavigateToGapFinder)
-            Spacer(modifier = Modifier.height(10.dp))
-            ActionRow(label = "[ MANAGE SOURCES ]", sublabel = "Include or exclude local audio folders", onClick = onNavigateToManageSources)
+            SettingsDropdown(
+                label = "ANIMATIONS",
+                expanded = expandedSections.contains("ANIMATIONS"),
+                onToggle = { toggleSection("ANIMATIONS") },
+                motionPreference = prefs.motionPreference
+            ) {
+                MotionPreferenceSection(
+                    selected = prefs.motionPreference,
+                    onSelect = viewModel::setMotionPreference
+                )
+            }
         }
 
-        item { SectionLabel("EQUALIZER") }
         item {
-            EqualizerSection(
-                enabled = prefs.equalizer.enabled,
-                bandGains = prefs.equalizer.bandGainsDb,
-                onEnabledChange = viewModel::setEqualizerEnabled,
-                onBandChange = viewModel::setEqualizerBand,
-                onReset = viewModel::resetEqualizerBands
-            )
-        }
-
-        item { SectionLabel("CROSSFADE") }
-        item {
-            CrossfadeSection(
-                enabled = prefs.crossfade.enabled,
-                durationMs = prefs.crossfade.durationMs,
-                onEnabledChange = viewModel::setCrossfadeEnabled,
-                onDurationChange = viewModel::setCrossfadeDurationMs
-            )
-        }
-
-        item { SectionLabel("CODEC") }
-        item {
-            ToggleRow(
-                label = "Prefer hardware decoder",
-                sublabel = "Falls back to software automatically if unsupported",
-                checked = prefs.preferHardwareDecoder,
-                onCheckedChange = viewModel::setPreferHardwareDecoder
-            )
-        }
-
-        item { SectionLabel("STREAMING QUALITY") }
-        item {
-            QualitySection(
-                selectedBitRate = prefs.maxBitRate,
-                onSelect = viewModel::setMaxBitRate
-            )
-        }
-
-        item { SectionLabel("LIBRARY SORT") }
-        item {
-            SortSection(
-                field = prefs.librarySortOrder.field,
-                direction = prefs.librarySortOrder.direction,
-                onFieldChange = viewModel::setSortField,
-                onDirectionChange = viewModel::setSortDirection
-            )
-        }
-
-        item { SectionLabel("IMPORT") }
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                ActionRow(
-                    label = "[ ADD FILES ]",
-                    sublabel = "Copy audio files into your library"
-                ) { addFilesLauncher.launch(arrayOf("audio/*")) }
-                ActionRow(
-                    label = "[ IMPORT PLAYLIST ]",
-                    sublabel = "Load an .m3u/.m3u8 playlist"
-                ) {
-                    importPlaylistLauncher.launch(
-                        arrayOf("audio/x-mpegurl", "audio/mpegurl", "application/octet-stream", "*/*")
+            SettingsDropdown(
+                label = "SERVER SETTINGS",
+                expanded = expandedSections.contains("SERVER SETTINGS"),
+                onToggle = { toggleSection("SERVER SETTINGS") },
+                motionPreference = prefs.motionPreference
+            ) {
+                Column {
+                    ServerSettingsSection(
+                        serverUrl = prefs.serverUrl,
+                        username = prefs.username,
+                        password = prefs.password,
+                        onSave = { url, user, pass ->
+                            viewModel.setServerSettings(url, user, pass)
+                        }
                     )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    ActionRow(label = "[ UPLOAD ]", sublabel = "Upload files to server", onClick = onNavigateToUpload)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    ActionRow(label = "[ GAPFINDER ]", sublabel = "Configure GapFinder", onClick = onNavigateToGapFinder)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    ActionRow(label = "[ MANAGE SOURCES ]", sublabel = "Include or exclude local audio folders", onClick = onNavigateToManageSources)
                 }
+            }
+        }
 
-                val statusText = when (val s = importStatus) {
-                    ImportStatus.Idle -> null
-                    ImportStatus.Running -> "[ working... ]"
-                    is ImportStatus.FilesDone -> "[ imported ${s.count} file${if (s.count == 1) "" else "s"} ]"
-                    is ImportStatus.PlaylistDone -> "[ matched ${s.matched} / ${s.total} tracks ]"
-                    is ImportStatus.Failed -> "[ ${s.message} ]"
-                }
-                statusText?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+        item {
+            SettingsDropdown(
+                label = "EQUALIZER",
+                expanded = expandedSections.contains("EQUALIZER"),
+                onToggle = { toggleSection("EQUALIZER") },
+                motionPreference = prefs.motionPreference
+            ) {
+                EqualizerSection(
+                    enabled = prefs.equalizer.enabled,
+                    bandGains = prefs.equalizer.bandGainsDb,
+                    onEnabledChange = viewModel::setEqualizerEnabled,
+                    onBandChange = viewModel::setEqualizerBand,
+                    onReset = viewModel::resetEqualizerBands
+                )
+            }
+        }
+
+        item {
+            SettingsDropdown(
+                label = "CROSSFADE",
+                expanded = expandedSections.contains("CROSSFADE"),
+                onToggle = { toggleSection("CROSSFADE") },
+                motionPreference = prefs.motionPreference
+            ) {
+                CrossfadeSection(
+                    enabled = prefs.crossfade.enabled,
+                    durationMs = prefs.crossfade.durationMs,
+                    onEnabledChange = viewModel::setCrossfadeEnabled,
+                    onDurationChange = viewModel::setCrossfadeDurationMs
+                )
+            }
+        }
+
+        item {
+            SettingsDropdown(
+                label = "CODEC",
+                expanded = expandedSections.contains("CODEC"),
+                onToggle = { toggleSection("CODEC") },
+                motionPreference = prefs.motionPreference
+            ) {
+                ToggleRow(
+                    label = "Prefer hardware decoder",
+                    sublabel = "Falls back to software automatically if unsupported",
+                    checked = prefs.preferHardwareDecoder,
+                    onCheckedChange = viewModel::setPreferHardwareDecoder
+                )
+            }
+        }
+
+        item {
+            SettingsDropdown(
+                label = "STREAMING QUALITY",
+                expanded = expandedSections.contains("STREAMING QUALITY"),
+                onToggle = { toggleSection("STREAMING QUALITY") },
+                motionPreference = prefs.motionPreference
+            ) {
+                QualitySection(
+                    selectedBitRate = prefs.maxBitRate,
+                    onSelect = viewModel::setMaxBitRate
+                )
+            }
+        }
+
+        item {
+            SettingsDropdown(
+                label = "LIBRARY SORT",
+                expanded = expandedSections.contains("LIBRARY SORT"),
+                onToggle = { toggleSection("LIBRARY SORT") },
+                motionPreference = prefs.motionPreference
+            ) {
+                SortSection(
+                    field = prefs.librarySortOrder.field,
+                    direction = prefs.librarySortOrder.direction,
+                    onFieldChange = viewModel::setSortField,
+                    onDirectionChange = viewModel::setSortDirection
+                )
+            }
+        }
+
+        item {
+            SettingsDropdown(
+                label = "IMPORT",
+                expanded = expandedSections.contains("IMPORT"),
+                onToggle = { toggleSection("IMPORT") },
+                motionPreference = prefs.motionPreference
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ActionRow(
+                        label = "[ ADD FILES ]",
+                        sublabel = "Copy audio files into your library"
+                    ) { addFilesLauncher.launch(arrayOf("audio/*")) }
+                    ActionRow(
+                        label = "[ IMPORT PLAYLIST ]",
+                        sublabel = "Load an .m3u/.m3u8 playlist"
+                    ) {
+                        importPlaylistLauncher.launch(
+                            arrayOf("audio/x-mpegurl", "audio/mpegurl", "application/octet-stream", "*/*")
+                        )
+                    }
+
+                    val statusText = when (val s = importStatus) {
+                        ImportStatus.Idle -> null
+                        ImportStatus.Running -> "[ working... ]"
+                        is ImportStatus.FilesDone -> "[ imported ${s.count} file${if (s.count == 1) "" else "s"} ]"
+                        is ImportStatus.PlaylistDone -> "[ matched ${s.matched} / ${s.total} tracks ]"
+                        is ImportStatus.Failed -> "[ ${s.message} ]"
+                    }
+                    statusText?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
         }
@@ -584,6 +653,46 @@ private fun ServerSettingsSection(
                 modifier = Modifier.align(Alignment.End)
             ) {
                 Text("SAVE & SYNC")
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsDropdown(
+    label: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    motionPreference: MotionPreference,
+    content: @Composable () -> Unit
+) {
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onToggle() }
+                .padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            SectionLabel(label)
+            Text(
+                text = if (expanded) "[ - ]" else "[ + ]",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        if (motionPreference == MotionPreference.OFF) {
+            if (expanded) {
+                Box(modifier = Modifier.padding(top = 8.dp)) {
+                    content()
+                }
+            }
+        } else {
+            AnimatedVisibility(visible = expanded) {
+                Box(modifier = Modifier.padding(top = 8.dp)) {
+                    content()
+                }
             }
         }
     }
