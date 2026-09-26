@@ -247,16 +247,23 @@ class MusicRepository @Inject constructor(
         val songsById = songIds.distinct().chunked(800)
             .flatMap { songDao.getByIds(it) }
             .associateBy { it.remoteId }
+
+        val providerToRemoteIds = songsById.values.groupBy({ it.providerId }, { it.providerRemoteId })
+        val resolvedByProvider = providerToRemoteIds.mapValues { (providerId, remoteIds) ->
+            try {
+                providers[providerId]?.resolveStreamUrls(remoteIds.distinct()) ?: emptyMap()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        }
+
         buildMap {
             songIds.distinct().forEach { songId ->
                 val song = songsById[songId] ?: return@forEach
-                try {
-                    put(songId, resolveSongUri(song))
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    put(songId, song.uriString)
-                }
+                val resolvedUri = resolvedByProvider[song.providerId]?.get(song.providerRemoteId)
+                put(songId, resolvedUri ?: song.uriString)
             }
         }
     }
