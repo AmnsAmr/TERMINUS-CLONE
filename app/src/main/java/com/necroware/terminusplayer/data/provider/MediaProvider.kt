@@ -10,6 +10,10 @@ interface MediaProvider {
 
     suspend fun resolveStreamUrl(remoteId: String): String
 
+    suspend fun resolveStreamUrls(remoteIds: List<String>): Map<String, String> {
+        return remoteIds.associateWith { resolveStreamUrl(it) }
+    }
+
     suspend fun scrobble(remoteId: String)
 
     suspend fun toggleLike(remoteId: String, isLiked: Boolean)

@@ -84,6 +84,11 @@ class NavidromeProvider @Inject constructor(
     }
 
     override suspend fun resolveStreamUrl(remoteId: String): String {
+        return resolveStreamUrls(listOf(remoteId)).values.first()
+    }
+
+    override suspend fun resolveStreamUrls(remoteIds: List<String>): Map<String, String> {
+        if (remoteIds.isEmpty()) return emptyMap()
         val config = prefsRepo.serverConnectionConfig.value.takeIf { it.isLoaded }
             ?: prefsRepo.awaitServerConnectionConfig()
         val serverUrl = parseNavidromeBaseUrl(config.serverUrl)
@@ -98,9 +103,8 @@ class NavidromeProvider @Inject constructor(
 
         val salt = newSubsonicSalt()
         val token = buildSubsonicToken(password, salt)
-        return serverUrl.newBuilder()
+        val basePathUrl = serverUrl.newBuilder()
             .addPathSegments("rest/stream")
-            .addQueryParameter("id", remoteId)
             .addQueryParameter("u", username)
             .addQueryParameter("t", token)
             .addQueryParameter("s", salt)
@@ -109,7 +113,10 @@ class NavidromeProvider @Inject constructor(
             .addQueryParameter("f", "json")
             .apply { bitRate?.let { addQueryParameter("maxBitRate", it.toString()) } }
             .build()
-            .toString()
+
+        return remoteIds.associateWith { id ->
+            basePathUrl.newBuilder().addQueryParameter("id", id).build().toString()
+        }
     }
 
     override suspend fun scrobble(remoteId: String) {
