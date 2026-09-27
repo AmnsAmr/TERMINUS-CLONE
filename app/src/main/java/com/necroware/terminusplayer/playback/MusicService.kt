@@ -387,9 +387,10 @@ class MusicService : MediaSessionService() {
         savePositionJob = serviceScope.launch {
             while (isActive) {
                 delay(5000)
-                val currentId = player.currentMediaItem?.mediaId
+                val (currentId, pos) = withContext(Dispatchers.Main) {
+                    player.currentMediaItem?.mediaId to player.currentPosition
+                }
                 if (currentId != null) {
-                    val pos = withContext(Dispatchers.Main) { player.currentPosition }
                     preferencesRepository.setLastPlayed(currentId, pos)
                 }
             }
