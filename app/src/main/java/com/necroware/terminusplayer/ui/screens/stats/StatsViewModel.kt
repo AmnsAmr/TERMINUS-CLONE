@@ -17,6 +17,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import javax.inject.Inject
 
+import com.necroware.terminusplayer.data.repository.MusicRepository
+
 data class StatsUiState(
     val range: StatsRange = StatsRange.WEEK,
     val isLoading: Boolean = true,
@@ -30,12 +32,14 @@ data class StatsUiState(
     val insights: List<String> = emptyList(),
     // Range-specific chart data — each StatsRange gets its own chart type.
     val monthlyArtistDistribution: List<Pair<String, Int>> = emptyList(),
-    val yearlyMonthlyTotals: List<Pair<String, Int>> = emptyList()
+    val yearlyMonthlyTotals: List<Pair<String, Int>> = emptyList(),
+    val downloadEvents: List<MusicRepository.DownloadEvent> = emptyList()
 )
 
 @HiltViewModel
 class StatsViewModel @Inject constructor(
-    private val statsRepository: StatsRepository
+    private val statsRepository: StatsRepository,
+    private val musicRepository: MusicRepository
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(StatsUiState())
@@ -45,6 +49,12 @@ class StatsViewModel @Inject constructor(
     init {
         loadInsightsOnce()
         load(StatsRange.WEEK, TopCategory.ARTIST)
+        
+        viewModelScope.launch {
+            musicRepository.downloadEvents.collect { events ->
+                _uiState.value = _uiState.value.copy(downloadEvents = events)
+            }
+        }
     }
 
     fun selectRange(range: StatsRange) {

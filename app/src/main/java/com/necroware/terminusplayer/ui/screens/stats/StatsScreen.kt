@@ -13,6 +13,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -32,6 +35,7 @@ import java.util.concurrent.TimeUnit
 @Composable
 fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    var showDownloadEvents by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -183,6 +187,48 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                             BlockyBarChart(data = barData)
                         } else if (!state.isLoading) {
                             EmptyChartMessage()
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = if (showDownloadEvents) "[ DOWNLOAD EVENTS (v) ]" else "[ DOWNLOAD EVENTS (>) ]",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clickable { showDownloadEvents = !showDownloadEvents }
+                        .padding(bottom = 12.dp)
+                )
+
+                if (showDownloadEvents) {
+                    if (state.downloadEvents.isEmpty()) {
+                        Text(
+                            text = "[ no active or recent downloads ]",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        state.downloadEvents.asReversed().forEach { event ->
+                            TerminalBorder(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text(
+                                        text = "${event.status}: ${event.songTitle}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (event.status == "Failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = event.detail,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
                     }
                 }
