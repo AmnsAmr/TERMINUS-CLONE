@@ -35,7 +35,9 @@ class PlaylistDetailViewModel @Inject constructor(
     private val rawArg: String = savedStateHandle.get<String>("kind").orEmpty()
     private val customPlaylistId: String? = rawArg.removePrefix("custom:")
         .takeIf { rawArg.startsWith("custom:") && it.isNotBlank() }
-    private val kind: PlaylistKind? = if (customPlaylistId == null) parsePlaylistKind(rawArg) else null
+    private val remotePlaylistId: String? = rawArg.removePrefix("remote:")
+        .takeIf { rawArg.startsWith("remote:") && it.isNotBlank() }
+    private val kind: PlaylistKind? = if (customPlaylistId == null && remotePlaylistId == null) parsePlaylistKind(rawArg) else null
 
     private val _uiState = MutableStateFlow(PlaylistDetailUiState(kind = kind))
     val uiState: StateFlow<PlaylistDetailUiState> = _uiState.asStateFlow()
@@ -43,14 +45,20 @@ class PlaylistDetailViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             val playlistId = customPlaylistId
-            if (playlistId != null) {
-                val songs = repository.getSongsForPlaylist(playlistId)
-                val name = repository.getPlaylistName(playlistId)
+            val resolvedPlaylistId = remotePlaylistId?.let { "server:$it" } ?: playlistId
+            if (resolvedPlaylistId != null) {
+                val songs = repository.getSongsForPlaylist(resolvedPlaylistId)
+                val name = repository.getPlaylistName(resolvedPlaylistId)
+                val remoteTrackCount = repository.getRemotePlaylistSongCount(resolvedPlaylistId)
                 _uiState.value = PlaylistDetailUiState(
                     isLoading = false,
                     kind = null,
                     title = name,
-                    emptyMessage = "[ nothing matched when this was imported ]",
+                    emptyMessage = when {
+                        remotePlaylistId != null && remoteTrackCount > 0 -> "[ connect to the server to fetch these tracks ]"
+                        remotePlaylistId != null -> "[ this server playlist has no tracks ]"
+                        else -> "[ nothing matched when this was imported ]"
+                    },
                     songs = songs
                 )
             } else {
