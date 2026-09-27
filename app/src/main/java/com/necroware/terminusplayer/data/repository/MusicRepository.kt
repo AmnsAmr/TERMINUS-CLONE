@@ -162,6 +162,8 @@ class MusicRepository @Inject constructor(
         combine(songDao.observeAllSongs(), likedSongDao.observeLikedIds()) { songs, likedIds ->
             val likedSet = likedIds.toHashSet()
             songs.map { it.toSong(isLiked = it.remoteId in likedSet) }
+                .groupBy { "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}" }
+                .map { (_, group) -> group.find { it.providerId == "local" } ?: group.first() }
         }
 
     fun observeSongCount(): Flow<Int> = songDao.observeSongCount()
@@ -301,51 +303,81 @@ class MusicRepository @Inject constructor(
         return song.toSong(isLiked = isLiked)
     }
 
-    suspend fun downloadSong(songId: String): String = withContext(Dispatchers.IO) {
-        val song = songDao.getById(songId) ?: throw IOException("Track is no longer in the library")
-        if (song.providerId != "navidrome") throw IOException("Only server tracks can be downloaded")
-        val prefs = preferencesRepository.preferences.first()
-        val name = downloadFileName(song)
-        song.downloadedUri?.let(Uri::parse)?.takeIf(::isReadableDownload)?.let { existing ->
-            return@withContext existing.toString()
-        }
-        if (song.downloadedUri != null) songDao.setDownloadedUri(songId, null)
-        findExistingDownload(name, prefs.downloadFolderUri)?.let { existing ->
-            songDao.setDownloadedUri(songId, existing.toString())
-            return@withContext existing.toString()
-        }
+    data class DownloadEvent(val songTitle: String, val status: String, val detail: String)
+    private val _downloadEvents = kotlinx.coroutines.flow.MutableStateFlow<List<DownloadEvent>>(emptyList())
+    val downloadEvents: kotlinx.coroutines.flow.Flow<List<DownloadEvent>> = _downloadEvents
 
-        val config = preferencesRepository.awaitServerConnectionConfig()
-        if (config.username.isBlank() || config.password.isBlank()) throw IOException("Navidrome credentials are missing")
-        val salt = newSubsonicSalt()
-        val token = buildSubsonicToken(config.password, salt)
-        val response = subsonicApi.download(song.providerRemoteId, config.username, token, salt)
-        if (!response.isSuccessful) {
-            response.errorBody()?.close()
-            throw IOException("Download failed with HTTP ${response.code()}")
-        }
-        val body = response.body() ?: throw IOException("Server returned an empty download")
-        if (body.contentType()?.subtype?.contains("json", ignoreCase = true) == true) {
-            body.close()
-            throw IOException("Server returned an authentication or download error")
-        }
-        val destination = createDownloadDestination(name, prefs.downloadFolderUri)
+    private fun addDownloadEvent(title: String, status: String, detail: String) {
+        _downloadEvents.value = (_downloadEvents.value + DownloadEvent(title, status, detail)).takeLast(20)
+    }
+
+    suspend fun downloadSong(songId: String, force: Boolean = false): String = withContext(Dispatchers.IO) {
+        val song = songDao.getById(songId) ?: throw IOException("Track is no longer in the library")
+        val title = "${song.artist} - ${song.title}"
+        addDownloadEvent(title, "Starting", "Initializing download")
         try {
-            body.use { downloaded ->
-                downloaded.byteStream().use { input ->
-                    context.contentResolver.openOutputStream(destination.uri, "w")?.use { output ->
-                        input.copyTo(output, DEFAULT_BUFFER_SIZE)
-                    } ?: throw IOException("Cannot open the selected download folder")
+            if (song.providerId != "navidrome") throw IOException("Only server tracks can be downloaded")
+            val prefs = preferencesRepository.preferences.first()
+            val name = downloadFileName(song)
+            
+            if (!force) {
+                song.downloadedUri?.let(Uri::parse)?.takeIf(::isReadableDownload)?.let { existing ->
+                    addDownloadEvent(title, "Skipped", "Already downloaded and readable")
+                    return@withContext existing.toString()
                 }
+                if (song.downloadedUri != null) songDao.setDownloadedUri(songId, null)
+                findExistingDownload(name, prefs.downloadFolderUri)?.let { existing ->
+                    songDao.setDownloadedUri(songId, existing.toString())
+                    addDownloadEvent(title, "Found", "Found existing file in storage")
+                    return@withContext existing.toString()
+                }
+            } else {
+                if (song.downloadedUri != null) songDao.setDownloadedUri(songId, null)
             }
-            destination.publish()
-            songDao.setDownloadedUri(songId, destination.uri.toString())
-            destination.uri.toString()
+
+            val config = preferencesRepository.awaitServerConnectionConfig()
+            if (config.username.isBlank() || config.password.isBlank()) throw IOException("Navidrome credentials are missing")
+            val salt = newSubsonicSalt()
+            val token = buildSubsonicToken(config.password, salt)
+            
+            addDownloadEvent(title, "Connecting", "Requesting file from server")
+            val response = subsonicApi.download(song.providerRemoteId, config.username, token, salt)
+            if (!response.isSuccessful) {
+                response.errorBody()?.close()
+                throw IOException("Download failed with HTTP ${response.code()}")
+            }
+            val body = response.body() ?: throw IOException("Server returned an empty download")
+            if (body.contentType()?.subtype?.contains("json", ignoreCase = true) == true) {
+                body.close()
+                throw IOException("Server returned an authentication or download error")
+            }
+            
+            addDownloadEvent(title, "Downloading", "Saving file to storage")
+            val destination = createDownloadDestination(name, prefs.downloadFolderUri)
+            try {
+                body.use { downloaded ->
+                    downloaded.byteStream().use { input ->
+                        context.contentResolver.openOutputStream(destination.uri, "w")?.use { output ->
+                            input.copyTo(output, DEFAULT_BUFFER_SIZE)
+                        } ?: throw IOException("Cannot open the selected download folder")
+                    }
+                }
+                destination.publish()
+                songDao.setDownloadedUri(songId, destination.uri.toString())
+                addDownloadEvent(title, "Success", "Download complete")
+                destination.uri.toString()
+            } catch (e: CancellationException) {
+                destination.delete()
+                throw e
+            } catch (e: Exception) {
+                destination.delete()
+                throw e
+            }
         } catch (e: CancellationException) {
-            destination.delete()
+            addDownloadEvent(title, "Cancelled", "Download cancelled")
             throw e
         } catch (e: Exception) {
-            destination.delete()
+            addDownloadEvent(title, "Failed", e.message ?: "Unknown error")
             throw e
         }
     }
@@ -575,7 +607,10 @@ class MusicRepository @Inject constructor(
 
     fun observeCustomPlaylists(): Flow<List<Playlist>> =
         playlistDao.observePlaylists().map { rows ->
-            rows.map { Playlist(id = it.id, name = it.name, songCount = it.songCount) }
+            rows.map { row ->
+                val songs = getSongsForPlaylist(row.id)
+                Playlist(id = row.id, name = row.name, songCount = songs.size)
+            }
         }
 
     suspend fun getSongsForPlaylist(playlistId: String): List<Song> {
@@ -591,8 +626,10 @@ class MusicRepository @Inject constructor(
             }
         }
         return withContext(Dispatchers.Default) {
-        val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
-        playlistDao.getSongsForPlaylist(playlistId).map { it.toSong(isLiked = it.remoteId in likedIds) }
+            val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
+            playlistDao.getSongsForPlaylist(playlistId).map { it.toSong(isLiked = it.remoteId in likedIds) }
+                .groupBy { "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}" }
+                .map { (_, group) -> group.find { it.providerId == "local" } ?: group.first() }
         }
     }
 
