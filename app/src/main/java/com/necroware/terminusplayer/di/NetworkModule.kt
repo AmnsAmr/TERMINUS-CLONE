@@ -1,6 +1,7 @@
 package com.necroware.terminusplayer.di
 
 import com.necroware.terminusplayer.data.api.subsonic.SubsonicApiService
+import com.necroware.terminusplayer.data.api.lyrics.LrclibApiService
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.provider.buildSubsonicToken
 import com.necroware.terminusplayer.data.provider.newSubsonicSalt
@@ -82,5 +83,22 @@ object NetworkModule {
     @Singleton
     fun provideNavidromeNativeApiService(retrofit: Retrofit): com.necroware.terminusplayer.data.api.custom.NavidromeNativeApiService {
         return retrofit.create(com.necroware.terminusplayer.data.api.custom.NavidromeNativeApiService::class.java)
+    }
+
+    @Provides
+    @Singleton
+    fun provideLrclibApiService(moshi: Moshi): LrclibApiService {
+        val client = OkHttpClient.Builder()
+            .callTimeout(java.time.Duration.ofMillis(1_700))
+            .addInterceptor { chain ->
+                chain.proceed(chain.request().newBuilder().header("User-Agent", "Terminus/0.2.0 (Android)").build())
+            }
+            .build()
+        val retrofit = Retrofit.Builder()
+            .baseUrl("https://lrclib.net/")
+            .client(client)
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+        return retrofit.create(LrclibApiService::class.java)
     }
 }
