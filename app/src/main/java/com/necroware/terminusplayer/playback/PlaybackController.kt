@@ -218,10 +218,19 @@ class PlaybackController @Inject constructor(
     }
 
     fun setVolume(volume: Float) {
-        controller?.volume = volume.coerceIn(0f, 1f)
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+        val maxVolume = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+        val targetVolume = (volume * maxVolume).toInt().coerceIn(0, maxVolume)
+        audioManager.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, targetVolume, 0)
     }
 
-    fun currentVolume(): Float = controller?.volume ?: 1f
+    fun currentVolume(): Float {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+        val maxVolume = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+        if (maxVolume == 0) return 1f
+        val current = audioManager.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)
+        return current.toFloat() / maxVolume
+    }
 
     fun skipToNext() = controller?.seekToNext()
     fun skipToPrevious() = controller?.seekToPrevious()
