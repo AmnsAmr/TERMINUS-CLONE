@@ -59,5 +59,21 @@ class PlaylistsViewModel @Inject constructor(
         }
     }
 
+    
+    fun downloadPlaylist(id: String, force: Boolean = false) = viewModelScope.launch {
+        _actionMessage.value = "Starting playlist download..."
+        try {
+            val songs = repository.getSongsForPlaylist(id)
+            songs.forEach { song ->
+                try { repository.downloadSong(song.id, force) } catch (_: Exception) {}
+            }
+            _actionMessage.value = "Playlist download complete."
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Playlist download failed."
+        }
+    }
+
     fun dismissActionMessage() { _actionMessage.value = null }
 }
