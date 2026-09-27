@@ -50,6 +50,9 @@ interface SongDao {
     @Query("SELECT * FROM songs WHERE remoteId IN (:ids)")
     suspend fun getByIds(ids: List<String>): List<SongEntity>
 
+    @Query("SELECT * FROM songs WHERE (providerId = 'navidrome' AND providerRemoteId IN (:ids)) OR navidromeId IN (:ids)")
+    suspend fun getByNavidromeIds(ids: List<String>): List<SongEntity>
+
     @Query("SELECT * FROM songs")
     suspend fun getAllSongs(): List<SongEntity>
 
@@ -58,6 +61,9 @@ interface SongDao {
 
     @Query("DELETE FROM songs WHERE providerId = 'local' AND folderPath = :folderPath")
     suspend fun deleteLocalSongsInFolder(folderPath: String)
+
+    @Query("UPDATE songs SET downloadedUri = :uri WHERE remoteId = :songId")
+    suspend fun setDownloadedUri(songId: String, uri: String?)
 
     @Query("SELECT * FROM songs ORDER BY dateAdded DESC LIMIT :limit")
     suspend fun mostRecentlyAdded(limit: Int): List<SongEntity>

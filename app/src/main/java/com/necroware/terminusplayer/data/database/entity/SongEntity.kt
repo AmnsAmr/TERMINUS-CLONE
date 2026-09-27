@@ -29,5 +29,6 @@ data class SongEntity(
     val year: Int = 0,
     val folderPath: String = "",
     val sizeBytes: Long = 0L,
-    val navidromeId: String? = null
+    val navidromeId: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val downloadedUri: String? = null
 )
