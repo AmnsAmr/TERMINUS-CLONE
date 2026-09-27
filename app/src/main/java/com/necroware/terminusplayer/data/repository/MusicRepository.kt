@@ -65,7 +65,8 @@ class MusicRepository @Inject constructor(
     private val database: TerminusDatabase,
     private val providers: Map<String, @JvmSuppressWildcards MediaProvider>,
     private val subsonicApi: SubsonicApiService,
-    private val preferencesRepository: UserPreferencesRepository
+    private val preferencesRepository: UserPreferencesRepository,
+    private val lrclibLyricsRepository: LrclibLyricsRepository
 ) {
 
     private val syncMutex = Mutex()
@@ -494,11 +495,12 @@ class MusicRepository @Inject constructor(
     suspend fun getLyrics(songId: String): SyncedLyrics? {
         val song = songDao.getById(songId) ?: return null
         return try {
-            if (song.navidromeId != null) {
+            val providerLyrics = if (song.navidromeId != null) {
                 providers["navidrome"]?.getLyrics(song.navidromeId)
             } else {
-        providers[song.providerId]?.getLyrics(song.providerRemoteId)
+                providers[song.providerId]?.getLyrics(song.providerRemoteId)
             }
+            providerLyrics ?: lrclibLyricsRepository.getLyrics(song)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

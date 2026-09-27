@@ -5,10 +5,12 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.necroware.terminusplayer.data.database.dao.LikedSongDao
+import com.necroware.terminusplayer.data.database.dao.LyricsCacheDao
 import com.necroware.terminusplayer.data.database.dao.PlayEventDao
 import com.necroware.terminusplayer.data.database.dao.PlaylistDao
 import com.necroware.terminusplayer.data.database.dao.SongDao
 import com.necroware.terminusplayer.data.database.entity.LikedSongEntity
+import com.necroware.terminusplayer.data.database.entity.LyricsCacheEntity
 import com.necroware.terminusplayer.data.database.entity.PlayEventEntity
 import com.necroware.terminusplayer.data.database.entity.PlaylistEntity
 import com.necroware.terminusplayer.data.database.entity.PlaylistSongEntity
@@ -20,9 +22,10 @@ import com.necroware.terminusplayer.data.database.entity.SongEntity
         LikedSongEntity::class,
         PlayEventEntity::class,
         PlaylistEntity::class,
-        PlaylistSongEntity::class
+        PlaylistSongEntity::class,
+        LyricsCacheEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class TerminusDatabase : RoomDatabase() {
@@ -30,6 +33,7 @@ abstract class TerminusDatabase : RoomDatabase() {
     abstract fun likedSongDao(): LikedSongDao
     abstract fun playEventDao(): PlayEventDao
     abstract fun playlistDao(): PlaylistDao
+    abstract fun lyricsCacheDao(): LyricsCacheDao
 
     companion object {
         const val DATABASE_NAME = "terminus.db"
@@ -70,6 +74,12 @@ abstract class TerminusDatabase : RoomDatabase() {
         val MIGRATION_7_8 = object : Migration(7, 8) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE playlists ADD COLUMN remoteSongCount INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS lyrics_cache (cacheKey TEXT NOT NULL PRIMARY KEY, plainLyrics TEXT, syncedLyrics TEXT, fetchedAtEpochMs INTEGER NOT NULL)")
             }
         }
     }
