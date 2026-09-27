@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.repository.MusicRepository
+import com.necroware.terminusplayer.data.repository.NavidromeUploadRepository
+import android.net.Uri
 import com.necroware.terminusplayer.playback.PlaybackController
 import com.necroware.terminusplayer.util.toMediaItems
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -29,7 +31,8 @@ data class PlaylistDetailUiState(
 class PlaylistDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: MusicRepository,
-    private val playbackController: PlaybackController
+    private val playbackController: PlaybackController,
+    private val uploadRepository: NavidromeUploadRepository
 ) : ViewModel() {
 
     private val rawArg: String = savedStateHandle.get<String>("kind").orEmpty()
@@ -48,6 +51,9 @@ class PlaylistDetailViewModel @Inject constructor(
             val resolvedPlaylistId = remotePlaylistId?.let { "server:$it" } ?: playlistId
             if (resolvedPlaylistId != null) {
                 val songs = repository.getSongsForPlaylist(resolvedPlaylistId)
+                val deduplicatedSongs = songs.groupBy { "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}" }
+                    .map { (_, group) -> group.find { it.providerId == "local" } ?: group.first() }
+                
                 val name = repository.getPlaylistName(resolvedPlaylistId)
                 val remoteTrackCount = repository.getRemotePlaylistSongCount(resolvedPlaylistId)
                 _uiState.value = PlaylistDetailUiState(
@@ -59,7 +65,7 @@ class PlaylistDetailViewModel @Inject constructor(
                         remotePlaylistId != null -> "[ this server playlist has no tracks ]"
                         else -> "[ nothing matched when this was imported ]"
                     },
-                    songs = songs
+                    songs = deduplicatedSongs
                 )
             } else {
                 val resolvedKind = kind
@@ -77,6 +83,9 @@ class PlaylistDetailViewModel @Inject constructor(
                     PlaylistKind.RECENT -> repository.getRecentlyPlayed(limit = 100)
                     PlaylistKind.MOST_PLAYED -> repository.getMostPlayed(limit = 100)
                 }
+                val deduplicatedSongs = songs.groupBy { "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}" }
+                    .map { (_, group) -> group.find { it.providerId == "local" } ?: group.first() }
+
                 _uiState.value = PlaylistDetailUiState(
                     isLoading = false,
                     kind = resolvedKind,
@@ -86,7 +95,7 @@ class PlaylistDetailViewModel @Inject constructor(
                         PlaylistKind.RECENT -> "[ nothing played yet ]"
                         PlaylistKind.MOST_PLAYED -> "[ nothing played yet ]"
                     },
-                    songs = songs
+                    songs = deduplicatedSongs
                 )
             }
         }
@@ -95,6 +104,22 @@ class PlaylistDetailViewModel @Inject constructor(
     fun playAll() {
         val songs = _uiState.value.songs
         if (songs.isNotEmpty()) playbackController.playSongs(songs.toMediaItems(), 0)
+    }
+
+    
+    fun downloadAll(force: Boolean = false) = viewModelScope.launch {
+        val songs = _uiState.value.songs
+        songs.forEach { song ->
+            try { repository.downloadSong(song.id, force) } catch (_: Exception) {}
+        }
+    }
+    
+    fun downloadSong(song: Song) = viewModelScope.launch {
+        try { repository.downloadSong(song.id) } catch (_: Exception) {}
+    }
+
+    fun uploadSong(song: Song) = viewModelScope.launch {
+        try { uploadRepository.upload(Uri.parse(song.uriString)) } catch (_: Exception) {}
     }
 
     fun playFrom(song: Song) {
