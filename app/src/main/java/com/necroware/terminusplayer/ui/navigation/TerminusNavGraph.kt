@@ -11,14 +11,27 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -33,6 +46,7 @@ import androidx.navigation.navArgument
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.prefs.MotionPreference
 import com.necroware.terminusplayer.ui.components.MiniPlayerBar
+import com.necroware.terminusplayer.ui.components.SoundControl
 import com.necroware.terminusplayer.ui.components.TerminalNavIcon
 import com.necroware.terminusplayer.ui.screens.albumdetail.AlbumDetailScreen
 import com.necroware.terminusplayer.ui.screens.artistdetail.ArtistDetailScreen
@@ -109,6 +123,9 @@ fun TerminusNavGraph(motionPreference: MotionPreference = MotionPreference.FULL)
     val playbackViewModel: PlaybackViewModel = hiltViewModel()
     val nowPlaying by playbackViewModel.nowPlaying.collectAsStateWithLifecycle()
     val currentSongUri by playbackViewModel.currentSongUri.collectAsStateWithLifecycle()
+    var soundControlOpen by remember { mutableStateOf(false) }
+    var soundControlOnLeft by remember { mutableStateOf(true) }
+    var soundVolume by remember { mutableFloatStateOf(playbackViewModel.currentVolume()) }
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
@@ -179,10 +196,17 @@ fun TerminusNavGraph(motionPreference: MotionPreference = MotionPreference.FULL)
             }
         }
     ) { innerPadding ->
+        Box(Modifier.fillMaxSize().padding(innerPadding).pointerInput(Unit) {
+            detectTapGestures(onDoubleTap = {
+                soundVolume = playbackViewModel.currentVolume()
+                soundControlOnLeft = it.x < size.width / 2f
+                soundControlOpen = true
+            })
+        }) {
         NavHost(
             navController = navController,
             startDestination = Destination.Home.route,
-            modifier = Modifier.padding(innerPadding),
+            modifier = Modifier.fillMaxSize(),
             enterTransition = { tabSlideEnter(motionPreference) },
             exitTransition = { tabSlideExit(motionPreference) },
             popEnterTransition = { tabSlideEnter(motionPreference) },
@@ -204,7 +228,14 @@ fun TerminusNavGraph(motionPreference: MotionPreference = MotionPreference.FULL)
             composable(Destination.Playlists.route) {
                 PlaylistsScreen(
                     onPlaylistClick = { kind -> navController.navigate(Destination.PlaylistDetail.createRoute(kind.name)) },
-                    onCustomPlaylistClick = { id -> navController.navigate(Destination.PlaylistDetail.createRoute("custom:$id")) }
+                    onCustomPlaylistClick = { id ->
+                        val routeId = if (id.startsWith("server:")) {
+                            "remote:${id.removePrefix("server:")}"
+                        } else {
+                            "custom:$id"
+                        }
+                        navController.navigate(Destination.PlaylistDetail.createRoute(routeId))
+                    }
                 )
             }
             composable(Destination.Stats.route) { StatsScreen() }
@@ -313,6 +344,29 @@ fun TerminusNavGraph(motionPreference: MotionPreference = MotionPreference.FULL)
                     onBack = { navController.popBackStack() }
                 )
             }
+        }
+        if (soundControlOpen) {
+            Box(
+                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.42f))
+                    .clickable(onClick = { soundControlOpen = false })
+            )
+            androidx.compose.material3.Surface(
+                modifier = Modifier
+                    .align(if (soundControlOnLeft) Alignment.CenterStart else Alignment.CenterEnd)
+                    .offset(y = (-100).dp)
+                    .padding(horizontal = 12.dp)
+                    .padding(vertical = 12.dp),
+                color = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                shape = MaterialTheme.shapes.small,
+                tonalElevation = 4.dp
+            ) {
+                SoundControl(
+                    volume = soundVolume,
+                    onVolumeChange = { soundVolume = it; playbackViewModel.setVolume(it) }
+                )
+            }
+        }
         }
     }
 }

@@ -27,7 +27,11 @@ object DatabaseModule {
             TerminusDatabase::class.java,
             TerminusDatabase.DATABASE_NAME
         )
-            .addMigrations(TerminusDatabase.MIGRATION_5_6)
+            .addMigrations(
+                TerminusDatabase.MIGRATION_5_6,
+                TerminusDatabase.MIGRATION_6_7,
+                TerminusDatabase.MIGRATION_7_8
+            )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()
     }

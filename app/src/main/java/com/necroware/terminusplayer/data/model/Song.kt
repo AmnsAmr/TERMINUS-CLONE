@@ -15,7 +15,8 @@ data class Song(
     val folderPath: String = "",
     val sizeBytes: Long = 0L,
     val dateAdded: Long = 0L,
-    val isLiked: Boolean = false
+    val isLiked: Boolean = false,
+    val downloadedUri: String? = null
 )
 
 data class Album(

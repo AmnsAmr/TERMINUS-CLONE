@@ -1,10 +1,12 @@
 package com.necroware.terminusplayer.data.repository
 
 import android.content.ContentValues
+import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import com.necroware.terminusplayer.data.database.dao.LikedSongDao
 import com.necroware.terminusplayer.data.database.dao.PlayEventDao
@@ -17,6 +19,10 @@ import com.necroware.terminusplayer.data.database.entity.PlaylistSongEntity
 import com.necroware.terminusplayer.data.database.entity.SongEntity
 import com.necroware.terminusplayer.data.provider.MediaProvider
 import com.necroware.terminusplayer.data.provider.ProviderSyncException
+import com.necroware.terminusplayer.data.api.subsonic.SubsonicApiService
+import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
+import com.necroware.terminusplayer.data.provider.buildSubsonicToken
+import com.necroware.terminusplayer.data.provider.newSubsonicSalt
 import com.necroware.terminusplayer.data.model.Album
 import com.necroware.terminusplayer.data.model.Artist
 import com.necroware.terminusplayer.data.model.Playlist
@@ -43,6 +49,11 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.necroware.terminusplayer.sync.LikeSyncWorker
+import com.necroware.terminusplayer.sync.PlaylistSyncWorker
+import androidx.work.Constraints
+import androidx.work.NetworkType
+import java.io.IOException
+import android.webkit.MimeTypeMap
 
 @Singleton
 class MusicRepository @Inject constructor(
@@ -52,7 +63,9 @@ class MusicRepository @Inject constructor(
     private val playEventDao: PlayEventDao,
     private val playlistDao: PlaylistDao,
     private val database: TerminusDatabase,
-    private val providers: Map<String, @JvmSuppressWildcards MediaProvider>
+    private val providers: Map<String, @JvmSuppressWildcards MediaProvider>,
+    private val subsonicApi: SubsonicApiService,
+    private val preferencesRepository: UserPreferencesRepository
 ) {
 
     private val syncMutex = Mutex()
@@ -119,7 +132,9 @@ class MusicRepository @Inject constructor(
             localKeys.contains(key)
         }
         
-        val scanned = deduplicatedLocalSongs + remainingRemoteSongs
+        val scanned = (deduplicatedLocalSongs + remainingRemoteSongs).map { song ->
+            song.copy(downloadedUri = existingSongs[song.remoteId]?.downloadedUri)
+        }
         
         // Diffing mechanism to prevent unnecessary UI recompositions
         val scannedIds = scanned.map { it.remoteId }.toSet()
@@ -251,7 +266,14 @@ class MusicRepository @Inject constructor(
         val providerToRemoteIds = songsById.values.groupBy({ it.providerId }, { it.providerRemoteId })
         val resolvedByProvider = providerToRemoteIds.mapValues { (providerId, remoteIds) ->
             try {
-                providers[providerId]?.resolveStreamUrls(remoteIds.distinct()) ?: emptyMap()
+                val downloadedByRemoteId = songsById.values
+                    .filter { it.providerId == providerId && it.downloadedUri != null }
+                    .associate { it.providerRemoteId to it.downloadedUri.orEmpty() }
+                val unresolvedIds = remoteIds.distinct().filterNot { it in downloadedByRemoteId }
+                val liveUrls = if (unresolvedIds.isEmpty()) emptyMap() else {
+                    providers[providerId]?.resolveStreamUrls(unresolvedIds) ?: emptyMap()
+                }
+                downloadedByRemoteId + liveUrls
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -269,13 +291,173 @@ class MusicRepository @Inject constructor(
     }
 
     private suspend fun resolveSongUri(song: SongEntity): String =
-        providers[song.providerId]?.resolveStreamUrl(song.providerRemoteId) ?: song.uriString
+        song.downloadedUri
+            ?: providers[song.providerId]?.resolveStreamUrl(song.providerRemoteId)
+            ?: song.uriString
 
     suspend fun getSong(songId: String): Song? {
         val song = songDao.getById(songId) ?: return null
         val isLiked = likedSongDao.isLiked(songId)
         return song.toSong(isLiked = isLiked)
     }
+
+    suspend fun downloadSong(songId: String): String = withContext(Dispatchers.IO) {
+        val song = songDao.getById(songId) ?: throw IOException("Track is no longer in the library")
+        if (song.providerId != "navidrome") throw IOException("Only server tracks can be downloaded")
+        val prefs = preferencesRepository.preferences.first()
+        val name = downloadFileName(song)
+        song.downloadedUri?.let(Uri::parse)?.takeIf(::isReadableDownload)?.let { existing ->
+            return@withContext existing.toString()
+        }
+        if (song.downloadedUri != null) songDao.setDownloadedUri(songId, null)
+        findExistingDownload(name, prefs.downloadFolderUri)?.let { existing ->
+            songDao.setDownloadedUri(songId, existing.toString())
+            return@withContext existing.toString()
+        }
+
+        val config = preferencesRepository.awaitServerConnectionConfig()
+        if (config.username.isBlank() || config.password.isBlank()) throw IOException("Navidrome credentials are missing")
+        val salt = newSubsonicSalt()
+        val token = buildSubsonicToken(config.password, salt)
+        val response = subsonicApi.download(song.providerRemoteId, config.username, token, salt)
+        if (!response.isSuccessful) {
+            response.errorBody()?.close()
+            throw IOException("Download failed with HTTP ${response.code()}")
+        }
+        val body = response.body() ?: throw IOException("Server returned an empty download")
+        if (body.contentType()?.subtype?.contains("json", ignoreCase = true) == true) {
+            body.close()
+            throw IOException("Server returned an authentication or download error")
+        }
+        val destination = createDownloadDestination(name, prefs.downloadFolderUri)
+        try {
+            body.use { downloaded ->
+                downloaded.byteStream().use { input ->
+                    context.contentResolver.openOutputStream(destination.uri, "w")?.use { output ->
+                        input.copyTo(output, DEFAULT_BUFFER_SIZE)
+                    } ?: throw IOException("Cannot open the selected download folder")
+                }
+            }
+            destination.publish()
+            songDao.setDownloadedUri(songId, destination.uri.toString())
+            destination.uri.toString()
+        } catch (e: CancellationException) {
+            destination.delete()
+            throw e
+        } catch (e: Exception) {
+            destination.delete()
+            throw e
+        }
+    }
+
+    private data class DownloadDestination(
+        val uri: Uri,
+        val publish: () -> Unit,
+        val delete: () -> Unit
+    )
+
+    private fun createDownloadDestination(name: String, folderUri: String?): DownloadDestination {
+        val resolver = context.contentResolver
+        if (!folderUri.isNullOrBlank()) {
+            val treeUri = Uri.parse(folderUri)
+            val treeDocumentUri = DocumentsContract.buildDocumentUriUsingTree(
+                treeUri,
+                DocumentsContract.getTreeDocumentId(treeUri)
+            )
+            val documentUri = DocumentsContract.createDocument(
+                resolver,
+                treeDocumentUri,
+                mimeTypeFor(name),
+                name
+            ) ?: throw IOException("Could not create a file in the selected folder")
+            return DownloadDestination(documentUri, {}, { DocumentsContract.deleteDocument(resolver, documentUri) })
+        }
+
+        val values = ContentValues().apply {
+            put(MediaStore.Audio.Media.DISPLAY_NAME, name)
+            put(MediaStore.Audio.Media.MIME_TYPE, mimeTypeFor(name))
+            put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/Terminus")
+            put(MediaStore.Audio.Media.IS_MUSIC, 1)
+            put(MediaStore.Audio.Media.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
+            ?: throw IOException("Could not create the download file")
+        return DownloadDestination(
+            uri = uri,
+            publish = { resolver.update(uri, ContentValues().apply { put(MediaStore.Audio.Media.IS_PENDING, 0) }, null, null) },
+            delete = { resolver.delete(uri, null, null) }
+        )
+    }
+
+    private fun isReadableDownload(uri: Uri): Boolean = try {
+        context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length != 0L } ?: false
+    } catch (_: IOException) {
+        false
+    } catch (_: SecurityException) {
+        false
+    }
+
+    private fun findExistingDownload(name: String, folderUri: String?): Uri? {
+        val resolver = context.contentResolver
+        if (!folderUri.isNullOrBlank()) {
+            val treeUri = Uri.parse(folderUri)
+            val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocumentId)
+            resolver.query(
+                childrenUri,
+                arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameColumn = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                if (idColumn >= 0 && nameColumn >= 0) {
+                    while (cursor.moveToNext()) {
+                        if (cursor.getString(nameColumn) == name) {
+                            val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(idColumn))
+                            if (isReadableDownload(documentUri)) return documentUri
+                        }
+                    }
+                }
+            }
+            return null
+        }
+
+        val relativePath = Environment.DIRECTORY_MUSIC + "/Terminus/"
+        resolver.query(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.SIZE),
+            "${MediaStore.Audio.Media.DISPLAY_NAME} = ? AND ${MediaStore.Audio.Media.RELATIVE_PATH} = ?",
+            arrayOf(name, relativePath),
+            null
+        )?.use { cursor ->
+            val idColumn = cursor.getColumnIndex(MediaStore.Audio.Media._ID)
+            val sizeColumn = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
+            while (cursor.moveToNext()) {
+                if (idColumn >= 0 && sizeColumn >= 0 && cursor.getLong(sizeColumn) > 0L) {
+                    return ContentUris.withAppendedId(
+                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        cursor.getLong(idColumn)
+                    )
+                }
+            }
+        }
+        return null
+    }
+
+    private fun downloadFileName(song: SongEntity): String {
+        val extension = song.folderPath.substringAfterLast('.', "").takeIf { it.matches(Regex("[A-Za-z0-9]{1,8}")) }
+        val base = song.folderPath.substringAfterLast('/').substringBeforeLast('.', "")
+            .ifBlank { "${song.artist} - ${song.title}" }
+            .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+            .take(120)
+        return "$base.${extension ?: "mp3"}"
+    }
+
+    private fun mimeTypeFor(name: String): String =
+        MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase())
+            ?: "application/octet-stream"
 
     suspend fun getLyrics(songId: String): SyncedLyrics? {
         val song = songDao.getById(songId) ?: return null
@@ -396,16 +578,245 @@ class MusicRepository @Inject constructor(
             rows.map { Playlist(id = it.id, name = it.name, songCount = it.songCount) }
         }
 
-    suspend fun getSongsForPlaylist(playlistId: String): List<Song> = withContext(Dispatchers.Default) {
+    suspend fun getSongsForPlaylist(playlistId: String): List<Song> {
+        val playlist = playlistDao.getPlaylist(playlistId)
+        val serverId = playlist?.serverPlaylistId
+        if (serverId != null) {
+            try {
+                refreshServerPlaylistSongs(playlist, replaceMembership = playlist.id.startsWith(SERVER_PLAYLIST_PREFIX))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Keep the cached playlist usable when the server is offline.
+            }
+        }
+        return withContext(Dispatchers.Default) {
         val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
         playlistDao.getSongsForPlaylist(playlistId).map { it.toSong(isLiked = it.remoteId in likedIds) }
+        }
+    }
+
+    suspend fun refreshRemotePlaylists() = withContext(Dispatchers.IO) {
+        val (user, token, salt) = subsonicCredentials()
+        val response = subsonicApi.getPlaylists(user, token, salt)
+        if (response.response.status != "ok") throw IOException("Could not load server playlists")
+        response.response.playlists?.items.orEmpty().forEach { remote ->
+            val existing = playlistDao.getPlaylistByServerId(remote.id)
+            if (existing == null) {
+                playlistDao.insertPlaylist(
+                    PlaylistEntity(
+                        id = SERVER_PLAYLIST_PREFIX + remote.id,
+                        name = remote.name,
+                        createdAt = System.currentTimeMillis(),
+                        serverPlaylistId = remote.id,
+                        remoteSongCount = remote.songCount ?: 0
+                    )
+                )
+            } else {
+                playlistDao.updateRemotePlaylist(remote.id, remote.name, remote.songCount ?: existing.remoteSongCount)
+            }
+        }
+    }
+
+    private suspend fun refreshServerPlaylistSongs(playlist: PlaylistEntity, replaceMembership: Boolean) {
+        val serverId = playlist.serverPlaylistId ?: return
+        val (user, token, salt) = subsonicCredentials()
+        val response = subsonicApi.getPlaylist(serverId, user, token, salt)
+        if (response.response.status != "ok") throw IOException("Could not load playlist tracks")
+        val remote = response.response.playlist ?: throw IOException("Server returned no playlist data")
+        val entries = remote.entries.orEmpty()
+        val entryIds = entries.map { it.id }.distinct()
+        val existingSongs = entryIds.chunked(400).flatMap { songDao.getByNavidromeIds(it) }
+        val byNavidromeId = buildMap {
+            existingSongs.forEach { song ->
+                if (song.providerId == "navidrome") put(song.providerRemoteId, song)
+                song.navidromeId?.let { put(it, song) }
+            }
+        }
+        val missingSongs = entries.filter { it.id !in byNavidromeId }.distinctBy { it.id }.map { entry ->
+            SongEntity(
+                remoteId = namespacedSongId("navidrome", entry.id),
+                providerId = "navidrome",
+                providerRemoteId = entry.id,
+                title = entry.title?.takeIf { it.isNotBlank() } ?: entry.id,
+                artist = entry.artist?.takeIf { it.isNotBlank() } ?: "Unknown Artist",
+                album = entry.album?.takeIf { it.isNotBlank() } ?: "Unknown Album",
+                albumId = entry.albumId.orEmpty(),
+                duration = (entry.duration?.toLong() ?: 0L) * 1000L,
+                uriString = "terminus://${entry.id}",
+                dateAdded = System.currentTimeMillis(),
+                trackNumber = entry.track ?: 0,
+                year = entry.year ?: 0,
+                folderPath = entry.path.orEmpty(),
+                sizeBytes = entry.size ?: 0L
+            )
+        }
+        val mappedIds = entries.mapNotNull { entry ->
+            byNavidromeId[entry.id]?.remoteId ?: namespacedSongId("navidrome", entry.id).takeIf { missingSongs.any { song -> song.remoteId == it } }
+        }.distinct()
+        val currentMemberships = playlistDao.getPlaylistMemberships(playlist.id)
+        val currentIds = currentMemberships.map { it.songId }.toSet()
+        val newMemberships = if (replaceMembership) {
+            mappedIds.mapIndexed { index, id -> PlaylistSongEntity(playlist.id, id, index, syncedToServer = true) }
+        } else {
+            var position = playlistDao.nextSongPosition(playlist.id)
+            mappedIds.filterNot { it in currentIds }.map { id ->
+                PlaylistSongEntity(playlist.id, id, position++, syncedToServer = true)
+            }
+        }
+
+        database.withTransaction {
+            missingSongs.chunked(900).forEach { songDao.upsertAll(it) }
+            if (replaceMembership) playlistDao.purgePlaylistSongs(playlist.id)
+            if (newMemberships.isNotEmpty()) newMemberships.chunked(400).forEach { playlistDao.insertPlaylistSongs(it) }
+            playlistDao.updateRemoteSongCount(playlist.id, entries.size)
+        }
+    }
+
+    private suspend fun subsonicCredentials(): Triple<String, String, String> {
+        val config = preferencesRepository.awaitServerConnectionConfig()
+        if (config.username.isBlank() || config.password.isBlank() ||
+            com.necroware.terminusplayer.data.provider.parseNavidromeBaseUrl(config.serverUrl) == null
+        ) throw IOException("Navidrome server settings are incomplete or invalid")
+        val salt = newSubsonicSalt()
+        return Triple(config.username, buildSubsonicToken(config.password, salt), salt)
+    }
+
+    companion object {
+        const val SERVER_PLAYLIST_PREFIX = "server:"
     }
 
     suspend fun getPlaylistName(playlistId: String): String = playlistDao.getPlaylistName(playlistId) ?: "PLAYLIST"
 
+    suspend fun getRemotePlaylistSongCount(playlistId: String): Int =
+        playlistDao.getRemoteSongCount(playlistId) ?: 0
+
+    suspend fun createPlaylist(name: String): String {
+        val cleanedName = name.trim()
+        require(cleanedName.isNotEmpty()) { "Playlist name cannot be empty" }
+        val id = java.util.UUID.randomUUID().toString()
+        playlistDao.insertPlaylist(
+            PlaylistEntity(id = id, name = cleanedName, createdAt = System.currentTimeMillis(), syncPending = true)
+        )
+        enqueuePlaylistSync()
+        return id
+    }
+
     suspend fun deletePlaylist(playlistId: String) {
-        playlistDao.deletePlaylistSongs(playlistId)
-        playlistDao.deletePlaylist(playlistId)
+        val playlist = playlistDao.getPlaylist(playlistId) ?: return
+        if (playlist.serverPlaylistId == null) {
+            playlistDao.purgePlaylistSongs(playlistId)
+            playlistDao.purgePlaylist(playlistId)
+        } else {
+            playlistDao.markPlaylistDeletePending(playlistId)
+            enqueuePlaylistSync()
+        }
+    }
+
+    suspend fun addSongToPlaylist(playlistId: String, songId: String) {
+        val playlist = playlistDao.getPlaylist(playlistId) ?: return
+        val song = songDao.getById(songId) ?: return
+        val position = playlistDao.nextSongPosition(playlistId)
+        val localAlreadyOnServer = song.providerId == "local"
+        playlistDao.insertPlaylistSongIfMissing(
+            PlaylistSongEntity(playlistId, songId, position, syncedToServer = localAlreadyOnServer)
+        )
+        if (playlist.serverPlaylistId != null || song.providerId == "navidrome") {
+            playlistDao.markPlaylistPending(playlistId)
+            enqueuePlaylistSync()
+        }
+    }
+
+    suspend fun syncPendingPlaylists(): Boolean {
+        val config = preferencesRepository.awaitServerConnectionConfig()
+        if (config.username.isBlank() || config.password.isBlank() ||
+            com.necroware.terminusplayer.data.provider.parseNavidromeBaseUrl(config.serverUrl) == null
+        ) return false
+        val salt = newSubsonicSalt()
+        val token = buildSubsonicToken(config.password, salt)
+
+        for (initial in playlistDao.getPendingPlaylists()) {
+            val playlist = playlistDao.getPlaylist(initial.id) ?: continue
+            val serverId = playlist.serverPlaylistId
+            if (playlist.deletePending) {
+                if (serverId != null) {
+                    val response = subsonicApi.deletePlaylist(serverId, config.username, token, salt)
+                    if (response.response.status != "ok" && response.response.error?.code != 70) return false
+                }
+                playlistDao.purgePlaylistSongs(playlist.id)
+                playlistDao.purgePlaylist(playlist.id)
+                continue
+            }
+
+            val playlistSongs = playlistDao.getPlaylistSongsForSync(playlist.id)
+            if (serverId == null && playlistSongs.none { it.providerId == "navidrome" }) {
+                val localSongs = playlistSongs.filter { it.providerId == "local" }.map { it.songId }
+                if (localSongs.isNotEmpty()) playlistDao.markPlaylistSongsSynced(playlist.id, localSongs)
+                playlistDao.markPlaylistSynced(playlist.id)
+                continue
+            }
+
+            val resolvedServerId = if (serverId == null) {
+                val created = subsonicApi.createPlaylist(
+                    name = playlist.name,
+                    user = config.username,
+                    token = token,
+                    salt = salt
+                )
+                if (created.response.status != "ok") return false
+                val newId = created.response.playlist?.id ?: return false
+                playlistDao.markPlaylistCreated(playlist.id, newId)
+                newId
+            } else serverId
+
+            val remotePlaylist = subsonicApi.getPlaylist(resolvedServerId, config.username, token, salt)
+            if (remotePlaylist.response.status != "ok") return false
+            val remotePlaylistData = remotePlaylist.response.playlist ?: return false
+            val existingServerSongIds = remotePlaylistData.entries.orEmpty().map { it.id }.toSet()
+            val alreadyPresentLocalIds = playlistSongs.filter { it.providerId == "navidrome" && it.providerRemoteId in existingServerSongIds }.map { it.songId }
+            if (alreadyPresentLocalIds.isNotEmpty()) {
+                playlistDao.markPlaylistSongsSynced(playlist.id, alreadyPresentLocalIds)
+            }
+            val localSongs = playlistSongs.filter { it.providerId == "local" && !it.syncedToServer }.map { it.songId }
+            if (localSongs.isNotEmpty()) playlistDao.markPlaylistSongsSynced(playlist.id, localSongs)
+
+            val serverSongsToAdd = playlistSongs.filter {
+                it.providerId == "navidrome" && !it.syncedToServer && it.providerRemoteId !in existingServerSongIds
+            }
+            if (serverSongsToAdd.isNotEmpty()) {
+                val added = subsonicApi.updatePlaylist(
+                    playlistId = resolvedServerId,
+                    songIdsToAdd = serverSongsToAdd.map { it.providerRemoteId },
+                    user = config.username,
+                    token = token,
+                    salt = salt
+                )
+                if (added.response.status != "ok") return false
+                playlistDao.markPlaylistSongsSynced(playlist.id, serverSongsToAdd.map { it.songId })
+            }
+            playlistDao.markPlaylistSynced(playlist.id)
+        }
+        return true
+    }
+
+    private fun enqueuePlaylistSync() {
+        val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+        val request = OneTimeWorkRequestBuilder<PlaylistSyncWorker>().setConstraints(constraints).build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "playlist-sync",
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            request
+        )
+    }
+
+    fun retryPendingPlaylistSync() {
+        val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+        val request = OneTimeWorkRequestBuilder<PlaylistSyncWorker>().setConstraints(constraints).build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "playlist-sync",
+            ExistingWorkPolicy.REPLACE,
+            request
+        )
     }
 
     /**
@@ -433,9 +844,10 @@ class MusicRepository @Inject constructor(
         val playlistId = java.util.UUID.randomUUID().toString()
         val distinctMatched = matched.distinctBy { it.id }
         playlistDao.insertPlaylistWithSongs(
-            PlaylistEntity(id = playlistId, name = name, createdAt = System.currentTimeMillis()),
+            PlaylistEntity(id = playlistId, name = name, createdAt = System.currentTimeMillis(), syncPending = true),
             distinctMatched.mapIndexed { index, song -> PlaylistSongEntity(playlistId, song.id, index) }
         )
+        enqueuePlaylistSync()
         distinctMatched.size to entries.size
     }
 
@@ -512,7 +924,8 @@ private fun SongEntity.toSong(isLiked: Boolean = false): Song = Song(
     folderPath = folderPath,
     sizeBytes = sizeBytes,
     dateAdded = dateAdded,
-    isLiked = isLiked
+    isLiked = isLiked,
+    downloadedUri = downloadedUri
 )
 
 private fun namespacedSongId(providerId: String, providerRemoteId: String): String =

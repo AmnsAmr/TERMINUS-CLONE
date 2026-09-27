@@ -22,7 +22,7 @@ import com.necroware.terminusplayer.data.database.entity.SongEntity
         PlaylistEntity::class,
         PlaylistSongEntity::class
     ],
-    version = 6,
+    version = 8,
     exportSchema = false
 )
 abstract class TerminusDatabase : RoomDatabase() {
@@ -54,6 +54,22 @@ abstract class TerminusDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX index_play_events_startedAtEpochMs ON play_events(startedAtEpochMs)")
                 db.execSQL("CREATE INDEX index_play_events_songId ON play_events(songId)")
                 db.execSQL("DROP TABLE song_id_migration")
+            }
+        }
+
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE songs ADD COLUMN downloadedUri TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE playlists ADD COLUMN serverPlaylistId TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE playlists ADD COLUMN syncPending INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE playlists ADD COLUMN deletePending INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE playlist_songs ADD COLUMN syncedToServer INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE playlists ADD COLUMN remoteSongCount INTEGER NOT NULL DEFAULT 0")
             }
         }
     }
