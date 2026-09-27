@@ -217,6 +217,12 @@ class PlaybackController @Inject constructor(
         }
     }
 
+    fun setVolume(volume: Float) {
+        controller?.volume = volume.coerceIn(0f, 1f)
+    }
+
+    fun currentVolume(): Float = controller?.volume ?: 1f
+
     fun skipToNext() = controller?.seekToNext()
     fun skipToPrevious() = controller?.seekToPrevious()
     fun seekTo(positionMs: Long) {

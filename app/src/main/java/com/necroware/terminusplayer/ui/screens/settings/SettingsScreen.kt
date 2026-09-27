@@ -1,5 +1,6 @@
 package com.necroware.terminusplayer.ui.screens.settings
 
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -60,6 +61,7 @@ fun SettingsScreen(
 ) {
     val prefs by viewModel.preferences.collectAsStateWithLifecycle()
     val importStatus by viewModel.importStatus.collectAsStateWithLifecycle()
+    val downloadFolderError by viewModel.downloadFolderError.collectAsStateWithLifecycle()
 
     var expandedSections by remember { mutableStateOf(setOf<String>()) }
     val toggleSection: (String) -> Unit = { section ->
@@ -78,6 +80,17 @@ fun SettingsScreen(
     val importPlaylistLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri -> uri?.let(viewModel::importPlaylist) }
+
+    val downloadFolderLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        uri?.let {
+            viewModel.setDownloadFolderUri(
+                it,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        }
+    }
 
     // Auto-clear the status line a few seconds after a finished import so
     // it doesn't linger indefinitely as stale state.
@@ -147,6 +160,15 @@ fun SettingsScreen(
                     ActionRow(label = "[ GAPFINDER ]", sublabel = "Configure GapFinder", onClick = onNavigateToGapFinder)
                     Spacer(modifier = Modifier.height(10.dp))
                     ActionRow(label = "[ MANAGE SOURCES ]", sublabel = "Include or exclude local audio folders", onClick = onNavigateToManageSources)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    ActionRow(
+                        label = "[ DOWNLOAD FOLDER ]",
+                        sublabel = prefs.downloadFolderUri?.let { "Custom folder selected" } ?: "Music/Terminus (default)",
+                        onClick = { downloadFolderLauncher.launch(null) }
+                    )
+                    downloadFolderError?.let { error ->
+                        Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         }

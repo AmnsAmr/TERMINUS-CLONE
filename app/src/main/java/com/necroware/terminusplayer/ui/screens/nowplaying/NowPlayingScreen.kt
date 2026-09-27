@@ -2,6 +2,7 @@ package com.necroware.terminusplayer.ui.screens.nowplaying
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
@@ -45,6 +46,9 @@ import kotlin.math.roundToInt
 
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import com.necroware.terminusplayer.ui.components.TerminalBorder
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.height
@@ -122,8 +126,14 @@ fun NowPlayingScreen(
 
     var dragOffsetPx by remember { mutableFloatStateOf(0f) }
     var screenHeightPx by remember { mutableStateOf(1f) }
+    var lyricsExpanded by remember { mutableStateOf(false) }
     val dismissThresholdFraction = 0.25f
     val scrollState = rememberScrollState()
+    var previousScrollValue by remember { mutableStateOf(0) }
+    LaunchedEffect(scrollState.value, lyricsExpanded) {
+        if (lyricsExpanded && scrollState.value < previousScrollValue) lyricsExpanded = false
+        previousScrollValue = scrollState.value
+    }
     val dragState = rememberDraggableState { delta ->
         dragOffsetPx = (dragOffsetPx + delta).coerceAtLeast(0f)
     }
@@ -244,10 +254,22 @@ fun NowPlayingScreen(
 
             val lyrics = currentLyrics
             if (lyrics != null && lyrics.lines.isNotEmpty()) {
+                val lyricsScrollConnection = remember(lyricsExpanded, lyrics) {
+                    object : NestedScrollConnection {
+                        override fun onPostScroll(consumed: androidx.compose.ui.geometry.Offset, available: androidx.compose.ui.geometry.Offset, source: NestedScrollSource): androidx.compose.ui.geometry.Offset {
+                            if (lyrics.lines.any { it.startMs > 0L } && !lyricsExpanded && available.y < 0f) {
+                                lyricsExpanded = true
+                            }
+                            return androidx.compose.ui.geometry.Offset.Zero
+                        }
+                    }
+                }
                 TerminalBorder(
                     modifier = Modifier
+                        .nestedScroll(lyricsScrollConnection)
                         .fillMaxWidth()
-                        .height(300.dp)
+                        .height(if (lyricsExpanded) (screenHeightPx / androidx.compose.ui.platform.LocalDensity.current.density).dp * 0.9f else 300.dp)
+                        .animateContentSize(tween(if (motionPreference == MotionPreference.OFF) 0 else 260))
                         .padding(bottom = 24.dp)
                 ) {
                 androidx.compose.runtime.key(lyrics) {
@@ -271,12 +293,26 @@ fun NowPlayingScreen(
                     }
 
                     Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                         Text(
                             text = if (isSynced) "[SYNCED LYRICS]" else "[LYRICS]",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(bottom = 8.dp)
+                            modifier = Modifier
+                                .padding(bottom = 8.dp)
+                                .clickable(enabled = isSynced) { lyricsExpanded = !lyricsExpanded }
                         )
+                        if (lyricsExpanded) Text(
+                            text = "[BACK]",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.clickable { lyricsExpanded = false }.padding(bottom = 8.dp)
+                        )
+                        }
                         androidx.compose.foundation.lazy.LazyColumn(
                             state = listState,
                             modifier = Modifier.fillMaxWidth()
