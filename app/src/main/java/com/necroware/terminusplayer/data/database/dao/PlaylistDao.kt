@@ -30,7 +30,11 @@ interface PlaylistDao {
     @Query(
         """
         SELECT playlists.id as id, playlists.name as name, playlists.createdAt as createdAt,
-               MAX(COUNT(playlist_songs.songId), playlists.remoteSongCount) as songCount
+               CASE 
+                   WHEN COUNT(playlist_songs.songId) > IFNULL(playlists.remoteSongCount, 0) 
+                   THEN COUNT(playlist_songs.songId) 
+                   ELSE IFNULL(playlists.remoteSongCount, 0) 
+               END as songCount
         FROM playlists
         LEFT JOIN playlist_songs ON playlist_songs.playlistId = playlists.id
         WHERE playlists.deletePending = 0

@@ -13,8 +13,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
+import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.background
+
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -138,56 +139,102 @@ fun LibraryScreen(
     }
 
     actionSong?.let { song ->
-        AlertDialog(
-            onDismissRequest = { actionSong = null },
-            containerColor = MaterialTheme.colorScheme.surface,
-            titleContentColor = MaterialTheme.colorScheme.onSurface,
-            textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            title = { Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (song.providerId == "local") {
-                        Button(onClick = { viewModel.uploadSong(song); actionSong = null }) { Text("UPLOAD TO SERVER") }
-                    } else if (song.downloadedUri == null) {
-                        Button(onClick = { viewModel.downloadSong(song); actionSong = null }) { Text("DOWNLOAD") }
-                    } else {
-                        Text("DOWNLOADED FOR OFFLINE PLAYBACK", color = MaterialTheme.colorScheme.tertiary)
+        Dialog(onDismissRequest = { actionSong = null }) {
+            Box(Modifier.background(MaterialTheme.colorScheme.background)) {
+                TerminalBorder(Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Text(song.title.uppercase(), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        
+                        if (song.providerId == "local") {
+                            Text(
+                                "[ UPLOAD TO SERVER ]",
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.clickable { viewModel.uploadSong(song); actionSong = null }.padding(vertical = 8.dp)
+                            )
+                        } else if (song.downloadedUri == null) {
+                            Text(
+                                "[ DOWNLOAD ]",
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.clickable { viewModel.downloadSong(song); actionSong = null }.padding(vertical = 8.dp)
+                            )
+                        } else {
+                            Text(
+                                "[ DOWNLOADED FOR OFFLINE PLAYBACK ]",
+                                color = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                        
+                        if (playlists.isNotEmpty()) {
+                            Text(
+                                "[ ADD TO PLAYLIST ]",
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.clickable { playlistSong = song; actionSong = null }.padding(vertical = 8.dp)
+                            )
+                        } else {
+                            Text(
+                                "Create a playlist first.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "[ CLOSE ]",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.clickable { actionSong = null }.padding(8.dp)
+                            )
+                        }
                     }
-                    Button(onClick = { playlistSong = song; actionSong = null }, enabled = playlists.isNotEmpty()) {
-                        Text("ADD TO PLAYLIST")
-                    }
-                    if (playlists.isEmpty()) Text("Create a playlist first.", style = MaterialTheme.typography.bodySmall)
                 }
-            },
-            confirmButton = {},
-            dismissButton = { Text("CLOSE", modifier = Modifier.clickable { actionSong = null }.padding(12.dp)) }
-        )
+            }
+        }
     }
 
     playlistSong?.let { song ->
-        AlertDialog(
-            onDismissRequest = { playlistSong = null },
-            containerColor = MaterialTheme.colorScheme.surface,
-            titleContentColor = MaterialTheme.colorScheme.onSurface,
-            textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            title = { Text("ADD TO PLAYLIST") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    playlists.forEach { playlist ->
-                        Text(
-                            "[ ${playlist.name} ]",
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.fillMaxWidth().clickable {
-                                viewModel.addSongToPlaylist(playlist.id, song.id)
-                                playlistSong = null
-                            }.padding(vertical = 8.dp)
-                        )
+        Dialog(onDismissRequest = { playlistSong = null }) {
+            Box(Modifier.background(MaterialTheme.colorScheme.background)) {
+                TerminalBorder(Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Text("ADD TO PLAYLIST", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                        
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            playlists.forEach { playlist ->
+                                Text(
+                                    "[ ${playlist.name} ]",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.fillMaxWidth().clickable {
+                                        viewModel.addSongToPlaylist(playlist.id, song.id)
+                                        playlistSong = null
+                                    }.padding(vertical = 8.dp)
+                                )
+                            }
+                        }
+
+                        Row(
+                            horizontalArrangement = Arrangement.End,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                "[ CLOSE ]",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.clickable { playlistSong = null }.padding(8.dp)
+                            )
+                        }
                     }
                 }
-            },
-            confirmButton = {},
-            dismissButton = { Text("CLOSE", modifier = Modifier.clickable { playlistSong = null }.padding(12.dp)) }
-        )
+            }
+        }
     }
 }
 

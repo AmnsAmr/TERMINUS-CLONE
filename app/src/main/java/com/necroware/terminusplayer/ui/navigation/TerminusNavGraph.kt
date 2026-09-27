@@ -136,7 +136,6 @@ fun TerminusNavGraph(motionPreference: MotionPreference = MotionPreference.FULL)
         Destination.NowPlaying.route,
         Destination.AlbumDetail.route,
         Destination.ArtistDetail.route,
-        Destination.PlaylistDetail.route,
         Destination.Search.route,
         Destination.Upload.route,
         Destination.GapFinder.route,
