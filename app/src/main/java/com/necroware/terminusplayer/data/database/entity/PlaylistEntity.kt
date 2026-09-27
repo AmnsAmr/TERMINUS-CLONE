@@ -2,12 +2,17 @@ package com.necroware.terminusplayer.data.database.entity
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import androidx.room.ColumnInfo
 
 @Entity(tableName = "playlists")
 data class PlaylistEntity(
     @PrimaryKey val id: String,
     val name: String,
-    val createdAt: Long
+    val createdAt: Long,
+    val serverPlaylistId: String? = null,
+    @ColumnInfo(defaultValue = "0") val syncPending: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val deletePending: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val remoteSongCount: Int = 0
 )
 
 /**
@@ -20,5 +25,6 @@ data class PlaylistEntity(
 data class PlaylistSongEntity(
     val playlistId: String,
     val songId: String,
-    val position: Int
+    val position: Int,
+    @ColumnInfo(defaultValue = "0") val syncedToServer: Boolean = false
 )
