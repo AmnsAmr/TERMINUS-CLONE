@@ -62,5 +62,6 @@ data class UserPreferences(
     val password: String = "",
     val excludedFolders: Set<String> = emptySet(),
     val hasSetupDefaultExcludes: Boolean = false,
-    val maxBitRate: Int? = null
+    val maxBitRate: Int? = null,
+    val downloadFolderUri: String? = null
 )

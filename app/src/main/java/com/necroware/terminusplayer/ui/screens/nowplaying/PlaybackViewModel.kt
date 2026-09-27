@@ -80,6 +80,8 @@ class PlaybackViewModel @Inject constructor(
     fun seekTo(positionMs: Long) = controller.seekTo(positionMs)
     fun toggleShuffle() = controller.toggleShuffle()
     fun cycleRepeatMode() = controller.cycleRepeatMode()
+    fun setVolume(volume: Float) = controller.setVolume(volume)
+    fun currentVolume(): Float = controller.currentVolume()
 
     fun toggleCurrentLike() {
         val currentId = nowPlaying.value.mediaId ?: return

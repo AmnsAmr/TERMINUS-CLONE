@@ -94,6 +94,20 @@ class SettingsViewModel @Inject constructor(
         preferencesRepository.setMaxBitRate(bitRate)
     }
 
+    fun setDownloadFolderUri(uri: Uri, grantFlags: Int) = viewModelScope.launch {
+        try {
+            context.contentResolver.takePersistableUriPermission(uri, grantFlags)
+            preferencesRepository.setDownloadFolderUri(uri.toString())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: SecurityException) {
+            _downloadFolderError.value = "Couldn't save access to that folder."
+        }
+    }
+
+    private val _downloadFolderError = MutableStateFlow<String?>(null)
+    val downloadFolderError = _downloadFolderError.asStateFlow()
+
     fun importFiles(uris: List<Uri>) {
         if (uris.isEmpty()) return
         _importStatus.value = ImportStatus.Running
@@ -134,6 +148,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setServerSettings(url: String, user: String, pass: String) = viewModelScope.launch {
         preferencesRepository.setNavidromeSettings(url, user, pass)
+        repository.retryPendingPlaylistSync()
         androidx.work.WorkManager.getInstance(context).enqueue(
             androidx.work.OneTimeWorkRequestBuilder<com.necroware.terminusplayer.sync.LibrarySyncWorker>().build()
         )

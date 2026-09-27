@@ -43,6 +43,7 @@ private object Keys {
     val EXCLUDED_FOLDERS = stringSetPreferencesKey("excluded_folders")
     val HAS_SETUP_DEFAULT_EXCLUDES = booleanPreferencesKey("has_setup_default_excludes")
     val MAX_BIT_RATE = intPreferencesKey("max_bit_rate")
+    val DOWNLOAD_FOLDER_URI = stringPreferencesKey("download_folder_uri")
 }
 
 private fun eqBandKey(index: Int) = intPreferencesKey("${Keys.EQ_BAND_PREFIX}$index")
@@ -172,7 +173,8 @@ class UserPreferencesRepository @Inject constructor(
             password = this[Keys.PASSWORD] ?: "",
             excludedFolders = this[Keys.EXCLUDED_FOLDERS] ?: emptySet(),
             hasSetupDefaultExcludes = this[Keys.HAS_SETUP_DEFAULT_EXCLUDES] ?: false,
-            maxBitRate = maxBitRate
+            maxBitRate = maxBitRate,
+            downloadFolderUri = this[Keys.DOWNLOAD_FOLDER_URI]
         )
     }
 
@@ -223,5 +225,12 @@ class UserPreferencesRepository @Inject constructor(
         }
         val currentConfig = awaitServerConnectionConfig()
         _serverConnectionConfig.value = currentConfig.copy(maxBitRate = bitRate)
+    }
+
+    suspend fun setDownloadFolderUri(uri: String?) {
+        dataStore.edit { prefs ->
+            if (uri.isNullOrBlank()) prefs.remove(Keys.DOWNLOAD_FOLDER_URI)
+            else prefs[Keys.DOWNLOAD_FOLDER_URI] = uri
+        }
     }
 }
