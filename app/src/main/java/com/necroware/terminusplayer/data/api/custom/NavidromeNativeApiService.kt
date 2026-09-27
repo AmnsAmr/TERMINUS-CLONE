@@ -1,5 +1,6 @@
 package com.necroware.terminusplayer.data.api.custom
 
+import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import okhttp3.MultipartBody
 import retrofit2.Response
@@ -17,6 +18,28 @@ data class UploadQuotaResponse(
 )
 
 @JsonClass(generateAdapter = true)
+data class UploadCheckRequest(val filenames: List<String>)
+
+@JsonClass(generateAdapter = true)
+data class UploadCheckResponse(
+    val accepted: List<String> = emptyList(),
+    val rejected: List<String> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class UploadQueueItem(
+    val id: String,
+    val filename: String,
+    val user: String,
+    val size: Long,
+    @Json(name = "when") val uploadedAt: String? = null,
+    val path: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class UploadQueueActionRequest(val id: String)
+
+@JsonClass(generateAdapter = true)
 data class GapFinderSettings(
     val enabled: Boolean = false,
     val threshold: Float = 0f
@@ -30,6 +53,9 @@ data class GapFinderStatus(
 )
 
 interface NavidromeNativeApiService {
+    @POST("api/upload/check")
+    suspend fun checkUploads(@Body request: UploadCheckRequest): Response<UploadCheckResponse>
+
     @Multipart
     @POST("api/upload/file")
     suspend fun uploadFile(
@@ -39,6 +65,15 @@ interface NavidromeNativeApiService {
 
     @GET("api/upload/quota")
     suspend fun getUploadQuota(): Response<UploadQuotaResponse>
+
+    @GET("api/upload/queue")
+    suspend fun getUploadQueue(): Response<List<UploadQueueItem>>
+
+    @POST("api/upload/queue/approve")
+    suspend fun approveUpload(@Body request: UploadQueueActionRequest): Response<Void>
+
+    @POST("api/upload/queue/reject")
+    suspend fun rejectUpload(@Body request: UploadQueueActionRequest): Response<Void>
 
     @GET("api/gapfinder/settings")
     suspend fun getGapfinderSettings(): Response<GapFinderSettings>
