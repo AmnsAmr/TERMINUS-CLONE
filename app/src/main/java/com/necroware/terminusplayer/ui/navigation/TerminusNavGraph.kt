@@ -1,6 +1,7 @@
 package com.necroware.terminusplayer.ui.navigation
 
 import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
@@ -32,6 +33,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -126,6 +128,13 @@ fun TerminusNavGraph(motionPreference: MotionPreference = MotionPreference.FULL)
     var soundControlOpen by remember { mutableStateOf(false) }
     var soundControlOnLeft by remember { mutableStateOf(true) }
     var soundVolume by remember { mutableFloatStateOf(playbackViewModel.currentVolume()) }
+
+    LaunchedEffect(soundControlOpen, soundVolume) {
+        if (soundControlOpen) {
+            kotlinx.coroutines.delay(4000)
+            soundControlOpen = false
+        }
+    }
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
@@ -344,14 +353,32 @@ fun TerminusNavGraph(motionPreference: MotionPreference = MotionPreference.FULL)
                 )
             }
         }
-        if (soundControlOpen) {
+        AnimatedVisibility(
+            visible = soundControlOpen,
+            enter = if (motionPreference == MotionPreference.OFF) EnterTransition.None else fadeIn(tween(motionPreference.duration(200))),
+            exit = if (motionPreference == MotionPreference.OFF) ExitTransition.None else fadeOut(tween(motionPreference.duration(200)))
+        ) {
             Box(
                 Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.42f))
                     .clickable(onClick = { soundControlOpen = false })
             )
+        }
+        AnimatedVisibility(
+            visible = soundControlOpen,
+            enter = if (motionPreference == MotionPreference.OFF) EnterTransition.None
+                    else slideInHorizontally(
+                        initialOffsetX = { if (soundControlOnLeft) -it else it },
+                        animationSpec = tween(motionPreference.duration(200))
+                    ) + fadeIn(tween(motionPreference.duration(200))),
+            exit = if (motionPreference == MotionPreference.OFF) ExitTransition.None
+                   else slideOutHorizontally(
+                        targetOffsetX = { if (soundControlOnLeft) -it else it },
+                        animationSpec = tween(motionPreference.duration(200))
+                   ) + fadeOut(tween(motionPreference.duration(200))),
+            modifier = Modifier.align(if (soundControlOnLeft) Alignment.CenterStart else Alignment.CenterEnd)
+        ) {
             androidx.compose.material3.Surface(
                 modifier = Modifier
-                    .align(if (soundControlOnLeft) Alignment.CenterStart else Alignment.CenterEnd)
                     .offset(y = (-100).dp)
                     .padding(horizontal = 12.dp)
                     .padding(vertical = 12.dp),
