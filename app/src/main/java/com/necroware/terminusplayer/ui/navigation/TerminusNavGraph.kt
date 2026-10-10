@@ -116,7 +116,8 @@ private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailPopExit(moti
 
 @Composable
 fun TerminusNavGraph(
-    motionPreference: MotionPreference = MotionPreference.FULL
+    motionPreference: MotionPreference = MotionPreference.FULL,
+    onInitialContentReady: () -> Unit = {}
 ) {
     val navController = rememberNavController()
     // Single PlaybackViewModel instance (Hilt, Activity-scoped by default when
@@ -213,7 +214,7 @@ fun TerminusNavGraph(
         }) {
         NavHost(
             navController = navController,
-            startDestination = Destination.Home.route,
+            startDestination = Destination.Library.route,
             modifier = Modifier.fillMaxSize(),
             enterTransition = { tabSlideEnter(motionPreference) },
             exitTransition = { tabSlideExit(motionPreference) },
@@ -230,7 +231,8 @@ fun TerminusNavGraph(
                     onSongClick = { song, queue -> playSongAndOpenPlayer(song, queue, playbackViewModel, navController) },
                     onAlbumClick = { albumTitle -> navController.navigate(Destination.AlbumDetail.createRoute(albumTitle)) },
                     onArtistClick = { artist -> navController.navigate(Destination.ArtistDetail.createRoute(artist)) },
-                    onSearchClick = { navController.navigate(Destination.Search.route) }
+                    onSearchClick = { navController.navigate(Destination.Search.route) },
+                    onInitialContentReady = onInitialContentReady
                 )
             }
             composable(Destination.Playlists.route) {
