@@ -9,6 +9,17 @@ import retrofit2.http.Streaming
 
 interface SubsonicApiService {
 
+    @GET("rest/getUser")
+    suspend fun getUser(
+        @Query("username") username: String,
+        @Query("u") user: String,
+        @Query("t") token: String,
+        @Query("s") salt: String,
+        @Query("v") version: String = "1.16.1",
+        @Query("c") client: String = "Terminus",
+        @Query("f") format: String = "json"
+    ): SubsonicResponse
+
     @GET("rest/getPlaylists")
     suspend fun getPlaylists(
         @Query("u") user: String,

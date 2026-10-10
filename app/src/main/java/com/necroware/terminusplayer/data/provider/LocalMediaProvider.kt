@@ -29,6 +29,7 @@ class LocalMediaProvider @Inject constructor(
         val defaultExcludedFound = mutableSetOf<String>()
 
         val songs = mutableListOf<SongEntity>()
+        val genresByAudioId = loadGenresByAudioId()
 
         val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
 
@@ -103,6 +104,7 @@ class LocalMediaProvider @Inject constructor(
                     dateAdded = cursor.getLong(dateAddedCol),
                     trackNumber = cursor.getInt(trackCol) % 1000,
                     year = cursor.getInt(yearCol),
+                    genre = genresByAudioId[id].orEmpty(),
                     folderPath = folderPath,
                     sizeBytes = cursor.getLong(sizeCol)
                 )
@@ -115,6 +117,39 @@ class LocalMediaProvider @Inject constructor(
         }
 
         songs
+    }
+
+    /** MediaStore keeps genres in a separate table, so attach them during the same library scan. */
+    private fun loadGenresByAudioId(): Map<Long, String> {
+        val genresByAudioId = mutableMapOf<Long, String>()
+        return try {
+            val genresUri = MediaStore.Audio.Genres.EXTERNAL_CONTENT_URI
+            val genreProjection = arrayOf(MediaStore.Audio.Genres._ID, MediaStore.Audio.Genres.NAME)
+
+            context.contentResolver.query(genresUri, genreProjection, null, null, null)?.use { genres ->
+                val idColumn = genres.getColumnIndexOrThrow(MediaStore.Audio.Genres._ID)
+                val nameColumn = genres.getColumnIndexOrThrow(MediaStore.Audio.Genres.NAME)
+                while (genres.moveToNext()) {
+                    val genreId = genres.getLong(idColumn)
+                    val genreName = genres.getString(nameColumn)?.trim().orEmpty()
+                    if (genreName.isBlank()) continue
+
+                    val membersUri = MediaStore.Audio.Genres.Members.getContentUri("external", genreId)
+                    val memberProjection = arrayOf(MediaStore.Audio.Genres.Members.AUDIO_ID)
+                    context.contentResolver.query(membersUri, memberProjection, null, null, null)?.use { members ->
+                        val audioIdColumn = members.getColumnIndexOrThrow(MediaStore.Audio.Genres.Members.AUDIO_ID)
+                        while (members.moveToNext()) {
+                            // Keep the first genre when a track has multiple genre tags.
+                            genresByAudioId.getOrPut(members.getLong(audioIdColumn)) { genreName }
+                        }
+                    }
+                }
+            }
+            genresByAudioId
+        } catch (_: Exception) {
+            // Genre support varies across MediaStore implementations; scanning still works without it.
+            emptyMap()
+        }
     }
 
     override suspend fun resolveStreamUrl(remoteId: String): String {

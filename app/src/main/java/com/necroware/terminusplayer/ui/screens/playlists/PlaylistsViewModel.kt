@@ -21,6 +21,7 @@ class PlaylistsViewModel @Inject constructor(
 
     val customPlaylists: StateFlow<List<Playlist>> = repository.observeCustomPlaylists()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val accountInfo = repository.playlistAccountInfo
 
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage = _actionMessage.asStateFlow()

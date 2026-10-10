@@ -22,6 +22,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.ui.components.SongArt
 import com.necroware.terminusplayer.ui.components.TerminalBorder
+import com.necroware.terminusplayer.ui.components.TerminalState
 import com.necroware.terminusplayer.util.toMinutesSeconds
 import java.util.concurrent.TimeUnit
 
@@ -63,6 +64,10 @@ fun ArtistDetailScreen(
             }
         }
 
+        if (state.isLoading) {
+            item { TerminalState("LOADING ARTIST", "Fetching tracks and listening stats…") }
+        }
+
         item {
             Text(
                 text = "▶ PLAY ALL",
@@ -100,11 +105,7 @@ fun ArtistDetailScreen(
 
         if (!state.isLoading && state.songs.isEmpty()) {
             item {
-                Text(
-                    text = state.errorMessage ?: "[ no tracks found for this artist ]",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                TerminalState("NO TRACKS", state.errorMessage ?: "No tracks were found for this artist.")
             }
         }
 

@@ -18,6 +18,8 @@ import kotlinx.coroutines.Job
 import javax.inject.Inject
 
 import com.necroware.terminusplayer.data.repository.MusicRepository
+import com.necroware.terminusplayer.data.database.dao.UploadQueueDao
+import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
 
 data class StatsUiState(
     val range: StatsRange = StatsRange.WEEK,
@@ -33,13 +35,16 @@ data class StatsUiState(
     // Range-specific chart data — each StatsRange gets its own chart type.
     val monthlyArtistDistribution: List<Pair<String, Int>> = emptyList(),
     val yearlyMonthlyTotals: List<Pair<String, Int>> = emptyList(),
-    val downloadEvents: List<MusicRepository.DownloadEvent> = emptyList()
+    val downloadEvents: List<MusicRepository.DownloadEvent> = emptyList(),
+    val uploadQueue: List<UploadQueueEntity> = emptyList()
 )
 
 @HiltViewModel
 class StatsViewModel @Inject constructor(
     private val statsRepository: StatsRepository,
-    private val musicRepository: MusicRepository
+    private val musicRepository: MusicRepository,
+    private val uploadQueueDao: UploadQueueDao,
+    private val uploadQueueManager: com.necroware.terminusplayer.data.repository.UploadQueueManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(StatsUiState())
@@ -49,11 +54,41 @@ class StatsViewModel @Inject constructor(
     init {
         loadInsightsOnce()
         load(StatsRange.WEEK, TopCategory.ARTIST)
-        
+
         viewModelScope.launch {
             musicRepository.downloadEvents.collect { events ->
                 _uiState.value = _uiState.value.copy(downloadEvents = events)
             }
+        }
+
+        viewModelScope.launch {
+            uploadQueueDao.observeAll().collect { queue ->
+                _uiState.value = _uiState.value.copy(uploadQueue = queue)
+            }
+        }
+    }
+
+    fun retryFailedUpload(songId: String) {
+        viewModelScope.launch {
+            uploadQueueManager.retryUpload(songId)
+        }
+    }
+
+    fun retryWithConversion(songId: String) {
+        viewModelScope.launch {
+            uploadQueueManager.retryWithConversion(songId)
+        }
+    }
+
+    fun retryAllFailedUploads() {
+        viewModelScope.launch {
+            uploadQueueManager.retryAllFailed()
+        }
+    }
+
+    fun cancelAllUploads() {
+        viewModelScope.launch {
+            uploadQueueManager.cancelAllUploads()
         }
     }
 

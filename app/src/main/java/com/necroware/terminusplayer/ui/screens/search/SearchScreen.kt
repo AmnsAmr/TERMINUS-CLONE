@@ -23,12 +23,16 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.ui.components.SongArt
 import com.necroware.terminusplayer.ui.components.TerminalBorder
+import com.necroware.terminusplayer.ui.components.TerminalState
 import com.necroware.terminusplayer.util.toMinutesSeconds
 
 @Composable
@@ -88,19 +92,17 @@ fun SearchScreen(
         }
 
         when {
-            query.isBlank() -> Text(
-                text = "[ type to search by title, artist, or album ]",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            query.isBlank() -> TerminalState(
+                title = "SEARCH THE LIBRARY",
+                detail = "Enter a title, artist, or album name."
             )
-            results.isEmpty() -> Text(
-                text = "[ no matches for \"$query\" ]",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            results.isEmpty() -> TerminalState(
+                title = "NO MATCHES",
+                detail = "Try a different title, artist, or album."
             )
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(results, key = { it.id }) { song ->
-                    SearchResultRow(song = song) { onSongClick(song, results) }
+                    SearchResultRow(song = song, query = query) { onSongClick(song, results) }
                 }
             }
         }
@@ -125,13 +127,13 @@ private fun SearchTextField(
 }
 
 @Composable
-private fun SearchResultRow(song: Song, onClick: () -> Unit) {
+private fun SearchResultRow(song: Song, query: String, onClick: () -> Unit) {
     TerminalBorder(modifier = Modifier.fillMaxWidth().clickable { onClick() }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SongArt(uriString = song.uriString, size = 48.dp)
             Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
                 Text(
-                    song.title,
+                    text = highlightedText(song.title, query),
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
@@ -146,5 +148,27 @@ private fun SearchResultRow(song: Song, onClick: () -> Unit) {
                 )
             }
         }
+    }
+}
+
+@androidx.compose.runtime.Composable
+private fun highlightedText(value: String, query: String) = buildAnnotatedString {
+    val needle = query.trim()
+    if (needle.isEmpty()) {
+        append(value)
+        return@buildAnnotatedString
+    }
+    var cursor = 0
+    while (cursor < value.length) {
+        val matchStart = value.indexOf(needle, cursor, ignoreCase = true)
+        if (matchStart < 0) {
+            append(value.substring(cursor))
+            break
+        }
+        append(value.substring(cursor, matchStart))
+        withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary)) {
+            append(value.substring(matchStart, matchStart + needle.length))
+        }
+        cursor = matchStart + needle.length
     }
 }

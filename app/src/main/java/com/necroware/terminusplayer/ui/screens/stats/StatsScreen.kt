@@ -1,15 +1,19 @@
 package com.necroware.terminusplayer.ui.screens.stats
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -27,6 +31,7 @@ import com.necroware.terminusplayer.data.repository.TopCategoryItem
 import com.necroware.terminusplayer.ui.components.BarDatum
 import com.necroware.terminusplayer.ui.components.BlockyBarChart
 import com.necroware.terminusplayer.ui.components.TerminalBorder
+import com.necroware.terminusplayer.ui.components.TerminalState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -36,6 +41,7 @@ import java.util.concurrent.TimeUnit
 fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showDownloadEvents by remember { mutableStateOf(false) }
+    var showUploadEvents by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -48,6 +54,15 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                 color = MaterialTheme.colorScheme.onBackground,
                 modifier = Modifier.padding(top = 20.dp)
             )
+        }
+
+        if (state.isLoading) {
+            item {
+                TerminalState(
+                    title = "LOADING STATS",
+                    detail = "Collecting listening activity…"
+                )
+            }
         }
 
         if (state.insights.isNotEmpty()) {
@@ -63,17 +78,12 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
         }
 
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
                 StatsRange.entries.forEach { range ->
-                    Text(
-                        text = "[${range.label}]",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (range == state.range) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.clickable { viewModel.selectRange(range) }
+                    FilterChip(
+                        selected = range == state.range,
+                        onClick = { viewModel.selectRange(range) },
+                        label = { Text(range.label) }
                     )
                 }
             }
@@ -108,20 +118,16 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                     modifier = Modifier.weight(1f)
                 )
                 SummaryTile(
-                    label = "SESSIONS",
-                    value = state.sessionStats.totalSessions.toString(),
-                    modifier = Modifier.weight(1f)
-                )
-                SummaryTile(
-                    label = "LONGEST",
-                    value = if (state.sessionStats.totalSessions > 0) formatDuration(state.sessionStats.longestSessionMs) else "—",
+                    label = "SESSIONS · LONGEST",
+                    value = "${state.sessionStats.totalSessions} · ${if (state.sessionStats.totalSessions > 0) formatDuration(state.sessionStats.longestSessionMs) else "—"}",
                     modifier = Modifier.weight(1f)
                 )
             }
         }
 
         item {
-            Column {
+            TerminalBorder(Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = when (state.range) {
                         StatsRange.TODAY -> "LISTENING TIMELINE (HOUR)"
@@ -191,44 +197,79 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                     }
                 }
             }
+            }
         }
 
         item {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = if (showDownloadEvents) "[ DOWNLOAD EVENTS (v) ]" else "[ DOWNLOAD EVENTS (>) ]",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .clickable { showDownloadEvents = !showDownloadEvents }
-                        .padding(bottom = 12.dp)
-                )
-
-                if (showDownloadEvents) {
-                    if (state.downloadEvents.isEmpty()) {
+            Text(
+                text = "${if (showDownloadEvents) "▾" else "▸"} DOWNLOAD ACTIVITY · ${state.downloadEvents.size}",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.fillMaxWidth().clickable { showDownloadEvents = !showDownloadEvents }.padding(vertical = 8.dp)
+            )
+        }
+        if (showDownloadEvents && state.downloadEvents.isEmpty()) {
+            item { TerminalState("NO DOWNLOAD ACTIVITY", "Downloads will appear here while they run.") }
+        }
+        if (showDownloadEvents) {
+            itemsIndexed(state.downloadEvents.asReversed().take(50), key = { index, _ -> "download-$index" }) { _, event ->
+                TerminalBorder(Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            text = "[ no active or recent downloads ]",
+                            text = "${event.status}: ${event.songTitle}",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (event.status == "Failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                    } else {
-                        state.downloadEvents.asReversed().forEach { event ->
-                            TerminalBorder(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    Text(
-                                        text = "${event.status}: ${event.songTitle}",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = if (event.status == "Failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = event.detail,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                        Text(event.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+
+        item {
+            Text(
+                text = "${if (showUploadEvents) "▾" else "▸"} UPLOAD QUEUE · ${state.uploadQueue.size}",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.fillMaxWidth().clickable { showUploadEvents = !showUploadEvents }.padding(vertical = 8.dp)
+            )
+        }
+        if (showUploadEvents && state.uploadQueue.isEmpty()) {
+            item { TerminalState("UPLOAD QUEUE EMPTY", "Uploads you start will appear here.") }
+        }
+        if (showUploadEvents && state.uploadQueue.isNotEmpty()) {
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+                    if (state.uploadQueue.any { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }) {
+                        Text("[ RETRY FAILED ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { viewModel.retryAllFailedUploads() })
+                    }
+                    Text("[ CLEAR QUEUE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.clickable { viewModel.cancelAllUploads() })
+                }
+            }
+            items(state.uploadQueue.asReversed().take(50), key = { "upload-${it.songId}" }) { event ->
+                TerminalBorder(Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(
+                                text = "${event.state}: ${event.title}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (event.state.contains("FAIL")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (event.state == "PERMANENT_FAILURE" || event.state == "CONVERSION_FAILED") {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text("[ RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { viewModel.retryFailedUpload(event.songId) })
+                                    Text("[ CONVERT & RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { viewModel.retryWithConversion(event.songId) })
                                 }
                             }
+                        }
+                        Text("Attempt: ${event.attemptCount}/3", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (!event.errorMessage.isNullOrBlank()) {
+                            Text("Reason: ${event.errorMessage}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
@@ -243,17 +284,12 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
                     TopCategory.entries.forEach { category ->
-                        Text(
-                            text = "[${category.label}]",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (category == state.category) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                            modifier = Modifier.clickable { viewModel.selectCategory(category) }
+                        FilterChip(
+                            selected = category == state.category,
+                            onClick = { viewModel.selectCategory(category) },
+                            label = { Text(category.label) }
                         )
                     }
                 }
@@ -262,16 +298,15 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
 
         if (state.topCategoryItems.isEmpty() && !state.isLoading) {
             item {
-                Text(
-                    text = "[ nothing here yet for this range ]",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                TerminalState(
+                    title = "NO LISTENING DATA",
+                    detail = "Plays in this range will appear here."
                 )
             }
         }
 
-        items(state.topCategoryItems, key = { it.id }) { item ->
-            TopCategoryRow(item)
+        itemsIndexed(state.topCategoryItems, key = { _, item -> item.id }) { index, item ->
+            TopCategoryRow(item, index + 1, state.topCategoryItems.firstOrNull()?.playCount ?: 0)
         }
     }
 }
@@ -295,24 +330,26 @@ private fun SummaryTile(label: String, value: String, modifier: Modifier = Modif
 }
 
 @Composable
-private fun TopCategoryRow(item: TopCategoryItem) {
+private fun TopCategoryRow(item: TopCategoryItem, rank: Int, maxPlays: Int) {
     TerminalBorder(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = item.label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            Text(
-                text = "${item.playCount} plays",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("#${rank.toString().padStart(2, '0')}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    text = item.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text("${item.playCount}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            androidx.compose.material3.LinearProgressIndicator(
+                progress = if (maxPlays > 0) (item.playCount.toFloat() / maxPlays).coerceIn(0f, 1f) else 0f,
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
             )
         }
     }

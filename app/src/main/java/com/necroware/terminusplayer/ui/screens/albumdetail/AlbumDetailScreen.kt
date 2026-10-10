@@ -22,6 +22,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.ui.components.SongArt
 import com.necroware.terminusplayer.ui.components.TerminalBorder
+import com.necroware.terminusplayer.ui.components.TerminalState
 import com.necroware.terminusplayer.util.toMinutesSeconds
 import java.util.concurrent.TimeUnit
 
@@ -43,6 +44,10 @@ fun AlbumDetailScreen(
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(top = 20.dp).clickable { onBack() }
             )
+        }
+
+        if (state.isLoading) {
+            item { TerminalState("LOADING ALBUM", "Fetching tracks and listening stats…") }
         }
 
         item {
@@ -111,11 +116,7 @@ fun AlbumDetailScreen(
 
         if (!state.isLoading && state.songs.isEmpty()) {
             item {
-                Text(
-                    text = state.errorMessage ?: "[ no tracks found for this album ]",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                TerminalState("NO TRACKS", state.errorMessage ?: "No tracks were found for this album.")
             }
         }
 

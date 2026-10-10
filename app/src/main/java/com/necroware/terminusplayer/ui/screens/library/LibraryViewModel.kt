@@ -12,11 +12,10 @@ import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.data.repository.NavidromeUploadRepository
 import com.necroware.terminusplayer.data.model.Playlist
-import android.net.Uri
+import com.necroware.terminusplayer.data.repository.UploadQueueManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import com.necroware.terminusplayer.playback.PlaybackController
-import com.necroware.terminusplayer.util.toMediaItems
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -36,10 +35,11 @@ class LibraryViewModel @Inject constructor(
     private val repository: MusicRepository,
     private val preferencesRepository: UserPreferencesRepository,
     private val playbackController: PlaybackController,
-    private val uploadRepository: NavidromeUploadRepository
+    private val uploadRepository: NavidromeUploadRepository,
+    private val uploadQueueManager: UploadQueueManager
 ) : ViewModel() {
 
-    private val sortOrder: StateFlow<LibrarySortOrder> = preferencesRepository.preferences
+    val sortOrder: StateFlow<LibrarySortOrder> = preferencesRepository.preferences
         .map { it.librarySortOrder }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LibrarySortOrder())
 
@@ -53,6 +53,7 @@ class LibraryViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val albums: StateFlow<List<Album>> = repository.observeAllAlbums()
+        .flowOn(kotlinx.coroutines.Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val artists: StateFlow<List<Artist>> = repository.observeAllArtists()
@@ -66,11 +67,24 @@ class LibraryViewModel @Inject constructor(
 
     fun playSong(song: Song, queue: List<Song>) {
         val index = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-        playbackController.playSongs(queue.toMediaItems(), index)
+        playbackController.playSongsFromSongs(queue, index)
+    }
+
+    fun playNext(song: Song) {
+        playbackController.playSongNext(song)
+        _actionMessage.value = "${song.title} added to play next."
     }
 
     fun toggleLike(songId: String) {
-        viewModelScope.launch { repository.toggleLike(songId) }
+        viewModelScope.launch {
+            val change = repository.toggleLike(songId)
+            val action = if (change.isLiked) "Liked" else "Unliked"
+            _actionMessage.value = if (change.syncQueued) {
+                "$action locally; server sync queued."
+            } else {
+                "$action on this device."
+            }
+        }
     }
 
     fun addSongToPlaylist(playlistId: String, songId: String) = viewModelScope.launch {
@@ -78,16 +92,20 @@ class LibraryViewModel @Inject constructor(
         _actionMessage.value = "Added to playlist. Server sync will run when connected."
     }
 
-    fun uploadSong(song: Song) = viewModelScope.launch {
-        _actionMessage.value = "Uploading ${song.title}..."
-        try {
-            val fileName = uploadRepository.upload(Uri.parse(song.uriString))
-            _actionMessage.value = "Uploaded $fileName."
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            _actionMessage.value = "Upload failed: ${e.message ?: "unknown error"}"
+    fun addSongsToPlaylist(playlistId: String, songIds: List<String>) = viewModelScope.launch {
+        songIds.forEach { songId ->
+            repository.addSongToPlaylist(playlistId, songId)
         }
+        _actionMessage.value = "Added ${songIds.size} songs to playlist."
+    }
+
+    fun uploadSong(song: Song) = viewModelScope.launch {
+        uploadSongs(listOf(song))
+    }
+
+    fun uploadSongs(songs: List<Song>) = viewModelScope.launch {
+        _actionMessage.value = "Queued ${songs.size} ${if (songs.size == 1) "song" else "songs"} for upload."
+        uploadQueueManager.enqueueUploads(songs)
     }
 
     fun downloadSong(song: Song) = viewModelScope.launch {
@@ -103,6 +121,14 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun dismissActionMessage() { _actionMessage.value = null }
+
+    fun setSortField(field: SortField) = viewModelScope.launch {
+        preferencesRepository.setSortOrder(sortOrder.value.copy(field = field))
+    }
+
+    fun setSortDirection(direction: SortDirection) = viewModelScope.launch {
+        preferencesRepository.setSortOrder(sortOrder.value.copy(direction = direction))
+    }
 }
 
 private fun List<Song>.sortedWith(order: LibrarySortOrder): List<Song> {

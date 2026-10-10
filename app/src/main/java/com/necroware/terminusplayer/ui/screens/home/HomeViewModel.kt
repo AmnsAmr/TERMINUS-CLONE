@@ -2,6 +2,7 @@ package com.necroware.terminusplayer.ui.screens.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.necroware.terminusplayer.data.model.GenreMix
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.data.repository.StatsRange
@@ -10,6 +11,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -22,7 +25,8 @@ data class HomeUiState(
     val weekPlays: Int = 0,
     val weekMsPlayed: Long = 0L,
     val yourMix: List<Song> = emptyList(),
-    val recentlyPlayed: List<Song> = emptyList()
+    val recentlyPlayed: List<Song> = emptyList(),
+    val genreMixes: List<GenreMix> = emptyList()
 )
 
 @HiltViewModel
@@ -36,16 +40,20 @@ class HomeViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            repository.observeSongCount().collect { count ->
-                _uiState.value = _uiState.value.copy(songCount = count)
-            }
+            repository.observeSongCount()
+                .distinctUntilChanged()
+                .debounce(350)
+                .collect { count ->
+                    _uiState.value = _uiState.value.copy(songCount = count)
+                    reloadMixAndRecents()
+                    reloadWeekSummary()
+                }
         }
         viewModelScope.launch {
             repository.observeLikedSongCount().collect { count ->
                 _uiState.value = _uiState.value.copy(likedCount = count)
             }
         }
-        refreshMixAndRecents()
     }
 
     fun refreshLibrary() {
@@ -81,7 +89,8 @@ class HomeViewModel @Inject constructor(
     private suspend fun reloadMixAndRecents() {
         val mix = repository.getYourMix(limit = 25)
         val recent = repository.getRecentlyPlayed(limit = 20)
-        _uiState.value = _uiState.value.copy(yourMix = mix, recentlyPlayed = recent)
+        val genreMixes = repository.getGenreMixes()
+        _uiState.value = _uiState.value.copy(yourMix = mix, recentlyPlayed = recent, genreMixes = genreMixes)
     }
 
     private suspend fun reloadWeekSummary() {

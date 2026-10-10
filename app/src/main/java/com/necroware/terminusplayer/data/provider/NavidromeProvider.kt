@@ -76,6 +76,7 @@ class NavidromeProvider @Inject constructor(
                 uriString = "terminus://${song.id}",
                 trackNumber = song.track ?: 0,
                 year = song.year ?: 0,
+                genre = song.genre.orEmpty(),
                 folderPath = song.path ?: "",
                 sizeBytes = song.size ?: 0L,
                 dateAdded = System.currentTimeMillis()
@@ -144,15 +145,20 @@ class NavidromeProvider @Inject constructor(
         val username = prefs.username
         val password = prefs.password
 
-        if (username.isBlank() || password.isBlank()) return
+        if (username.isBlank() || password.isBlank()) {
+            throw IOException("Navidrome credentials are missing; like change remains queued")
+        }
 
         val salt = newSubsonicSalt()
         val token = buildSubsonicToken(password, salt)
 
-        if (isLiked) {
+        val response = if (isLiked) {
             apiService.star(id = remoteId, user = username, token = token, salt = salt)
         } else {
             apiService.unstar(id = remoteId, user = username, token = token, salt = salt)
+        }
+        if (response.response.status != "ok") {
+            throw IOException(response.response.error?.message ?: "Navidrome rejected the like change")
         }
     }
 
