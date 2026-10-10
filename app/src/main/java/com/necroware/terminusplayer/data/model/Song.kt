@@ -16,8 +16,11 @@ data class Song(
     val sizeBytes: Long = 0L,
     val dateAdded: Long = 0L,
     val isLiked: Boolean = false,
-    val downloadedUri: String? = null
+    val downloadedUri: String? = null,
+    val genre: String = ""
 )
+
+data class GenreMix(val genre: String, val songs: List<Song>)
 
 data class Album(
     val id: String,
@@ -44,5 +47,13 @@ data class Folder(
 data class Playlist(
     val id: String,
     val name: String,
-    val songCount: Int
+    val songCount: Int,
+    val ownerUsername: String? = null,
+    val isRemote: Boolean = false
+)
+
+data class PlaylistAccountInfo(
+    val username: String = "",
+    val isAdmin: Boolean = false,
+    val isLoaded: Boolean = false
 )

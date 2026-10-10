@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
@@ -61,7 +60,6 @@ import com.necroware.terminusplayer.ui.screens.playlists.PlaylistsScreen
 import com.necroware.terminusplayer.ui.screens.search.SearchScreen
 import com.necroware.terminusplayer.ui.screens.settings.SettingsScreen
 import com.necroware.terminusplayer.ui.screens.stats.StatsScreen
-import com.necroware.terminusplayer.util.toMediaItems
 
 /** Index within the bottom-nav tab order, used to pick left/right slide direction. -1 if not a tab route. */
 private fun tabIndex(route: String?): Int = bottomNavItems.indexOfFirst { it.route == route }
@@ -117,7 +115,9 @@ private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailPopExit(moti
     }
 
 @Composable
-fun TerminusNavGraph(motionPreference: MotionPreference = MotionPreference.FULL) {
+fun TerminusNavGraph(
+    motionPreference: MotionPreference = MotionPreference.FULL
+) {
     val navController = rememberNavController()
     // Single PlaybackViewModel instance (Hilt, Activity-scoped by default when
     // requested at this top-level composable) shared by the mini bar and the
@@ -379,7 +379,6 @@ fun TerminusNavGraph(motionPreference: MotionPreference = MotionPreference.FULL)
         ) {
             androidx.compose.material3.Surface(
                 modifier = Modifier
-                    .offset(y = (-100).dp)
                     .padding(horizontal = 12.dp)
                     .padding(vertical = 12.dp),
                 color = MaterialTheme.colorScheme.surface,
@@ -389,7 +388,8 @@ fun TerminusNavGraph(motionPreference: MotionPreference = MotionPreference.FULL)
             ) {
                 SoundControl(
                     volume = soundVolume,
-                    onVolumeChange = { soundVolume = it; playbackViewModel.setVolume(it) }
+                    onVolumeChange = { soundVolume = it; playbackViewModel.setVolume(it) },
+                    onDismiss = { soundControlOpen = false }
                 )
             }
         }
@@ -404,6 +404,6 @@ private fun playSongAndOpenPlayer(
     navController: androidx.navigation.NavHostController
 ) {
     val index = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-    playbackViewModel.playQueue(queue.toMediaItems(), index)
+    playbackViewModel.playSongQueue(queue, index)
     navController.navigate(Destination.NowPlaying.route)
 }

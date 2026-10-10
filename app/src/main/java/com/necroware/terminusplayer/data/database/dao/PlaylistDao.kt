@@ -14,7 +14,8 @@ data class PlaylistWithCount(
     val id: String,
     val name: String,
     val createdAt: Long,
-    val songCount: Int
+    val songCount: Int,
+    val ownerUsername: String?
 )
 
 data class PlaylistSongForSync(
@@ -30,6 +31,7 @@ interface PlaylistDao {
     @Query(
         """
         SELECT playlists.id as id, playlists.name as name, playlists.createdAt as createdAt,
+               playlists.ownerUsername as ownerUsername,
                CASE 
                    WHEN COUNT(playlist_songs.songId) > IFNULL(playlists.remoteSongCount, 0) 
                    THEN COUNT(playlist_songs.songId) 
@@ -90,8 +92,8 @@ interface PlaylistDao {
     @Query("SELECT * FROM playlist_songs WHERE playlistId = :playlistId ORDER BY position ASC")
     suspend fun getPlaylistMemberships(playlistId: String): List<PlaylistSongEntity>
 
-    @Query("UPDATE playlists SET name = :name, remoteSongCount = :songCount WHERE serverPlaylistId = :serverId")
-    suspend fun updateRemotePlaylist(serverId: String, name: String, songCount: Int)
+    @Query("UPDATE playlists SET name = :name, remoteSongCount = :songCount, ownerUsername = :ownerUsername WHERE serverPlaylistId = :serverId")
+    suspend fun updateRemotePlaylist(serverId: String, name: String, songCount: Int, ownerUsername: String?)
 
     @Query("UPDATE playlists SET remoteSongCount = :songCount WHERE id = :playlistId")
     suspend fun updateRemoteSongCount(playlistId: String, songCount: Int)

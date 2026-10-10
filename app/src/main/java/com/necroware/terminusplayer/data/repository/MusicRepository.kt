@@ -26,6 +26,8 @@ import com.necroware.terminusplayer.data.provider.newSubsonicSalt
 import com.necroware.terminusplayer.data.model.Album
 import com.necroware.terminusplayer.data.model.Artist
 import com.necroware.terminusplayer.data.model.Playlist
+import com.necroware.terminusplayer.data.model.PlaylistAccountInfo
+import com.necroware.terminusplayer.data.model.GenreMix
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.util.matchM3uEntryToSong
 import com.necroware.terminusplayer.util.normalizeForMatch
@@ -37,7 +39,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -70,6 +75,8 @@ class MusicRepository @Inject constructor(
 ) {
 
     private val syncMutex = Mutex()
+    private val _playlistAccountInfo = MutableStateFlow(PlaylistAccountInfo())
+    val playlistAccountInfo = _playlistAccountInfo.asStateFlow()
 
     data class SyncResult(
         val successfulProviders: Set<String>,
@@ -192,7 +199,7 @@ class MusicRepository @Inject constructor(
                     )
                 }
                 .sortedBy { it.title.lowercase() }
-        }
+        }.flowOn(Dispatchers.Default)
 
     fun observeAllFolders(): Flow<List<String>> = songDao.observeAllFolders()
 
@@ -205,30 +212,45 @@ class MusicRepository @Inject constructor(
 
     fun searchSongs(query: String): Flow<List<Song>> =
         songDao.searchSongs(query).map { entities -> entities.map { it.toSong() } }
+            .flowOn(Dispatchers.Default)
 
-    suspend fun toggleLike(songId: String) {
+    data class LikeChange(val isLiked: Boolean, val syncQueued: Boolean)
+
+    suspend fun toggleLike(songId: String): LikeChange {
         val song = songDao.getById(songId)
+        if (song == null) return LikeChange(isLiked = false, syncQueued = false)
         val newLikedState = likedSongDao.toggle(songId, System.currentTimeMillis())
-        if (song == null) return
 
-        val remoteId = if (song.navidromeId != null) song.navidromeId else song.providerRemoteId
-        val providerId = if (song.navidromeId != null) "navidrome" else song.providerId
+        // Local-only tracks have no server identity. A local copy that matched a
+        // Navidrome track uses that remote identity so the server star stays in sync.
+        val providerId = when {
+            song.navidromeId != null -> "navidrome"
+            song.providerId != "local" -> song.providerId
+            else -> return LikeChange(isLiked = newLikedState, syncQueued = false)
+        }
+        val remoteId = song.navidromeId ?: song.providerRemoteId
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
         val request = OneTimeWorkRequestBuilder<LikeSyncWorker>()
             .setInputData(workDataOf(
                 LikeSyncWorker.KEY_PROVIDER_ID to providerId,
                 LikeSyncWorker.KEY_PROVIDER_REMOTE_ID to remoteId,
                 LikeSyncWorker.KEY_IS_LIKED to newLikedState
             ))
+            .setConstraints(constraints)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             "like-sync:$songId",
             ExistingWorkPolicy.REPLACE,
             request
         )
+        return LikeChange(isLiked = newLikedState, syncQueued = true)
     }
 
     suspend fun syncLike(providerId: String, providerRemoteId: String, isLiked: Boolean) {
-        providers[providerId]?.toggleLike(providerRemoteId, isLiked)
+        val provider = providers[providerId] ?: throw IOException("Music provider '$providerId' is unavailable")
+        provider.toggleLike(providerRemoteId, isLiked)
     }
 
     /** Used by the Now Playing like-button to reflect the current track's liked state. */
@@ -302,6 +324,11 @@ class MusicRepository @Inject constructor(
         val song = songDao.getById(songId) ?: return null
         val isLiked = likedSongDao.isLiked(songId)
         return song.toSong(isLiked = isLiked)
+    }
+
+    suspend fun getSongByUri(uri: String): Song? {
+        val song = songDao.getByUri(uri) ?: return null
+        return song.toSong(isLiked = likedSongDao.isLiked(song.remoteId))
     }
 
     data class DownloadEvent(val songTitle: String, val status: String, val detail: String)
@@ -605,13 +632,32 @@ class MusicRepository @Inject constructor(
             .shuffled()
     }
 
+    /** Genre-based Home mixes use server tags and only load a small sample per genre. */
+    suspend fun getGenreMixes(limit: Int = 6, songsPerGenre: Int = 30): List<GenreMix> =
+        withContext(Dispatchers.Default) {
+            val genres = songDao.getTopGenres(limit)
+            if (genres.isEmpty()) return@withContext emptyList()
+            val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
+            genres.mapNotNull { genreRow ->
+                val songs = songDao.getSongsByGenre(genreRow.genre, songsPerGenre)
+                    .map { it.toSong(isLiked = it.remoteId in likedIds) }
+                    .shuffled()
+                songs.takeIf { it.size >= 3 }?.let { GenreMix(genreRow.genre, it) }
+            }
+        }
+
     // ---- Custom playlists ------------------------------------------------
 
     fun observeCustomPlaylists(): Flow<List<Playlist>> =
         playlistDao.observePlaylists().map { rows ->
             rows.map { row ->
-                val songs = getSongsForPlaylist(row.id)
-                Playlist(id = row.id, name = row.name, songCount = songs.size)
+                Playlist(
+                    id = row.id,
+                    name = row.name,
+                    songCount = row.songCount,
+                    ownerUsername = row.ownerUsername,
+                    isRemote = row.id.startsWith(SERVER_PLAYLIST_PREFIX)
+                )
             }
         }
 
@@ -637,6 +683,7 @@ class MusicRepository @Inject constructor(
 
     suspend fun refreshRemotePlaylists() = withContext(Dispatchers.IO) {
         val (user, token, salt) = subsonicCredentials()
+        _playlistAccountInfo.value = PlaylistAccountInfo(username = user)
         val response = subsonicApi.getPlaylists(user, token, salt)
         if (response.response.status != "ok") throw IOException("Could not load server playlists")
         response.response.playlists?.items.orEmpty().forEach { remote ->
@@ -648,12 +695,37 @@ class MusicRepository @Inject constructor(
                         name = remote.name,
                         createdAt = System.currentTimeMillis(),
                         serverPlaylistId = remote.id,
-                        remoteSongCount = remote.songCount ?: 0
+                        remoteSongCount = remote.songCount ?: 0,
+                        ownerUsername = remote.owner
                     )
                 )
             } else {
-                playlistDao.updateRemotePlaylist(remote.id, remote.name, remote.songCount ?: existing.remoteSongCount)
+                playlistDao.updateRemotePlaylist(
+                    remote.id,
+                    remote.name,
+                    remote.songCount ?: existing.remoteSongCount,
+                    remote.owner ?: existing.ownerUsername
+                )
             }
+        }
+        try {
+            val accountResponse = subsonicApi.getUser(user, user, token, salt)
+            val account = accountResponse.response.user
+            if (accountResponse.response.status == "ok" && account != null) {
+                _playlistAccountInfo.value = PlaylistAccountInfo(
+                    username = account.username?.takeIf { it.isNotBlank() } ?: user,
+                    isAdmin = account.adminRole,
+                    isLoaded = true
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Playlist browsing remains available if the server lacks getUser support.
+            _playlistAccountInfo.value = PlaylistAccountInfo(username = user, isLoaded = true)
+        }
+        if (!_playlistAccountInfo.value.isLoaded) {
+            _playlistAccountInfo.value = PlaylistAccountInfo(username = user, isLoaded = true)
         }
     }
 
@@ -948,7 +1020,7 @@ class MusicRepository @Inject constructor(
     }
 }
 
-private fun SongEntity.toSong(isLiked: Boolean = false): Song = Song(
+fun SongEntity.toSong(isLiked: Boolean = false): Song = Song(
     id = remoteId,
     providerId = providerId,
     providerRemoteId = providerRemoteId,
@@ -964,7 +1036,8 @@ private fun SongEntity.toSong(isLiked: Boolean = false): Song = Song(
     sizeBytes = sizeBytes,
     dateAdded = dateAdded,
     isLiked = isLiked,
-    downloadedUri = downloadedUri
+    downloadedUri = downloadedUri,
+    genre = genre
 )
 
 private fun namespacedSongId(providerId: String, providerRemoteId: String): String =

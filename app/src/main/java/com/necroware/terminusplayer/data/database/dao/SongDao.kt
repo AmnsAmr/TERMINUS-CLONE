@@ -47,6 +47,9 @@ interface SongDao {
     @Query("SELECT * FROM songs WHERE remoteId = :id LIMIT 1")
     suspend fun getById(id: String): SongEntity?
 
+    @Query("SELECT * FROM songs WHERE uriString = :uri OR downloadedUri = :uri ORDER BY CASE WHEN providerId = 'local' THEN 0 ELSE 1 END LIMIT 1")
+    suspend fun getByUri(uri: String): SongEntity?
+
     @Query("SELECT * FROM songs WHERE remoteId IN (:ids)")
     suspend fun getByIds(ids: List<String>): List<SongEntity>
 
@@ -68,6 +71,12 @@ interface SongDao {
     @Query("SELECT * FROM songs ORDER BY dateAdded DESC LIMIT :limit")
     suspend fun mostRecentlyAdded(limit: Int): List<SongEntity>
 
+    @Query("SELECT genre, COUNT(*) AS songCount FROM songs WHERE TRIM(genre) != '' GROUP BY genre HAVING COUNT(*) >= 3 ORDER BY songCount DESC LIMIT :limit")
+    suspend fun getTopGenres(limit: Int): List<GenreWithSongCount>
+
+    @Query("SELECT * FROM songs WHERE genre = :genre ORDER BY RANDOM() LIMIT :limit")
+    suspend fun getSongsByGenre(genre: String, limit: Int): List<SongEntity>
+
     @Query("SELECT artist, COUNT(*) as songCount FROM songs GROUP BY artist ORDER BY artist COLLATE NOCASE ASC")
     fun observeAllArtistsWithSongCount(): Flow<List<ArtistWithSongCount>>
 
@@ -80,5 +89,10 @@ interface SongDao {
 
 data class ArtistWithSongCount(
     val artist: String,
+    val songCount: Int
+)
+
+data class GenreWithSongCount(
+    val genre: String,
     val songCount: Int
 )

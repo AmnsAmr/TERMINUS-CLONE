@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.necroware.terminusplayer.data.model.Song
+import com.necroware.terminusplayer.data.model.Playlist
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.data.repository.NavidromeUploadRepository
 import android.net.Uri
@@ -44,8 +45,13 @@ class PlaylistDetailViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(PlaylistDetailUiState(kind = kind))
     val uiState: StateFlow<PlaylistDetailUiState> = _uiState.asStateFlow()
+    private val _playlists = MutableStateFlow<List<Playlist>>(emptyList())
+    val playlists: StateFlow<List<Playlist>> = _playlists.asStateFlow()
 
     init {
+        viewModelScope.launch {
+            repository.observeCustomPlaylists().collect { _playlists.value = it }
+        }
         viewModelScope.launch {
             val playlistId = customPlaylistId
             val resolvedPlaylistId = remotePlaylistId?.let { "server:$it" } ?: playlistId
@@ -126,6 +132,23 @@ class PlaylistDetailViewModel @Inject constructor(
         val songs = _uiState.value.songs
         val index = songs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
         playbackController.playSongs(songs.toMediaItems(), index)
+    }
+
+    fun playNext(song: Song) = playbackController.playSongNext(song)
+
+    fun toggleLike(song: Song) {
+        viewModelScope.launch {
+            val change = repository.toggleLike(song.id)
+            _uiState.value = _uiState.value.copy(
+                songs = _uiState.value.songs.map { current ->
+                    if (current.id == song.id) current.copy(isLiked = change.isLiked) else current
+                }
+            )
+        }
+    }
+
+    fun addSongToPlaylist(playlistId: String, songId: String) = viewModelScope.launch {
+        repository.addSongToPlaylist(playlistId, songId)
     }
 }
 

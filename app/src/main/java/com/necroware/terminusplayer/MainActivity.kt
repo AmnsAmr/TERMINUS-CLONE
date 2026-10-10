@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.ui.navigation.TerminusNavGraph
@@ -44,6 +46,10 @@ class MainActivity : ComponentActivity() {
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val splashStartedAt = SystemClock.uptimeMillis()
+        installSplashScreen().setKeepOnScreenCondition {
+            SystemClock.uptimeMillis() - splashStartedAt < MIN_SPLASH_DURATION_MS
+        }
         super.onCreate(savedInstanceState)
 
         setContent {
@@ -56,19 +62,43 @@ class MainActivity : ComponentActivity() {
                     var hasEssentialPermission by remember {
                         mutableStateOf(isGranted(essentialAudioPermission))
                     }
+                    var hasNotificationPermission by remember {
+                        mutableStateOf(
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                isGranted(Manifest.permission.POST_NOTIFICATIONS)
+                            } else {
+                                true
+                            }
+                        )
+                    }
 
                     val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-                        ActivityResultContracts.RequestPermission()
-                    ) { granted -> hasEssentialPermission = granted || isGranted(essentialAudioPermission) }
+                        ActivityResultContracts.RequestMultiplePermissions()
+                    ) { permissions ->
+                        hasEssentialPermission = permissions[essentialAudioPermission] ?: isGranted(essentialAudioPermission)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            hasNotificationPermission = permissions[Manifest.permission.POST_NOTIFICATIONS] ?: isGranted(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    }
 
-                    if (hasEssentialPermission) {
+                    if (hasEssentialPermission && hasNotificationPermission) {
                         TerminusNavGraph(motionPreference = motionPreference)
                     } else {
-                        PermissionGate(onRequestPermission = { permissionLauncher.launch(essentialAudioPermission) })
+                        PermissionGate(onRequestPermission = {
+                            val reqs = mutableListOf(essentialAudioPermission)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                reqs.add(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                            permissionLauncher.launch(reqs.toTypedArray())
+                        })
                     }
                 }
             }
         }
+    }
+
+    private companion object {
+        const val MIN_SPLASH_DURATION_MS = 650L
     }
 }
 
@@ -87,7 +117,7 @@ private fun PermissionGate(onRequestPermission: () -> Unit) {
             color = MaterialTheme.colorScheme.primary
         )
         Text(
-            text = "[ audio library access required ]",
+            text = "[ audio library & notification access required ]",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(vertical = 16.dp)

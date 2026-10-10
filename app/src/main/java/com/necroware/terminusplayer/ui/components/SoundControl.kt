@@ -1,6 +1,7 @@
 package com.necroware.terminusplayer.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -8,6 +9,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -27,6 +30,7 @@ import kotlin.math.ceil
 fun SoundControl(
     volume: Float,
     onVolumeChange: (Float) -> Unit,
+    onDismiss: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var trackHeightPx by remember { mutableFloatStateOf(1f) }
@@ -34,17 +38,25 @@ fun SoundControl(
 
     TerminalBorder(
         modifier = modifier
-            .width(60.dp)
+            .width(76.dp)
             .background(MaterialTheme.colorScheme.surface),
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("VOL", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                Text("×", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clickable(onClick = onDismiss).padding(horizontal = 4.dp))
+            }
             Text(
                 text = "${(clampedVolume * 100).toInt()}%",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
             )
             Text(
                 text = "HIGH",
@@ -53,8 +65,8 @@ fun SoundControl(
             )
             Box(
                 modifier = Modifier
-                    .width(60.dp)
-                    .height(144.dp)
+                    .width(48.dp)
+                    .height(132.dp)
                     .onSizeChanged { trackHeightPx = it.height.toFloat().coerceAtLeast(1f) }
                     .pointerInput(Unit) {
                         detectTapGestures { offset ->
@@ -70,7 +82,7 @@ fun SoundControl(
                 contentAlignment = Alignment.BottomCenter
             ) {
                 Column(
-                    modifier = Modifier.width(14.dp).height(144.dp),
+                    modifier = Modifier.width(16.dp).height(132.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.Bottom)
                 ) {
                     val activeSegments = ceil(clampedVolume * 18).toInt()

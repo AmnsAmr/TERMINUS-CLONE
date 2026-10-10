@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.ui.window.Dialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +43,7 @@ import com.necroware.terminusplayer.ui.components.SongArt
 import com.necroware.terminusplayer.util.estimateKbpsFromSize
 import com.necroware.terminusplayer.util.sizeLabelFromBytes
 import com.necroware.terminusplayer.util.toMinutesSeconds
+import com.necroware.terminusplayer.util.EXTERNAL_AUDIO_MEDIA_ID_PREFIX
 import kotlinx.coroutines.isActive
 import kotlin.math.roundToInt
 
@@ -52,6 +55,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import com.necroware.terminusplayer.ui.components.TerminalBorder
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
 
 @Composable
 private fun rememberSmoothPosition(
@@ -112,6 +116,73 @@ private fun PlaybackProgressSection(
 }
 
 @Composable
+private fun SleepTimerControl(
+    remainingMs: Long?,
+    onStart: (Int) -> Unit,
+    onCancel: () -> Unit
+) {
+    var showOptions by remember { mutableStateOf(false) }
+    TerminalBorder(modifier = Modifier.fillMaxWidth().padding(top = 16.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("SLEEP TIMER", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    remainingMs?.let { ms ->
+                        val totalSeconds = (ms + 999L) / 1_000L
+                        "STOPS IN %02d:%02d".format(totalSeconds / 60L, totalSeconds % 60L)
+                    } ?: "OFF",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                if (remainingMs == null) "[ SET ]" else "[ CANCEL ]",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable {
+                    if (remainingMs == null) showOptions = true else onCancel()
+                }.padding(8.dp)
+            )
+        }
+    }
+
+    if (showOptions) {
+        Dialog(onDismissRequest = { showOptions = false }) {
+            TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("STOP PLAYBACK AFTER", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    listOf(15, 30, 45, 60, 90, 120).chunked(2).forEach { row ->
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            row.forEach { minutes ->
+                                Text(
+                                    "[ $minutes MIN ]",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.clickable {
+                                        onStart(minutes)
+                                        showOptions = false
+                                    }.padding(vertical = 10.dp)
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        "[ CANCEL ]",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.End).clickable { showOptions = false }.padding(8.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun NowPlayingScreen(
     viewModel: PlaybackViewModel,
     onCollapse: () -> Unit,
@@ -123,12 +194,20 @@ fun NowPlayingScreen(
     val currentSongUri by viewModel.currentSongUri.collectAsStateWithLifecycle()
     val artStyle by viewModel.artStyle.collectAsStateWithLifecycle()
     val currentLyrics by viewModel.currentLyrics.collectAsStateWithLifecycle()
+    val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsStateWithLifecycle()
 
     var dragOffsetPx by remember { mutableFloatStateOf(0f) }
     var screenHeightPx by remember { mutableStateOf(1f) }
     var lyricsExpanded by remember { mutableStateOf(false) }
     val dismissThresholdFraction = 0.25f
     val scrollState = rememberScrollState()
+
+    LaunchedEffect(lyricsExpanded) {
+        if (lyricsExpanded) {
+            withFrameNanos { }
+            scrollState.animateScrollTo(scrollState.maxValue)
+        }
+    }
     var previousScrollValue by remember { mutableStateOf(0) }
     LaunchedEffect(scrollState.value, lyricsExpanded) {
         if (lyricsExpanded && scrollState.value < previousScrollValue) lyricsExpanded = false
@@ -178,12 +257,14 @@ fun NowPlayingScreen(
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.clickable { onCollapse() }
                 )
-                Text(
-                    text = if (isLiked) "[LIKED]" else "[LIKE]",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = if (isLiked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.clickable { viewModel.toggleCurrentLike() }
-                )
+                if (!nowPlaying.mediaId.orEmpty().startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)) {
+                    Text(
+                        text = if (isLiked) "[LIKED]" else "[LIKE]",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = if (isLiked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.clickable { viewModel.toggleCurrentLike() }
+                    )
+                }
             }
 
             // Playback Art / Song Art
@@ -238,6 +319,12 @@ fun NowPlayingScreen(
                 modifier = Modifier.fillMaxWidth().padding(top = 20.dp)
             )
 
+            SleepTimerControl(
+                remainingMs = sleepTimerRemainingMs,
+                onStart = viewModel::startSleepTimer,
+                onCancel = viewModel::cancelSleepTimer
+            )
+
             val kbps = nowPlaying.bitrateKbps.takeIf { it > 0 }
                 ?: estimateKbpsFromSize(nowPlaying.sizeBytes, nowPlaying.durationMs).takeIf { it > 0 }
             AudioMonitorCard(
@@ -283,11 +370,11 @@ fun NowPlayingScreen(
                     
                     LaunchedEffect(activeIndex, motionPreference) {
                         if (activeIndex >= 0 && !listState.isScrollInProgress) {
-                            // Calculate a reasonable offset to center the active item (approximate)
+                            val centerOffset = -(listState.layoutInfo.viewportSize.height / 3)
                             if (motionPreference == MotionPreference.OFF) {
-                                listState.scrollToItem(activeIndex.coerceAtLeast(0))
+                                listState.scrollToItem(activeIndex.coerceAtLeast(0), centerOffset)
                             } else {
-                                listState.animateScrollToItem(activeIndex.coerceAtLeast(0))
+                                listState.animateScrollToItem(activeIndex.coerceAtLeast(0), centerOffset)
                             }
                         }
                     }
@@ -298,20 +385,20 @@ fun NowPlayingScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                        Text(
-                            text = if (isSynced) "[SYNCED LYRICS]" else "[LYRICS]",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .padding(bottom = 8.dp)
-                                .clickable(enabled = isSynced) { lyricsExpanded = !lyricsExpanded }
-                        )
-                        if (lyricsExpanded) Text(
-                            text = "[BACK]",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.clickable { lyricsExpanded = false }.padding(bottom = 8.dp)
-                        )
+                            Column(
+                                modifier = Modifier.weight(1f).clickable { lyricsExpanded = !lyricsExpanded }.padding(vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = "> LYRICS",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = if (isSynced) "SYNCED · TAP A LINE TO SEEK" else "PLAIN TEXT",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                         androidx.compose.foundation.lazy.LazyColumn(
                             state = listState,
@@ -324,8 +411,14 @@ fun NowPlayingScreen(
                                     style = if (isActive) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
                                     fontWeight = if (isActive) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal,
                                     color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                                     modifier = Modifier
                                         .fillMaxWidth()
+                                        .background(
+                                            if (isActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                            else MaterialTheme.colorScheme.surface.copy(alpha = 0f),
+                                            RoundedCornerShape(8.dp)
+                                        )
                                         .clickable(enabled = isSynced) {
                                             viewModel.seekTo(line.startMs)
                                         }
