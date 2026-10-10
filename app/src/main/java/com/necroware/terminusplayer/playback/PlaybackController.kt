@@ -3,6 +3,7 @@ package com.necroware.terminusplayer.playback
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -23,6 +24,9 @@ import com.necroware.terminusplayer.util.toAudioFormatLabel
 import com.necroware.terminusplayer.util.providerIdOrNull
 import com.necroware.terminusplayer.util.streamOffsetMsOrZero
 import com.necroware.terminusplayer.util.withStreamUriAndOffset
+import com.necroware.terminusplayer.util.toMediaItem
+import com.necroware.terminusplayer.util.EXTERNAL_AUDIO_MEDIA_ID_PREFIX
+import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -36,6 +40,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import androidx.media3.common.C
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -100,6 +105,13 @@ class PlaybackController @Inject constructor(
     val state: StateFlow<NowPlayingState> = _state
 
     private val listener = object : Player.Listener {
+        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            _state.value = _state.value.copy(
+                isPlaying = false,
+                connectionError = error.message ?: "Unable to play this audio file"
+            )
+        }
+
         override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
             updateFromController()
         }
@@ -189,9 +201,112 @@ class PlaybackController @Inject constructor(
     }
 
     fun playSongs(items: List<MediaItem>, startIndex: Int) {
+        playSongsWithItems({ items }, startIndex)
+    }
+
+    fun playSongsFromSongs(songs: List<Song>, startIndex: Int) {
+        playSongsWithItems({ withContext(Dispatchers.Default) { songs.map { it.toMediaItem() } } }, startIndex)
+    }
+
+    fun playExternalAudio(uri: Uri) {
+        connect {
+            queueResolutionJob?.cancel()
+            queueResolutionJob = playbackScope.launch {
+                try {
+                    val item = createExternalAudioItem(uri)
+                    withContext(Dispatchers.Main.immediate) {
+                        _state.value = _state.value.copy(connectionError = null)
+                        controller?.apply {
+                            setMediaItem(item)
+                            prepare()
+                            play()
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    _state.value = _state.value.copy(connectionError = e.message ?: "Unable to open this audio file")
+                }
+            }
+        }
+    }
+
+    private suspend fun createExternalAudioItem(uri: Uri): MediaItem = withContext(Dispatchers.IO) {
+        musicRepository.getSongByUri(uri.toString())?.let { song ->
+            return@withContext song.copy(uriString = uri.toString()).toMediaItem()
+        }
+
+        var displayName: String? = null
+        try {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex >= 0) displayName = cursor.getString(nameIndex)
+                }
+            }
+        } catch (_: Exception) {
+            // Some providers do not support metadata queries; the URI still can be played.
+        }
+        val fallbackName = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+            ?: "Unknown audio"
+        val title = (displayName ?: fallbackName).substringAfterLast('/').substringBeforeLast('.', displayName ?: fallbackName)
+            .ifBlank { "Unknown audio" }
+        val metadata = MediaMetadata.Builder().setTitle(title).build()
+        MediaItem.Builder()
+            .setMediaId(EXTERNAL_AUDIO_MEDIA_ID_PREFIX + uri)
+            .setUri(uri)
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
+    /** Inserts a track immediately after the current item without interrupting playback. */
+    fun playSongNext(song: Song) {
+        playbackScope.launch {
+            try {
+                val resolvedUri = musicRepository.getSongUris(listOf(song.id))[song.id] ?: song.uriString
+                val item = withContext(Dispatchers.Default) {
+                    song.copy(uriString = resolvedUri).toMediaItem()
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    val player = controller ?: return@withContext
+                    val currentIndex = player.currentMediaItemIndex
+                    if (player.mediaItemCount == 0) {
+                        player.playWhenReady = false
+                        player.setMediaItem(item)
+                        player.prepare()
+                        return@withContext
+                    }
+
+                    if (currentIndex >= 0 && currentIndex < player.mediaItemCount &&
+                        player.getMediaItemAt(currentIndex).mediaId == song.id
+                    ) return@withContext
+
+                    val existingIndex = (0 until player.mediaItemCount)
+                        .firstOrNull { player.getMediaItemAt(it).mediaId == song.id }
+                    if (existingIndex == currentIndex + 1) return@withContext
+                    if (existingIndex != null) player.removeMediaItem(existingIndex)
+
+                    val updatedCurrentIndex = player.currentMediaItemIndex
+                    val insertIndex = if (updatedCurrentIndex == C.INDEX_UNSET) {
+                        player.mediaItemCount
+                    } else {
+                        (updatedCurrentIndex + 1).coerceAtMost(player.mediaItemCount)
+                    }
+                    player.addMediaItem(insertIndex, item)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(connectionError = e.message ?: "Unable to queue track")
+            }
+        }
+    }
+
+    private fun playSongsWithItems(itemsProvider: suspend () -> List<MediaItem>, startIndex: Int) {
         queueResolutionJob?.cancel()
         queueResolutionJob = playbackScope.launch {
             try {
+                val items = itemsProvider()
                 val resolvedUris = musicRepository.getSongUris(items.map { it.mediaId })
                 val resolvedItems = items.map { item ->
                     resolvedUris[item.mediaId]?.let { item.buildUpon().setUri(Uri.parse(it)).build() } ?: item
@@ -215,6 +330,24 @@ class PlaybackController @Inject constructor(
         controller?.apply {
             if (isPlaying) pause() else play()
         }
+    }
+
+    fun stopPlayback() {
+        controller?.apply {
+            stop()
+            clearMediaItems()
+        }
+        _state.value = _state.value.copy(
+            mediaId = null,
+            title = "",
+            artist = "",
+            album = "",
+            artworkUri = null,
+            durationMs = 0L,
+            positionMs = 0L,
+            isPlaying = false,
+            connectionError = null
+        )
     }
 
     fun setVolume(volume: Float) {

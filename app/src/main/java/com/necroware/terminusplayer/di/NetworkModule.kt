@@ -30,6 +30,9 @@ object NetworkModule {
     @Singleton
     fun provideOkHttpClient(prefsRepo: UserPreferencesRepository): OkHttpClient {
         return OkHttpClient.Builder()
+            .connectTimeout(java.time.Duration.ofSeconds(15))
+            .readTimeout(java.time.Duration.ofSeconds(30))
+            .writeTimeout(java.time.Duration.ofSeconds(30))
             .addInterceptor { chain ->
                 val request = chain.request()
                 val config = prefsRepo.serverConnectionConfig.value

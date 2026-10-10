@@ -11,7 +11,8 @@ import androidx.room.ColumnInfo
         Index(value = ["providerId", "providerRemoteId"], unique = true),
         Index(value = ["artist"]),
         Index(value = ["album"]),
-        Index(value = ["folderPath"])
+        Index(value = ["folderPath"]),
+        Index(value = ["genre"])
     ]
 )
 data class SongEntity(
@@ -30,5 +31,6 @@ data class SongEntity(
     val folderPath: String = "",
     val sizeBytes: Long = 0L,
     val navidromeId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val downloadedUri: String? = null
+    @ColumnInfo(defaultValue = "NULL") val downloadedUri: String? = null,
+    @ColumnInfo(defaultValue = "''") val genre: String = ""
 )
