@@ -24,6 +24,7 @@ import com.necroware.terminusplayer.util.providerIdOrNull
 import com.necroware.terminusplayer.util.streamOffsetMsOrZero
 import com.necroware.terminusplayer.util.toMediaItem
 import com.necroware.terminusplayer.util.withStreamUriAndOffset
+import com.necroware.terminusplayer.util.EXTERNAL_AUDIO_MEDIA_ID_PREFIX
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -390,7 +391,7 @@ class MusicService : MediaSessionService() {
                 val (currentId, pos) = withContext(Dispatchers.Main) {
                     player.currentMediaItem?.mediaId to player.currentPosition
                 }
-                if (currentId != null) {
+                if (currentId != null && !currentId.startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)) {
                     preferencesRepository.setLastPlayed(currentId, pos)
                 }
             }

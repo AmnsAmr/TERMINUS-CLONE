@@ -16,6 +16,8 @@ import com.necroware.terminusplayer.data.database.entity.PlaylistEntity
 import com.necroware.terminusplayer.data.database.entity.PlaylistSongEntity
 import com.necroware.terminusplayer.data.database.entity.SongEntity
 
+import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
+
 @Database(
     entities = [
         SongEntity::class,
@@ -23,9 +25,10 @@ import com.necroware.terminusplayer.data.database.entity.SongEntity
         PlayEventEntity::class,
         PlaylistEntity::class,
         PlaylistSongEntity::class,
-        LyricsCacheEntity::class
+        LyricsCacheEntity::class,
+        UploadQueueEntity::class
     ],
-    version = 9,
+    version = 14,
     exportSchema = false
 )
 abstract class TerminusDatabase : RoomDatabase() {
@@ -34,6 +37,7 @@ abstract class TerminusDatabase : RoomDatabase() {
     abstract fun playEventDao(): PlayEventDao
     abstract fun playlistDao(): PlaylistDao
     abstract fun lyricsCacheDao(): LyricsCacheDao
+    abstract fun uploadQueueDao(): com.necroware.terminusplayer.data.database.dao.UploadQueueDao
 
     companion object {
         const val DATABASE_NAME = "terminus.db"
@@ -80,6 +84,37 @@ abstract class TerminusDatabase : RoomDatabase() {
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS lyrics_cache (cacheKey TEXT NOT NULL PRIMARY KEY, plainLyrics TEXT, syncedLyrics TEXT, fetchedAtEpochMs INTEGER NOT NULL)")
+            }
+        }
+
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS upload_queue (songId TEXT NOT NULL PRIMARY KEY, uriString TEXT NOT NULL, state TEXT NOT NULL, attemptCount INTEGER NOT NULL, addedAtEpochMs INTEGER NOT NULL, title TEXT NOT NULL)")
+            }
+        }
+
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE upload_queue ADD COLUMN errorMessage TEXT DEFAULT NULL")
+            }
+        }
+
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE upload_queue ADD COLUMN forceConvert INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE playlists ADD COLUMN ownerUsername TEXT DEFAULT NULL")
+            }
+        }
+
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE songs ADD COLUMN genre TEXT NOT NULL DEFAULT ''")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_songs_genre ON songs(genre)")
             }
         }
     }

@@ -18,11 +18,11 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
-class NavidromeUploadRepository @Inject constructor(
+open class NavidromeUploadRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val api: NavidromeNativeApiService
 ) {
-    suspend fun quota(): UploadQuotaResponse? = try {
+    open suspend fun quota(): UploadQuotaResponse? = try {
         val response = api.getUploadQuota()
         if (response.isSuccessful) response.body() else {
             response.errorBody()?.close()
@@ -34,7 +34,7 @@ class NavidromeUploadRepository @Inject constructor(
         null
     }
 
-    suspend fun upload(uri: Uri): String {
+    open suspend fun upload(uri: Uri, onProgress: ((Int) -> Unit)? = null): String {
         val (name, size) = withContext(Dispatchers.IO) { fileMetadataFor(uri) }
         val extension = name.substringAfterLast('.', "").lowercase()
         if (extension !in ALLOWED_EXTENSIONS) throw IOException("Unsupported audio format")
@@ -52,7 +52,7 @@ class NavidromeUploadRepository @Inject constructor(
         }
 
         val contentType = withContext(Dispatchers.IO) { context.contentResolver.getType(uri) }
-        val requestBody = object : okhttp3.RequestBody() {
+        val rawRequestBody = object : okhttp3.RequestBody() {
             override fun contentType() = (contentType ?: "application/octet-stream").toMediaTypeOrNull()
             override fun contentLength(): Long = size ?: -1L
             override fun writeTo(sink: okio.BufferedSink) {
@@ -61,6 +61,12 @@ class NavidromeUploadRepository @Inject constructor(
                 input.use { stream -> stream.source().use { source -> sink.writeAll(source) } }
             }
         }
+        val requestBody = if (onProgress != null) {
+            com.necroware.terminusplayer.util.ProgressRequestBody(rawRequestBody, onProgress)
+        } else {
+            rawRequestBody
+        }
+
         val response = api.uploadFile(MultipartBody.Part.createFormData("file", name, requestBody))
         if (!response.isSuccessful) {
             response.errorBody()?.close()
@@ -72,6 +78,38 @@ class NavidromeUploadRepository @Inject constructor(
             throw IOException(message)
         }
         return name
+    }
+
+    open suspend fun checkBulkUploads(uris: List<Uri>): List<String> {
+        if (uris.isEmpty()) return emptyList()
+        val names = uris.mapNotNull { uri ->
+            try { fileMetadataFor(uri).first } catch (e: Exception) { null }
+        }
+        if (names.isEmpty()) return emptyList()
+        val chunkedNames = names.chunked(100) // Avoid too large requests
+        val rejectedList = mutableListOf<String>()
+        for (chunk in chunkedNames) {
+            try {
+                val check = api.checkUploads(UploadCheckRequest(chunk))
+                if (!check.isSuccessful) {
+                    check.errorBody()?.close()
+                    throw IOException("Could not check queued files (${check.code()})")
+                }
+                val result = check.body() ?: throw IOException("Server returned an empty duplicate-check response")
+                rejectedList.addAll(result.rejected)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IOException) {
+                throw e
+            } catch (e: Exception) {
+                throw IOException("Could not check queued files", e)
+            }
+        }
+        return rejectedList
+    }
+
+    open suspend fun getFileName(uri: Uri): String? {
+        return try { fileMetadataFor(uri).first } catch (e: Exception) { null }
     }
 
     private fun fileMetadataFor(uri: Uri): Pair<String, Long?> {

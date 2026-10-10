@@ -10,12 +10,18 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class MainActivityViewModel @Inject constructor(
-    preferencesRepository: UserPreferencesRepository
+    preferencesRepository: UserPreferencesRepository,
+    uploadQueueManager: com.necroware.terminusplayer.data.repository.UploadQueueManager
 ) : ViewModel() {
+
+    init {
+        viewModelScope.launch { uploadQueueManager.resumePendingUploads() }
+    }
 
     val themeId: StateFlow<ThemePresetId> = preferencesRepository.preferences
         .map { it.themeId }

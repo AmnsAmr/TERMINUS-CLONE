@@ -6,6 +6,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import com.necroware.terminusplayer.data.model.Song
 
+const val EXTERNAL_AUDIO_MEDIA_ID_PREFIX = "external-audio:"
+
 private const val EXTRA_ALBUM_ID = "com.necroware.terminusplayer.ALBUM_ID"
 private const val EXTRA_SIZE_BYTES = "com.necroware.terminusplayer.SIZE_BYTES"
 private const val EXTRA_PROVIDER_ID = "com.necroware.terminusplayer.PROVIDER_ID"

@@ -31,7 +31,12 @@ object DatabaseModule {
                 TerminusDatabase.MIGRATION_5_6,
                 TerminusDatabase.MIGRATION_6_7,
                 TerminusDatabase.MIGRATION_7_8,
-                TerminusDatabase.MIGRATION_8_9
+                TerminusDatabase.MIGRATION_8_9,
+                TerminusDatabase.MIGRATION_9_10,
+                TerminusDatabase.MIGRATION_10_11,
+                TerminusDatabase.MIGRATION_11_12,
+                TerminusDatabase.MIGRATION_12_13,
+                TerminusDatabase.MIGRATION_13_14
             )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()
@@ -51,4 +56,7 @@ object DatabaseModule {
 
     @Provides
     fun provideLyricsCacheDao(db: TerminusDatabase): com.necroware.terminusplayer.data.database.dao.LyricsCacheDao = db.lyricsCacheDao()
+
+    @Provides
+    fun provideUploadQueueDao(db: TerminusDatabase): com.necroware.terminusplayer.data.database.dao.UploadQueueDao = db.uploadQueueDao()
 }
