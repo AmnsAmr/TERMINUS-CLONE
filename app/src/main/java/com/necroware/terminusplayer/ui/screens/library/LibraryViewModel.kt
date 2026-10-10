@@ -39,12 +39,17 @@ class LibraryViewModel @Inject constructor(
     private val uploadQueueManager: UploadQueueManager
 ) : ViewModel() {
 
+    private val _isLibraryLoaded = MutableStateFlow(false)
+    val isLibraryLoaded: StateFlow<Boolean> = _isLibraryLoaded.asStateFlow()
+
     val sortOrder: StateFlow<LibrarySortOrder> = preferencesRepository.preferences
         .map { it.librarySortOrder }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LibrarySortOrder())
 
     val songs: StateFlow<List<Song>> =
-        combine(repository.observeAllSongs(), sortOrder) { songs, order -> songs.sortedWith(order) }
+        combine(repository.observeAllSongs(), sortOrder) { songs, order ->
+            songs.sortedWith(order).also { _isLibraryLoaded.value = true }
+        }
             .flowOn(kotlinx.coroutines.Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 

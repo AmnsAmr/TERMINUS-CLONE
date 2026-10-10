@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -38,13 +39,16 @@ import androidx.compose.ui.window.Dialog
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,16 +70,18 @@ import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.prefs.LibrarySortOrder
 import com.necroware.terminusplayer.data.prefs.SortDirection
 import com.necroware.terminusplayer.data.prefs.SortField
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import com.necroware.terminusplayer.ui.components.SongArt
 import com.necroware.terminusplayer.ui.components.TerminalBorder
 import com.necroware.terminusplayer.ui.components.TerminalState
 import com.necroware.terminusplayer.util.toMinutesSeconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
+import java.text.DateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun LibraryScreen(
@@ -83,9 +89,10 @@ fun LibraryScreen(
     onAlbumClick: (String) -> Unit,
     onArtistClick: (String) -> Unit,
     onSearchClick: () -> Unit,
+    onInitialContentReady: () -> Unit = {},
     viewModel: LibraryViewModel = hiltViewModel()
 ) {
-    var selectedTab by remember { mutableStateOf(LibraryTab.SONGS) }
+    var selectedTab by rememberSaveable { mutableStateOf(LibraryTab.SONGS) }
     val songs by viewModel.songs.collectAsStateWithLifecycle()
     val localSongs by viewModel.localSongs.collectAsStateWithLifecycle()
     val albums by viewModel.albums.collectAsStateWithLifecycle()
@@ -93,6 +100,14 @@ fun LibraryScreen(
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val sortOrder by viewModel.sortOrder.collectAsStateWithLifecycle()
     val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
+    val isLibraryLoaded by viewModel.isLibraryLoaded.collectAsStateWithLifecycle()
+    var initialSongListPrepared by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isLibraryLoaded, songs.isEmpty(), initialSongListPrepared) {
+        if (isLibraryLoaded && (songs.isEmpty() || initialSongListPrepared)) {
+            onInitialContentReady()
+        }
+    }
 
     var playlistSong by remember { mutableStateOf<Song?>(null) }
 
@@ -211,7 +226,8 @@ fun LibraryScreen(
                         songs, selectedSongs, sortOrder, handleSongClick, handleSongLongPress,
                         onLike = { viewModel.toggleLike(it.id) },
                         onAddToPlaylist = { playlistSong = it },
-                        onPlayNext = viewModel::playNext
+                        onPlayNext = viewModel::playNext,
+                        onListPrepared = { initialSongListPrepared = true }
                     )
                 }
                 LibraryTab.LOCAL_MUSIC -> {
@@ -261,7 +277,7 @@ fun LibraryScreen(
                                     itemCount = albums.size,
                                     scrollTargets = remember(albums) { albums.indices.toList() },
                                     initialIndex = listState.firstVisibleItemIndex.coerceIn(0, albums.lastIndex),
-                                    itemLabel = { index -> "ALBUM · ${albums[index].title}" }
+                                    dragLabel = { "" }
                                 )
                             }
                         }
@@ -296,7 +312,7 @@ fun LibraryScreen(
                                     itemCount = artists.size,
                                     scrollTargets = remember(artists) { artists.indices.toList() },
                                     initialIndex = listState.firstVisibleItemIndex.coerceIn(0, artists.lastIndex),
-                                    itemLabel = { index -> "ARTIST · ${artists[index].name}" }
+                                    dragLabel = { "" }
                                 )
                             }
                         }
@@ -571,38 +587,49 @@ private fun SongList(
     onSongLongPress: (Song) -> Unit,
     onLike: (Song) -> Unit,
     onAddToPlaylist: (Song) -> Unit,
-    onPlayNext: (Song) -> Unit
+    onPlayNext: (Song) -> Unit,
+    onListPrepared: () -> Unit = {}
 ) {
     val listState = rememberLazyListState()
     val haptic = LocalHapticFeedback.current
+    val preparedData by produceState<PreparedSongList?>(null, songs, sortOrder.field) {
+        value = withContext(Dispatchers.Default) {
+            val sections = when (sortOrder.field) {
+                SortField.ARTIST -> songs.groupBy { it.artist.ifBlank { "Unknown artist" } }
+                    .map { (label, sectionSongs) -> SongListSection(label, sectionSongs) }
+                SortField.ALBUM -> songs.groupBy { it.album.ifBlank { "Unknown album" } }
+                    .map { (label, sectionSongs) -> SongListSection(label, sectionSongs) }
+                else -> listOf(SongListSection(null, songs))
+            }
+            val scrollTargets = buildList {
+                var listIndex = 0
+                sections.forEach { section ->
+                    if (section.label != null) listIndex++
+                    repeat(section.songs.size) { add(listIndex++) }
+                }
+            }
+            PreparedSongList(
+                sourceSongs = songs,
+                sortField = sortOrder.field,
+                sections = sections,
+                scrollTargets = scrollTargets,
+                songIndexById = songs.withIndex().associate { it.value.id to it.index }
+            )
+        }
+    }
+    val prepared = preparedData?.takeIf { it.sourceSongs === songs && it.sortField == sortOrder.field }
+    LaunchedEffect(prepared, songs.isEmpty()) {
+        if (prepared != null || songs.isEmpty()) onListPrepared()
+    }
     val onLongPress: (Song) -> Unit = { song ->
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         onSongLongPress(song)
     }
-    val sections = remember(songs, sortOrder.field) {
-        when (sortOrder.field) {
-            SortField.ARTIST -> songs.groupBy { it.artist.ifBlank { "Unknown artist" } }
-                .map { (label, sectionSongs) -> SongListSection(label, sectionSongs) }
-            SortField.ALBUM -> songs.groupBy { it.album.ifBlank { "Unknown album" } }
-                .map { (label, sectionSongs) -> SongListSection(label, sectionSongs) }
-            else -> listOf(SongListSection(null, songs))
-        }
-    }
-    val scrollTargets = remember(sections) {
-        buildList {
-            var listIndex = 0
-            sections.forEach { section ->
-                if (section.label != null) listIndex++ // sticky header
-                repeat(section.songs.size) { add(listIndex++) }
-            }
-        }
-    }
-    val songIndexById = remember(songs) { songs.withIndex().associate { it.value.id to it.index } }
-    val visibleSongIndex = if (songs.isEmpty()) {
+    val visibleSongIndex = if (songs.isEmpty() || prepared == null) {
         0
     } else {
         listState.layoutInfo.visibleItemsInfo.firstNotNullOfOrNull { item ->
-            (item.key as? String)?.let(songIndexById::get)
+            (item.key as? String)?.let(prepared.songIndexById::get)
         }?.coerceIn(0, songs.lastIndex) ?: 0
     }
 
@@ -613,13 +640,17 @@ private fun SongList(
                 detail = "Adjust your library folders or sync a music server.",
                 modifier = Modifier.fillMaxWidth()
             )
+        } else if (prepared == null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            }
         } else {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                sections.forEach { section ->
+                prepared.sections.forEach { section ->
                     section.label?.let { label ->
                         stickyHeader(key = "section:$label") {
                             Text(
@@ -647,22 +678,18 @@ private fun SongList(
             }
         }
 
-        if (songs.size > 40) {
+        if (prepared != null && songs.size > 40) {
             FastScrollRail(
                 modifier = Modifier.align(Alignment.CenterEnd),
                 listState = listState,
                 itemCount = songs.size,
-                scrollTargets = scrollTargets,
+                scrollTargets = prepared.scrollTargets,
                 initialIndex = visibleSongIndex,
-                itemLabel = { index ->
-                    val song = songs[index]
-                    when (sortOrder.field) {
-                        SortField.TITLE -> "TITLE · ${song.title}"
-                        SortField.ARTIST -> "ARTIST · ${song.artist.ifBlank { "Unknown artist" }}\n${song.title}"
-                        SortField.ALBUM -> "ALBUM · ${song.album.ifBlank { "Unknown album" }}\n${song.title}"
-                        SortField.DATE_ADDED -> "ADDED · ${song.dateAddedLabel()}\n${song.title}"
-                        SortField.DURATION -> "DURATION · ${song.duration.toMinutesSeconds()}\n${song.title}"
-                    }
+                dragLabel = { index ->
+                    songs.getOrNull(index)?.dateAdded?.takeIf { it > 0L }?.let { addedAt ->
+                        val timestamp = if (addedAt < 10_000_000_000L) addedAt * 1_000L else addedAt
+                        DateFormat.getDateInstance(DateFormat.MEDIUM, Locale.getDefault()).format(Date(timestamp))
+                    }.orEmpty()
                 }
             )
         }
@@ -671,11 +698,13 @@ private fun SongList(
 
 private data class SongListSection(val label: String?, val songs: List<Song>)
 
-private fun Song.dateAddedLabel(): String {
-    if (dateAdded <= 0L) return "Unknown date"
-    val millis = if (dateAdded < 100_000_000_000L) dateAdded * 1_000L else dateAdded
-    return SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(millis))
-}
+private data class PreparedSongList(
+    val sourceSongs: List<Song>,
+    val sortField: SortField,
+    val sections: List<SongListSection>,
+    val scrollTargets: List<Int>,
+    val songIndexById: Map<String, Int>
+)
 
 @Composable
 private fun FastScrollRail(
@@ -684,7 +713,7 @@ private fun FastScrollRail(
     itemCount: Int,
     scrollTargets: List<Int>,
     initialIndex: Int,
-    itemLabel: (Int) -> String = { "" }
+    dragLabel: (Int) -> String
 ) {
     val scope = rememberCoroutineScope()
     var railHeightPx by remember { mutableIntStateOf(1) }
@@ -718,7 +747,7 @@ private fun FastScrollRail(
         (activeIndex.toFloat() / (itemCount - 1).coerceAtLeast(1)) * (railHeightPx - thumbHeightPx).coerceAtLeast(0f)
     } else thumbTopPx
     val labelTop = with(androidx.compose.ui.platform.LocalDensity.current) {
-        (currentThumbTop - 14.dp.toPx()).coerceIn(0f, (railHeightPx - 48.dp.toPx()).coerceAtLeast(0f)).toDp()
+        (currentThumbTop - 4.dp.toPx()).coerceIn(0f, (railHeightPx - 28.dp.toPx()).coerceAtLeast(0f)).toDp()
     }
     fun jumpTo(y: Float) {
         val usableHeight = (railHeightPx - thumbHeightPx).coerceAtLeast(1f)
@@ -730,83 +759,81 @@ private fun FastScrollRail(
 
     Box(
         modifier = modifier
-            .width(48.dp)
             .fillMaxSize()
-            .semantics { contentDescription = "Drag to fast scroll the library" }
             .onSizeChanged { railHeightPx = it.height.coerceAtLeast(1) }
             .graphicsLayer { this.alpha = alpha }
-            .then(if (visible || dragging) Modifier
-                .pointerInput(itemCount, scrollTargets, railHeightPx) {
-                    detectTapGestures { position ->
-                        jumpTo(position.y)
-                        dragging = true
-                        scope.launch {
-                            delay(800)
-                            dragging = false
-                        }
-                    }
-                }
-                .pointerInput(itemCount, scrollTargets, railHeightPx) {
-                    detectDragGestures(
-                        onDragStart = { position ->
-                            dragging = true
-                            jumpTo(position.y)
-                        },
-                        onDragEnd = { dragging = false },
-                        onDragCancel = { dragging = false }
-                    ) { change, _ ->
-                        change.consume()
-                        jumpTo(change.position.y)
-                    }
-                }
-            else Modifier)
     ) {
         if (visible || dragging) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(end = 10.dp)
-                    .width(3.dp)
+                    .width(48.dp)
                     .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f), RoundedCornerShape(50))
-            )
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(end = 4.dp)
-                    .offset { IntOffset(0, currentThumbTop.roundToInt()) }
-                    .width(4.dp)
-                    .height(24.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(MaterialTheme.colorScheme.primary)
-            )
-            if (dragging) {
-                val labelLines = itemLabel(activeIndex).split('\n', limit = 2)
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .offset(
-                            x = (-54).dp,
-                            y = labelTop
+                    .semantics { contentDescription = "Drag to fast scroll the library" }
+                    .pointerInput(itemCount, scrollTargets, railHeightPx) {
+                        detectTapGestures { position ->
+                            jumpTo(position.y)
+                            dragging = true
+                            scope.launch {
+                                delay(800)
+                                dragging = false
+                            }
+                        }
+                    }
+                    .pointerInput(itemCount, scrollTargets, railHeightPx) {
+                        detectDragGestures(
+                            onDragStart = { position ->
+                                dragging = true
+                                jumpTo(position.y)
+                            },
+                            onDragEnd = { dragging = false },
+                            onDragCancel = { dragging = false }
+                        ) { change, _ ->
+                            change.consume()
+                            jumpTo(change.position.y)
+                        }
+                    }
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(end = 10.dp)
+                                .width(3.dp)
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f), RoundedCornerShape(50))
                         )
-                        .width(176.dp)
-                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
-                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
-                        .padding(horizontal = 10.dp, vertical = 7.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    labelLines.forEach { line ->
-                        Text(
-                            text = line,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(end = 4.dp)
+                                .offset { IntOffset(0, currentThumbTop.roundToInt()) }
+                                .width(4.dp)
+                                .height(24.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(MaterialTheme.colorScheme.primary)
                         )
                     }
-                }
             }
+
+        val currentDragLabel = dragLabel(activeIndex)
+        if (dragging && currentDragLabel.isNotBlank()) {
+            Text(
+                text = currentDragLabel,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(
+                        x = (-12).dp,
+                        y = labelTop
+                    )
+                    .widthIn(max = 140.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

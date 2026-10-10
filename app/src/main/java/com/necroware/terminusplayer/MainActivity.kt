@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -31,9 +32,12 @@ import com.necroware.terminusplayer.ui.navigation.TerminusNavGraph
 import com.necroware.terminusplayer.ui.theme.TerminusTheme
 import com.necroware.terminusplayer.ui.theme.themePresetById
 import dagger.hilt.android.AndroidEntryPoint
+import java.util.concurrent.atomic.AtomicBoolean
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    private val initialContentReady = AtomicBoolean(false)
 
     private val essentialAudioPermission: String
         get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -48,7 +52,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashStartedAt = SystemClock.uptimeMillis()
         installSplashScreen().setKeepOnScreenCondition {
-            SystemClock.uptimeMillis() - splashStartedAt < MIN_SPLASH_DURATION_MS
+            val elapsed = SystemClock.uptimeMillis() - splashStartedAt
+            elapsed < MIN_SPLASH_DURATION_MS ||
+                (!initialContentReady.get() && elapsed < MAX_SPLASH_WAIT_MS)
         }
         super.onCreate(savedInstanceState)
 
@@ -82,8 +88,12 @@ class MainActivity : ComponentActivity() {
                     }
 
                     if (hasEssentialPermission && hasNotificationPermission) {
-                        TerminusNavGraph(motionPreference = motionPreference)
+                        TerminusNavGraph(
+                            motionPreference = motionPreference,
+                            onInitialContentReady = { initialContentReady.set(true) }
+                        )
                     } else {
+                        SideEffect { initialContentReady.set(true) }
                         PermissionGate(onRequestPermission = {
                             val reqs = mutableListOf(essentialAudioPermission)
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -99,6 +109,7 @@ class MainActivity : ComponentActivity() {
 
     private companion object {
         const val MIN_SPLASH_DURATION_MS = 650L
+        const val MAX_SPLASH_WAIT_MS = 3_000L
     }
 }
 
