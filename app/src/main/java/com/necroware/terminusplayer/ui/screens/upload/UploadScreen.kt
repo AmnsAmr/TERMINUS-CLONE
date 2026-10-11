@@ -33,7 +33,6 @@ fun UploadScreen(
     val status by viewModel.uploadStatus.collectAsStateWithLifecycle()
     val recommendedSongs by viewModel.recommendedSongs.collectAsStateWithLifecycle()
     val queue by viewModel.queue.collectAsStateWithLifecycle()
-    val activeProgress by viewModel.activeProgress.collectAsStateWithLifecycle()
 
     val fileLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -115,7 +114,7 @@ fun UploadScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
                     Text("> QUEUE_", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
-                    Text("${queue.count { it.state == "UPLOADING" }} active · ${queue.count { it.state == "WAITING" || it.state == "FAILED" }} pending · ${queue.count { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }} failed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${queue.count { it.state == "UPLOADING" || it.state == "DOWNLOADING" }} active · ${queue.count { it.state == "WAITING" || it.state == "FAILED" }} pending · ${queue.count { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }} failed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                     if (queue.any { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }) {
@@ -136,7 +135,6 @@ fun UploadScreen(
             items(queue, key = { it.songId }) { item ->
                 UploadQueueRow(
                     item = item,
-                    progress = activeProgress?.takeIf { it.first == item.songId }?.second,
                     onRetry = { viewModel.retryUpload(item.songId) },
                     onRemove = { viewModel.removeFromQueue(item.songId) }
                 )
@@ -148,7 +146,6 @@ fun UploadScreen(
 @Composable
 private fun UploadQueueRow(
     item: UploadQueueEntity,
-    progress: Int?,
     onRetry: () -> Unit,
     onRemove: () -> Unit
 ) {
@@ -165,6 +162,7 @@ private fun UploadQueueRow(
             Text(
                 text = when (item.state) {
                     "UPLOADING" -> "UPLOADING · attempt ${item.attemptCount + 1} of 3"
+                    "DOWNLOADING" -> "DOWNLOADING · attempt ${item.attemptCount + 1} of 3"
                     "CONVERTING" -> "WAITING IN QUEUE"
                     "WAITING" -> "WAITING IN QUEUE"
                     "FAILED" -> "RETRYING · attempt ${item.attemptCount} of 3"
@@ -177,14 +175,22 @@ private fun UploadQueueRow(
                 style = MaterialTheme.typography.labelSmall,
                 color = stateColor
             )
-            if (item.state == "UPLOADING" && progress != null) {
+            if (item.state == "UPLOADING" || item.state == "DOWNLOADING") {
+                val total = item.totalBytes?.takeIf { it > 0L }
+                val fraction = total?.let { (item.bytesTransferred.toFloat() / it).coerceIn(0f, 1f) }
+                if (fraction != null) {
                 LinearProgressIndicator(
-                    progress = progress / 100f,
+                    progress = { fraction },
                     modifier = Modifier.fillMaxWidth(),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant
                 )
-                Text("$progress%", style = MaterialTheme.typography.bodySmall, color = stateColor)
+                    val percent = (fraction * 100).toInt()
+                    Text("$percent% · ${android.text.format.Formatter.formatShortFileSize(androidx.compose.ui.platform.LocalContext.current, item.bytesTransferred)} / ${android.text.format.Formatter.formatShortFileSize(androidx.compose.ui.platform.LocalContext.current, total ?: 0L)}", style = MaterialTheme.typography.bodySmall, color = stateColor)
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary, trackColor = MaterialTheme.colorScheme.surfaceVariant)
+                    Text("${android.text.format.Formatter.formatShortFileSize(androidx.compose.ui.platform.LocalContext.current, item.bytesTransferred)} transferred · total unknown", style = MaterialTheme.typography.bodySmall, color = stateColor)
+                }
             }
             item.errorMessage?.takeIf { it.isNotBlank() }?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)

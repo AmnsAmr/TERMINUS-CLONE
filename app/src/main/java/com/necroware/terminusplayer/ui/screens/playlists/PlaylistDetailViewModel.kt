@@ -6,8 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.model.Playlist
 import com.necroware.terminusplayer.data.repository.MusicRepository
-import com.necroware.terminusplayer.data.repository.NavidromeUploadRepository
-import android.net.Uri
+import com.necroware.terminusplayer.data.repository.UploadQueueManager
 import com.necroware.terminusplayer.playback.PlaybackController
 import com.necroware.terminusplayer.util.toMediaItems
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -33,7 +32,7 @@ class PlaylistDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repository: MusicRepository,
     private val playbackController: PlaybackController,
-    private val uploadRepository: NavidromeUploadRepository
+    private val uploadQueueManager: UploadQueueManager
 ) : ViewModel() {
 
     private val rawArg: String = savedStateHandle.get<String>("kind").orEmpty()
@@ -47,6 +46,8 @@ class PlaylistDetailViewModel @Inject constructor(
     val uiState: StateFlow<PlaylistDetailUiState> = _uiState.asStateFlow()
     private val _playlists = MutableStateFlow<List<Playlist>>(emptyList())
     val playlists: StateFlow<List<Playlist>> = _playlists.asStateFlow()
+    private val _actionMessage = MutableStateFlow<String?>(null)
+    val actionMessage: StateFlow<String?> = _actionMessage.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -114,19 +115,40 @@ class PlaylistDetailViewModel @Inject constructor(
 
     
     fun downloadAll(force: Boolean = false) = viewModelScope.launch {
-        val songs = _uiState.value.songs
-        songs.forEach { song ->
-            try { repository.downloadSong(song.id, force) } catch (_: Exception) {}
+        try {
+            val songs = _uiState.value.songs.filter { it.providerId == "navidrome" }
+            uploadQueueManager.enqueueDownloads(songs, force)
+            _actionMessage.value = "Queued ${songs.size} downloads. Track progress in Stats."
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not queue downloads: ${e.message ?: "Unknown error"}"
         }
     }
     
     fun downloadSong(song: Song) = viewModelScope.launch {
-        try { repository.downloadSong(song.id) } catch (_: Exception) {}
+        try {
+            uploadQueueManager.enqueueDownloads(listOf(song))
+            _actionMessage.value = "Queued ${song.title} for download. Track progress in Stats."
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not queue download: ${e.message ?: "Unknown error"}"
+        }
     }
 
     fun uploadSong(song: Song) = viewModelScope.launch {
-        try { uploadRepository.upload(Uri.parse(song.uriString)) } catch (_: Exception) {}
+        try {
+            uploadQueueManager.enqueueUploads(listOf(song))
+            _actionMessage.value = "Queued ${song.title} for upload. Track progress in Stats."
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not queue upload: ${e.message ?: "Unknown error"}"
+        }
     }
+
+    fun dismissActionMessage() { _actionMessage.value = null }
 
     fun playFrom(song: Song) {
         val songs = _uiState.value.songs

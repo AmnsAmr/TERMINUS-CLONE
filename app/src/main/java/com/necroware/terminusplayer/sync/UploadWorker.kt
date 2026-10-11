@@ -1,13 +1,8 @@
 package com.necroware.terminusplayer.sync
 
-import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
-import android.os.Build
-import android.app.PendingIntent
-import androidx.core.app.NotificationCompat
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
@@ -15,23 +10,33 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.necroware.terminusplayer.data.repository.NavidromeUploadRepository
 import com.necroware.terminusplayer.data.database.dao.UploadQueueDao
+import com.necroware.terminusplayer.data.repository.DownloadTransferRepository
+import com.necroware.terminusplayer.data.repository.UploadQueueManager
+import com.necroware.terminusplayer.data.repository.DuplicateUploadException
+import com.necroware.terminusplayer.data.repository.PermanentTransferException
+import com.necroware.terminusplayer.util.TransferProgress
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
-import com.necroware.terminusplayer.MainActivity
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import java.io.IOException
 
 @HiltWorker
 class UploadWorker @AssistedInject constructor(
     @Assisted private val context: Context,
     @Assisted params: WorkerParameters,
     private val uploadRepository: NavidromeUploadRepository,
-    private val uploadQueueDao: UploadQueueDao
+    private val uploadQueueDao: UploadQueueDao,
+    private val downloadRepository: DownloadTransferRepository
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        createChannel(notificationManager)
+        TransferNotifications.createChannel(context)
+        notificationManager.cancel(TransferNotifications.QUEUE_NOTIFICATION_ID)
         uploadQueueDao.resetUploadingToWaiting()
 
         val initialAll = uploadQueueDao.getAll()
@@ -40,35 +45,43 @@ class UploadWorker @AssistedInject constructor(
         val pendingItems = initialAll.filter { it.state == "WAITING" || (it.state == "FAILED" && it.attemptCount < 3) }
         if (pendingItems.isEmpty()) {
             notificationManager.cancel(NOTIFICATION_ID)
+            notificationManager.cancel(TransferNotifications.QUEUE_NOTIFICATION_ID)
             return Result.success()
         }
 
-        val initialNotification = buildOngoingNotification(
-            "Preparing upload",
-            "Checking ${pendingItems.size} queued files…",
-            -1
+        val initialNotification = TransferNotifications.builder(
+            context,
+            "Preparing transfers",
+            "Checking ${pendingItems.size} queued songs…",
+            -1,
+            false
         ).build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             setForeground(ForegroundInfo(NOTIFICATION_ID, initialNotification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
         } else {
             setForeground(ForegroundInfo(NOTIFICATION_ID, initialNotification))
         }
 
-        val pendingUris = pendingItems.map { Uri.parse(it.uriString) }
+        val pendingUris = pendingItems.filter { it.transferType == UploadQueueManager.TRANSFER_UPLOAD }.map { Uri.parse(it.uriString) }
         val rejectedNames = try {
             uploadRepository.checkBulkUploads(pendingUris)
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             // Keep the Room rows waiting and let WorkManager retry this
             // preflight instead of leaving a failed worker with a stuck queue.
+            pendingItems.filter { it.transferType == UploadQueueManager.TRANSFER_UPLOAD }.forEach {
+                uploadQueueDao.updateStateWithError(it.songId, "WAITING", it.attemptCount, "Duplicate check failed: ${e.message ?: "server unavailable"}")
+            }
             notificationManager.cancel(NOTIFICATION_ID)
+            TransferNotifications.postQueued(context, pendingItems.size, "Duplicate check failed · retry scheduled\n${e.message ?: "Server unavailable"}")
             return Result.retry()
         }
         
         var alreadyExistsCount = 0
         if (rejectedNames.isNotEmpty()) {
             for (item in pendingItems) {
+                if (item.transferType != UploadQueueManager.TRANSFER_UPLOAD) continue
                 val name = uploadRepository.getFileName(Uri.parse(item.uriString))
                 if (name != null && name in rejectedNames) {
                     uploadQueueDao.updateState(item.songId, "ALREADY_EXISTS", item.attemptCount)
@@ -77,46 +90,84 @@ class UploadWorker @AssistedInject constructor(
             }
         }
 
-        val total = pendingItems.size
+        var total = pendingItems.size
         var completedCount = alreadyExistsCount
         var failedCount = 0
+        val failureSummaries = mutableListOf<String>()
 
         var currentItem = uploadQueueDao.getNext()
 
         while (currentItem != null) {
             val item = currentItem
-            uploadQueueDao.updateState(item.songId, "UPLOADING", item.attemptCount)
-            updateNotification(notificationManager, "Uploading music", "${completedCount + failedCount + 1} / $total files\n\nUploading ${item.title}...", false)
+            total = maxOf(total, completedCount + failedCount + uploadQueueDao.countPending())
+            val queuePosition = completedCount + failedCount + 1
+            val isDownload = item.transferType == UploadQueueManager.TRANSFER_DOWNLOAD
+            val activeState = if (isDownload) "DOWNLOADING" else "UPLOADING"
+            val claimed = uploadQueueDao.markTransferStarted(item.songId, activeState, item.attemptCount, item.totalBytes, System.currentTimeMillis())
+            if (claimed == 0) {
+                currentItem = uploadQueueDao.getNext()
+                continue
+            }
+            val operation = if (isDownload) "Downloading" else "Uploading"
+            if (isDownload && item.partialUri != null) {
+                try {
+                    downloadRepository.cleanupInterruptedDownload(item.partialUri)
+                    uploadQueueDao.clearPartialUri(item.songId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    uploadQueueDao.updateStateWithError(item.songId, "PERMANENT_FAILURE", item.attemptCount + 1, "Could not remove incomplete download: ${e.message ?: "unknown error"}")
+                    failedCount++
+                    currentItem = uploadQueueDao.getNext()
+                    continue
+                }
+            }
+            setProgressAsync(workDataOf(
+                KEY_SONG_ID to item.songId,
+                KEY_PROGRESS to -1,
+                KEY_BYTES to 0L,
+                KEY_TOTAL_BYTES to (item.totalBytes ?: -1L)
+            ))
+            updateNotification(notificationManager, operation, "$queuePosition / $total songs\n${item.title}\nStarting transfer…", false)
 
             try {
-                val uploadUri = Uri.parse(item.uriString)
-                uploadQueueDao.updateState(item.songId, "UPLOADING", item.attemptCount)
-                uploadRepository.upload(uploadUri) { progress ->
-                    setProgressAsync(workDataOf(KEY_SONG_ID to item.songId, KEY_PROGRESS to progress))
-                    updateNotification(notificationManager, "Uploading music", "${completedCount + failedCount + 1} / $total files\n\nUploading ${item.title}\n$progress%", false, progress)
+                runTrackedTransfer(item.songId, notificationManager, operation, item.title, queuePosition, total) { reportProgress ->
+                    if (isDownload) {
+                        val remoteSongId = item.remoteSongId ?: throw IOException("Download is missing its server track ID")
+                        downloadRepository.downloadSong(remoteSongId, item.forceDownload, reportProgress)
+                    } else {
+                        uploadRepository.upload(Uri.parse(item.uriString), reportProgress)
+                    }
                 }
+                uploadQueueDao.clearPartialUri(item.songId)
                 uploadQueueDao.updateState(item.songId, "SUCCESS", item.attemptCount + 1)
                 completedCount++
             } catch (e: CancellationException) {
                 // A user stop keeps this item queued so it can be resumed later.
-                uploadQueueDao.updateState(item.songId, "WAITING", item.attemptCount)
+                uploadQueueDao.markInterrupted(item.songId, "Transfer cancelled; queued to resume")
                 notificationManager.cancel(NOTIFICATION_ID)
                 throw e
             } catch (e: Exception) {
+                uploadQueueDao.clearPartialUri(item.songId)
                 val msg = e.message ?: ""
-                if (msg.contains("already exists", ignoreCase = true) || msg.contains("Server did not accept", ignoreCase = true)) {
-                    // It was rejected immediately, mark as ALREADY_EXISTS or PERMANENT_FAILURE without retrying
+                if (!isDownload && e is DuplicateUploadException) {
                     uploadQueueDao.updateStateWithError(item.songId, "ALREADY_EXISTS", item.attemptCount, msg)
                     completedCount++
+                } else if (e is PermanentTransferException) {
+                    val attempts = item.attemptCount + 1
+                    uploadQueueDao.updateStateWithError(item.songId, "PERMANENT_FAILURE", attempts, msg)
+                    failedCount++
+                    failureSummaries += "${item.title}: ${msg.ifBlank { "Transfer failed" }}"
                 } else {
                     val nextAttempt = item.attemptCount + 1
                     if (nextAttempt >= 3) {
                         uploadQueueDao.updateStateWithError(item.songId, "PERMANENT_FAILURE", nextAttempt, msg)
                         failedCount++
+                        failureSummaries += "${item.title}: ${msg.ifBlank { "Transfer failed" }}"
                     } else {
                         uploadQueueDao.updateStateWithError(item.songId, "FAILED", nextAttempt, msg)
-                        updateNotification(notificationManager, "Upload failed", "Retrying ${item.title} ($nextAttempt/3)", false)
-                        delay(2000)
+                        updateNotification(notificationManager, "$operation retrying", "$queuePosition / $total songs\n${item.title}\nAttempt $nextAttempt of 3 · ${msg.ifBlank { "Temporary transfer error" }}", false)
+                        delay(1000L shl (nextAttempt - 1))
                         // Do not continue here, let it fetch the next item. Since the current one is still FAILED and attempt < 3, it will be fetched again if it's the oldest.
                     }
                 }
@@ -125,8 +176,11 @@ class UploadWorker @AssistedInject constructor(
             currentItem = uploadQueueDao.getNext()
         }
 
-        val finalTitle = if (failedCount == 0) "Music upload complete" else "Upload finished"
-        val finalBody = if (failedCount == 0) "$completedCount files uploaded (including duplicates)" else "$completedCount uploaded • $failedCount failed"
+        val finalTitle = if (failedCount == 0) "Transfers complete" else "Transfers finished with errors"
+        val finalBody = buildString {
+            append("$completedCount completed · $failedCount failed")
+            failureSummaries.take(2).forEach { append("\n").append(it) }
+        }
         
         updateNotification(notificationManager, finalTitle, finalBody, true)
         
@@ -135,71 +189,65 @@ class UploadWorker @AssistedInject constructor(
         return Result.success()
     }
 
-    private fun updateNotification(notificationManager: NotificationManager, title: String, text: String, finished: Boolean, progress: Int = -1) {
-        val builder = buildOngoingNotification(title, text, progress, finished)
-        notificationManager.notify(NOTIFICATION_ID, builder.build())
-    }
-
-    private fun buildOngoingNotification(title: String, text: String, progress: Int = -1, finished: Boolean = false): NotificationCompat.Builder {
-        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setOngoing(!finished)
-            .setOnlyAlertOnce(true)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setSubText("TERMINUS · UPLOAD QUEUE")
-            .setContentIntent(openAppPendingIntent())
-
-        if (!finished) {
-            val cancelIntent = Intent(context, CancelUploadNotificationReceiver::class.java)
-                .setAction(CancelUploadNotificationReceiver.ACTION_CANCEL_UPLOADS)
-            val cancelPendingIntent = PendingIntent.getBroadcast(
-                context,
-                CANCEL_REQUEST_CODE,
-                cancelIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "CANCEL QUEUE", cancelPendingIntent)
-        }
-            
-        if (!finished) {
-            if (progress >= 0) {
-                builder.setProgress(100, progress, false)
-            } else {
-                builder.setProgress(0, 0, true)
+    private suspend fun runTrackedTransfer(
+        songId: String,
+        notificationManager: NotificationManager,
+        operation: String,
+        title: String,
+        position: Int,
+        total: Int,
+        transfer: suspend ((TransferProgress) -> Unit) -> Unit
+    ) = coroutineScope {
+        val progressChannel = Channel<TransferProgress>(Channel.UNLIMITED)
+        val progressJob = launch {
+            for (progress in progressChannel) {
+                val now = System.currentTimeMillis()
+                uploadQueueDao.updateProgress(songId, progress.bytesTransferred, progress.totalBytes, progress.partialUri, now)
+                val percent = progress.totalBytes?.takeIf { it > 0L }
+                    ?.let { ((progress.bytesTransferred * 100L) / it).toInt().coerceIn(0, 100) }
+                setProgressAsync(workDataOf(
+                    KEY_SONG_ID to songId,
+                    KEY_PROGRESS to (percent ?: -1),
+                    KEY_BYTES to progress.bytesTransferred,
+                    KEY_TOTAL_BYTES to (progress.totalBytes ?: -1L)
+                ))
+                val progressLabel = percent?.let { "$it%" } ?: "${formatBytes(progress.bytesTransferred)} transferred"
+                val byteLabel = progress.totalBytes?.let { "${formatBytes(progress.bytesTransferred)} / ${formatBytes(it)}" }
+                    ?: "${formatBytes(progress.bytesTransferred)} sent or received"
+                updateNotification(
+                    notificationManager,
+                    operation,
+                    "$position / $total songs\n$title\n$progressLabel · $byteLabel",
+                    false,
+                    percent ?: -1
+                )
             }
         }
-        
-        return builder
-    }
-
-    private fun createChannel(notificationManager: NotificationManager) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "Uploads", NotificationManager.IMPORTANCE_LOW)
-            notificationManager.createNotificationChannel(channel)
+        try {
+            transfer { progress -> progressChannel.trySend(progress) }
+        } finally {
+            progressChannel.close()
+            progressJob.join()
         }
     }
 
-    private fun openAppPendingIntent(): PendingIntent {
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+    private fun formatBytes(bytes: Long): String = android.text.format.Formatter.formatShortFileSize(context, bytes)
+
+    private fun updateNotification(notificationManager: NotificationManager, title: String, text: String, finished: Boolean, progress: Int = -1) {
+        if (finished) {
+            TransferNotifications.postFinished(context, title, text)
+            return
         }
-        return PendingIntent.getActivity(
-            context,
-            OPEN_APP_REQUEST_CODE,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val notification = TransferNotifications.builder(context, title, text, progress, finished).build()
+        notificationManager.notify(TransferNotifications.NOTIFICATION_ID, notification)
     }
 
     companion object {
-        const val CHANNEL_ID = "upload_channel"
-        const val NOTIFICATION_ID = 1001
+        const val CHANNEL_ID = TransferNotifications.CHANNEL_ID
+        const val NOTIFICATION_ID = TransferNotifications.NOTIFICATION_ID
         const val KEY_SONG_ID = "upload_song_id"
         const val KEY_PROGRESS = "upload_progress"
-        private const val CANCEL_REQUEST_CODE = 1002
-        private const val OPEN_APP_REQUEST_CODE = 1003
+        const val KEY_BYTES = "transfer_bytes"
+        const val KEY_TOTAL_BYTES = "transfer_total_bytes"
     }
 }

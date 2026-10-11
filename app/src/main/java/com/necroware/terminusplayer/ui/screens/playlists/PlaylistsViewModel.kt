@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.necroware.terminusplayer.data.model.Playlist
 import com.necroware.terminusplayer.data.repository.MusicRepository
+import com.necroware.terminusplayer.data.repository.UploadQueueManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -16,7 +17,8 @@ import javax.inject.Inject
 
 @HiltViewModel
 class PlaylistsViewModel @Inject constructor(
-    private val repository: MusicRepository
+    private val repository: MusicRepository,
+    private val uploadQueueManager: UploadQueueManager
 ) : ViewModel() {
 
     val customPlaylists: StateFlow<List<Playlist>> = repository.observeCustomPlaylists()
@@ -64,15 +66,13 @@ class PlaylistsViewModel @Inject constructor(
     fun downloadPlaylist(id: String, force: Boolean = false) = viewModelScope.launch {
         _actionMessage.value = "Starting playlist download..."
         try {
-            val songs = repository.getSongsForPlaylist(id)
-            songs.forEach { song ->
-                try { repository.downloadSong(song.id, force) } catch (_: Exception) {}
-            }
-            _actionMessage.value = "Playlist download complete."
+            val songs = repository.getSongsForPlaylist(id).filter { it.providerId == "navidrome" }
+            uploadQueueManager.enqueueDownloads(songs, force)
+            _actionMessage.value = "Queued ${songs.size} playlist downloads. Track progress in Stats."
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            _actionMessage.value = "Playlist download failed."
+            _actionMessage.value = "Could not queue playlist downloads: ${e.message ?: "Unknown error"}"
         }
     }
 

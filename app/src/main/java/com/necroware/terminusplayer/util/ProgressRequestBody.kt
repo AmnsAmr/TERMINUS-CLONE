@@ -8,9 +8,11 @@ import okio.Sink
 import okio.buffer
 import java.io.IOException
 
+data class TransferProgress(val bytesTransferred: Long, val totalBytes: Long?, val partialUri: String? = null)
+
 class ProgressRequestBody(
     private val delegate: RequestBody,
-    private val onProgress: (progress: Int) -> Unit
+    private val onProgress: (TransferProgress) -> Unit
 ) : RequestBody() {
 
     override fun contentType(): MediaType? = delegate.contentType()
@@ -23,24 +25,34 @@ class ProgressRequestBody(
         val bufferedSink = countingSink.buffer()
         delegate.writeTo(bufferedSink)
         bufferedSink.flush()
+        countingSink.report(force = true)
     }
 
     private inner class CountingSink(delegate: Sink) : ForwardingSink(delegate) {
         private var bytesWritten = 0L
         private val totalBytes = contentLength()
-        private var lastProgress = 0
+        private var lastReportedBytes = 0L
+        private var lastReportedAt = System.currentTimeMillis()
 
         @Throws(IOException::class)
         override fun write(source: okio.Buffer, byteCount: Long) {
             super.write(source, byteCount)
             bytesWritten += byteCount
-            if (totalBytes > 0) {
-                val progress = ((bytesWritten * 100) / totalBytes).toInt()
-                if (progress != lastProgress) {
-                    lastProgress = progress
-                    onProgress(progress)
-                }
+            report()
+        }
+
+        fun report(force: Boolean = false) {
+            val now = System.currentTimeMillis()
+            if (force || bytesWritten - lastReportedBytes >= REPORT_BYTES || now - lastReportedAt >= REPORT_INTERVAL_MS) {
+                lastReportedBytes = bytesWritten
+                lastReportedAt = now
+                onProgress(TransferProgress(bytesWritten, totalBytes.takeIf { it >= 0L }))
             }
         }
+    }
+
+    private companion object {
+        const val REPORT_BYTES = 256L * 1024L
+        const val REPORT_INTERVAL_MS = 500L
     }
 }

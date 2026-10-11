@@ -10,7 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** Stops the worker from the system notification and leaves queued items available to resume. */
+/** Cancels the shared transfer worker and clears its queue from the system notification. */
 @AndroidEntryPoint
 class CancelUploadNotificationReceiver : BroadcastReceiver() {
     @Inject lateinit var uploadQueueManager: UploadQueueManager

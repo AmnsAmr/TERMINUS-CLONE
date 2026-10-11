@@ -10,7 +10,6 @@ import com.necroware.terminusplayer.data.prefs.SortDirection
 import com.necroware.terminusplayer.data.prefs.SortField
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.repository.MusicRepository
-import com.necroware.terminusplayer.data.repository.NavidromeUploadRepository
 import com.necroware.terminusplayer.data.model.Playlist
 import com.necroware.terminusplayer.data.repository.UploadQueueManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,7 +34,6 @@ class LibraryViewModel @Inject constructor(
     private val repository: MusicRepository,
     private val preferencesRepository: UserPreferencesRepository,
     private val playbackController: PlaybackController,
-    private val uploadRepository: NavidromeUploadRepository,
     private val uploadQueueManager: UploadQueueManager
 ) : ViewModel() {
 
@@ -109,19 +107,35 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun uploadSongs(songs: List<Song>) = viewModelScope.launch {
-        _actionMessage.value = "Queued ${songs.size} ${if (songs.size == 1) "song" else "songs"} for upload."
-        uploadQueueManager.enqueueUploads(songs)
-    }
-
-    fun downloadSong(song: Song) = viewModelScope.launch {
-        _actionMessage.value = "Downloading ${song.title}..."
         try {
-            repository.downloadSong(song.id)
-            _actionMessage.value = "Downloaded ${song.title}."
+            uploadQueueManager.enqueueUploads(songs)
+            _actionMessage.value = "Queued ${songs.size} ${if (songs.size == 1) "song" else "songs"} for upload."
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            _actionMessage.value = "Download failed: ${e.message ?: "unknown error"}"
+            _actionMessage.value = "Could not queue uploads: ${e.message ?: "Unknown error"}"
+        }
+    }
+
+    fun downloadSong(song: Song) = viewModelScope.launch {
+        try {
+            uploadQueueManager.enqueueDownloads(listOf(song))
+            _actionMessage.value = "Queued ${song.title} for download. Track progress in Stats."
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not queue download: ${e.message ?: "Unknown error"}"
+        }
+    }
+
+    fun downloadSongs(songs: List<Song>) = viewModelScope.launch {
+        try {
+            uploadQueueManager.enqueueDownloads(songs)
+            _actionMessage.value = "Queued ${songs.size} songs for download. Track progress in Stats."
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not queue downloads: ${e.message ?: "Unknown error"}"
         }
     }
 

@@ -38,6 +38,7 @@ fun PlaylistDetailScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
+    val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
     var actionSong by remember { mutableStateOf<Song?>(null) }
     var playlistSong by remember { mutableStateOf<Song?>(null) }
     var showDownloadPrompt by remember { mutableStateOf(false) }
@@ -73,6 +74,13 @@ fun PlaylistDetailScreen(
 
         if (state.isLoading) {
             item { TerminalState("LOADING PLAYLIST", "Preparing your tracks…") }
+        }
+
+        actionMessage?.let { message ->
+            item {
+                Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable { viewModel.dismissActionMessage() }.padding(vertical = 4.dp))
+            }
         }
 
         item {

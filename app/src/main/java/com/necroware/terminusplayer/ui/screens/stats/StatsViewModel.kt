@@ -17,9 +17,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import javax.inject.Inject
 
-import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.data.database.dao.UploadQueueDao
 import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
 
 data class StatsUiState(
     val range: StatsRange = StatsRange.WEEK,
@@ -35,16 +38,17 @@ data class StatsUiState(
     // Range-specific chart data — each StatsRange gets its own chart type.
     val monthlyArtistDistribution: List<Pair<String, Int>> = emptyList(),
     val yearlyMonthlyTotals: List<Pair<String, Int>> = emptyList(),
-    val downloadEvents: List<MusicRepository.DownloadEvent> = emptyList(),
-    val uploadQueue: List<UploadQueueEntity> = emptyList()
+    val uploadQueue: List<UploadQueueEntity> = emptyList(),
+    val downloadQueue: List<UploadQueueEntity> = emptyList(),
+    val transferWorkerState: WorkInfo.State? = null
 )
 
 @HiltViewModel
 class StatsViewModel @Inject constructor(
     private val statsRepository: StatsRepository,
-    private val musicRepository: MusicRepository,
     private val uploadQueueDao: UploadQueueDao,
-    private val uploadQueueManager: com.necroware.terminusplayer.data.repository.UploadQueueManager
+    private val uploadQueueManager: com.necroware.terminusplayer.data.repository.UploadQueueManager,
+    @ApplicationContext context: Context
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(StatsUiState())
@@ -56,14 +60,20 @@ class StatsViewModel @Inject constructor(
         load(StatsRange.WEEK, TopCategory.ARTIST)
 
         viewModelScope.launch {
-            musicRepository.downloadEvents.collect { events ->
-                _uiState.value = _uiState.value.copy(downloadEvents = events)
+            uploadQueueDao.observeAll().collect { queue ->
+                _uiState.value = _uiState.value.copy(
+                    uploadQueue = queue.filter { it.transferType == "UPLOAD" },
+                    downloadQueue = queue.filter { it.transferType == "DOWNLOAD" }
+                )
             }
         }
 
         viewModelScope.launch {
-            uploadQueueDao.observeAll().collect { queue ->
-                _uiState.value = _uiState.value.copy(uploadQueue = queue)
+            WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(
+                com.necroware.terminusplayer.data.repository.UploadQueueManager.UNIQUE_WORK_NAME
+            ).collect { infos ->
+                _uiState.value = _uiState.value.copy(transferWorkerState = infos.firstOrNull { it.state == WorkInfo.State.RUNNING }?.state
+                    ?: infos.firstOrNull { it.state == WorkInfo.State.ENQUEUED }?.state)
             }
         }
     }
@@ -84,6 +94,18 @@ class StatsViewModel @Inject constructor(
         viewModelScope.launch {
             uploadQueueManager.cancelAllUploads()
         }
+    }
+
+    fun retryFailedDownload(songId: String) {
+        viewModelScope.launch { uploadQueueManager.retryUpload(songId) }
+    }
+
+    fun cancelAllTransfers() {
+        viewModelScope.launch { uploadQueueManager.cancelAllTransfers() }
+    }
+
+    fun removeTransfer(songId: String) {
+        viewModelScope.launch { uploadQueueManager.removeFromQueue(songId) }
     }
 
     fun selectRange(range: StatsRange) {
