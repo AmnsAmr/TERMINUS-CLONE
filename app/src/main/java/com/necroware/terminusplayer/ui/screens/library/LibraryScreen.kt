@@ -67,12 +67,18 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.data.model.Song
+import com.necroware.terminusplayer.data.model.Album
+import com.necroware.terminusplayer.data.model.Artist
 import com.necroware.terminusplayer.data.prefs.LibrarySortOrder
 import com.necroware.terminusplayer.data.prefs.SortDirection
 import com.necroware.terminusplayer.data.prefs.SortField
 import com.necroware.terminusplayer.ui.components.SongArt
 import com.necroware.terminusplayer.ui.components.TerminalBorder
 import com.necroware.terminusplayer.ui.components.TerminalState
+import com.necroware.terminusplayer.ui.components.FastScrollRail
+import com.necroware.terminusplayer.ui.components.LibrarySortControls
+import com.necroware.terminusplayer.ui.components.fastScrollTargets
+import com.necroware.terminusplayer.ui.components.stableSortedList
 import com.necroware.terminusplayer.util.toMinutesSeconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -102,6 +108,23 @@ fun LibraryScreen(
     val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
     val isLibraryLoaded by viewModel.isLibraryLoaded.collectAsStateWithLifecycle()
     var initialSongListPrepared by remember { mutableStateOf(false) }
+    var albumSortField by rememberSaveable { mutableStateOf("ALBUM") }
+    var albumSortAscending by rememberSaveable { mutableStateOf(true) }
+    var artistSortField by rememberSaveable { mutableStateOf("ARTIST") }
+    var artistSortAscending by rememberSaveable { mutableStateOf(true) }
+    val sortedAlbums = remember(albums, albumSortField, albumSortAscending) {
+        stableSortedList(albums, descending = !albumSortAscending, comparator = when (albumSortField) {
+            "ARTIST" -> compareBy(String.CASE_INSENSITIVE_ORDER, Album::artist)
+            "TRACKS" -> compareBy(Album::songCount)
+            else -> compareBy(String.CASE_INSENSITIVE_ORDER, Album::title)
+        })
+    }
+    val sortedArtists = remember(artists, artistSortField, artistSortAscending) {
+        stableSortedList(artists, descending = !artistSortAscending, comparator = when (artistSortField) {
+            "TRACKS" -> compareBy(Artist::songCount)
+            else -> compareBy(String.CASE_INSENSITIVE_ORDER, Artist::name)
+        })
+    }
 
     LaunchedEffect(isLibraryLoaded, songs.isEmpty(), initialSongListPrepared) {
         if (isLibraryLoaded && (songs.isEmpty() || initialSongListPrepared)) {
@@ -114,7 +137,6 @@ fun LibraryScreen(
     var selectedSongs by remember { mutableStateOf<Set<Song>>(emptySet()) }
     var showBulkActionDialog by remember { mutableStateOf(false) }
     var showBulkPlaylistDialog by remember { mutableStateOf(false) }
-    var showSortDialog by remember { mutableStateOf(false) }
 
     val handleSongClick: (Song, List<Song>) -> Unit = { song, list ->
         if (selectedSongs.isNotEmpty()) {
@@ -199,25 +221,33 @@ fun LibraryScreen(
                 }
             }
 
-            if (selectedTab == LibraryTab.SONGS || selectedTab == LibraryTab.LOCAL_MUSIC) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "SORT: ${sortOrder.field.name.replace('_', ' ')} ${if (sortOrder.direction.name == "ASC") "↑" else "↓"}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.clickable { showSortDialog = true }.padding(vertical = 6.dp)
-                    )
-                    Text(
-                        text = "[ CHANGE ]",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.clickable { showSortDialog = true }.padding(vertical = 6.dp)
-                    )
-                }
+            when (selectedTab) {
+                LibraryTab.SONGS, LibraryTab.LOCAL_MUSIC -> LibrarySortControls(
+                    selectedField = sortOrder.field.name,
+                    fields = SortField.entries.map { it.name },
+                    ascending = sortOrder.direction == SortDirection.ASC,
+                    title = "SORT LIBRARY",
+                    onFieldSelected = { field -> SortField.valueOf(field).let(viewModel::setSortField) },
+                    onDirectionSelected = { ascending ->
+                        viewModel.setSortDirection(if (ascending) SortDirection.ASC else SortDirection.DESC)
+                    }
+                )
+                LibraryTab.ALBUMS -> LibrarySortControls(
+                    selectedField = albumSortField,
+                    fields = listOf("ALBUM", "ARTIST", "TRACKS"),
+                    ascending = albumSortAscending,
+                    title = "SORT ALBUMS",
+                    onFieldSelected = { albumSortField = it },
+                    onDirectionSelected = { albumSortAscending = it }
+                )
+                LibraryTab.ARTISTS -> LibrarySortControls(
+                    selectedField = artistSortField,
+                    fields = listOf("ARTIST", "TRACKS"),
+                    ascending = artistSortAscending,
+                    title = "SORT ARTISTS",
+                    onFieldSelected = { artistSortField = it },
+                    onDirectionSelected = { artistSortAscending = it }
+                )
             }
 
             when (selectedTab) {
@@ -256,7 +286,7 @@ fun LibraryScreen(
                                 modifier = Modifier.fillMaxSize(),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                items(albums, key = { it.title }) { album ->
+                                items(sortedAlbums, key = { it.title }) { album ->
                                     TerminalBorder(
                                         modifier = Modifier.fillMaxWidth().clickable { onAlbumClick(album.title) }
                                     ) {
@@ -270,13 +300,13 @@ fun LibraryScreen(
                                     }
                                 }
                             }
-                            if (albums.size > 40) {
+                            if (sortedAlbums.size > 40) {
                                 FastScrollRail(
                                     modifier = Modifier.align(Alignment.CenterEnd),
                                     listState = listState,
-                                    itemCount = albums.size,
-                                    scrollTargets = remember(albums) { albums.indices.toList() },
-                                    initialIndex = listState.firstVisibleItemIndex.coerceIn(0, albums.lastIndex),
+                                    itemCount = sortedAlbums.size,
+                                    scrollTargets = remember(sortedAlbums) { fastScrollTargets(sortedAlbums.size) },
+                                    initialIndex = listState.firstVisibleItemIndex.coerceIn(0, sortedAlbums.lastIndex),
                                     dragLabel = { "" }
                                 )
                             }
@@ -294,7 +324,7 @@ fun LibraryScreen(
                                 modifier = Modifier.fillMaxSize(),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                items(artists, key = { it.name }) { artist ->
+                                items(sortedArtists, key = { it.name }) { artist ->
                                     TerminalBorder(
                                         modifier = Modifier.fillMaxWidth().clickable { onArtistClick(artist.name) }
                                     ) {
@@ -305,13 +335,13 @@ fun LibraryScreen(
                                     }
                                 }
                             }
-                            if (artists.size > 40) {
+                            if (sortedArtists.size > 40) {
                                 FastScrollRail(
                                     modifier = Modifier.align(Alignment.CenterEnd),
                                     listState = listState,
-                                    itemCount = artists.size,
-                                    scrollTargets = remember(artists) { artists.indices.toList() },
-                                    initialIndex = listState.firstVisibleItemIndex.coerceIn(0, artists.lastIndex),
+                                    itemCount = sortedArtists.size,
+                                    scrollTargets = remember(sortedArtists) { fastScrollTargets(sortedArtists.size) },
+                                    initialIndex = listState.firstVisibleItemIndex.coerceIn(0, sortedArtists.lastIndex),
                                     dragLabel = { "" }
                                 )
                             }
@@ -355,52 +385,6 @@ fun LibraryScreen(
                                 modifier = Modifier.clickable { showBulkActionDialog = true }.padding(vertical = 10.dp, horizontal = 4.dp)
                             )
                         }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showSortDialog) {
-        Dialog(onDismissRequest = { showSortDialog = false }) {
-            Box(Modifier.fillMaxWidth(0.9f).background(MaterialTheme.colorScheme.background)) {
-                TerminalBorder(Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("SORT LIBRARY", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                        Text("FIELD", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        SortField.entries.forEach { field ->
-                            Text(
-                                text = "${if (sortOrder.field == field) ">" else " "} ${field.name.replace('_', ' ')}",
-                                color = if (sortOrder.field == field) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                modifier = Modifier.fillMaxWidth().clickable { viewModel.setSortField(field) }.padding(vertical = 6.dp)
-                            )
-                        }
-                        Text("DIRECTION", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(
-                                "[ ASCENDING ]",
-                                color = if (sortOrder.direction == SortDirection.ASC) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.clickable { viewModel.setSortDirection(SortDirection.ASC) }.padding(vertical = 8.dp)
-                            )
-                            Text(
-                                "[ DESCENDING ]",
-                                color = if (sortOrder.direction == SortDirection.DESC) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.clickable { viewModel.setSortDirection(SortDirection.DESC) }.padding(vertical = 8.dp)
-                            )
-                        }
-                        Text(
-                            "[ DONE ]",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.align(Alignment.End).clickable { showSortDialog = false }.padding(8.dp)
-                        )
                     }
                 }
             }
@@ -705,138 +689,6 @@ private data class PreparedSongList(
     val scrollTargets: List<Int>,
     val songIndexById: Map<String, Int>
 )
-
-@Composable
-private fun FastScrollRail(
-    modifier: Modifier = Modifier,
-    listState: LazyListState,
-    itemCount: Int,
-    scrollTargets: List<Int>,
-    initialIndex: Int,
-    dragLabel: (Int) -> String
-) {
-    val scope = rememberCoroutineScope()
-    var railHeightPx by remember { mutableIntStateOf(1) }
-    var dragging by remember { mutableStateOf(false) }
-    var activeIndex by remember { mutableIntStateOf(initialIndex) }
-    val listInfo = listState.layoutInfo
-    val maxScrollIndex = (listInfo.totalItemsCount - listInfo.visibleItemsInfo.size).coerceAtLeast(1)
-    val scrollFraction = (listState.firstVisibleItemIndex.toFloat() / maxScrollIndex).coerceIn(0f, 1f)
-    val thumbHeightPx = with(androidx.compose.ui.platform.LocalDensity.current) { 24.dp.toPx() }
-    val thumbTopPx = scrollFraction * (railHeightPx - thumbHeightPx).coerceAtLeast(0f)
-    var visible by remember { mutableStateOf(false) }
-    val alpha by animateFloatAsState(
-        targetValue = if (visible) 1f else 0f,
-        animationSpec = tween(durationMillis = 180),
-        label = "library-fast-scroll-alpha"
-    )
-
-    LaunchedEffect(listState.isScrollInProgress, dragging) {
-        if (listState.isScrollInProgress || dragging) {
-            visible = true
-        } else {
-            delay(850)
-            visible = false
-        }
-    }
-    LaunchedEffect(initialIndex, dragging) {
-        if (!dragging) activeIndex = initialIndex.coerceIn(0, itemCount - 1)
-    }
-
-    val currentThumbTop = if (dragging) {
-        (activeIndex.toFloat() / (itemCount - 1).coerceAtLeast(1)) * (railHeightPx - thumbHeightPx).coerceAtLeast(0f)
-    } else thumbTopPx
-    val labelTop = with(androidx.compose.ui.platform.LocalDensity.current) {
-        (currentThumbTop - 4.dp.toPx()).coerceIn(0f, (railHeightPx - 28.dp.toPx()).coerceAtLeast(0f)).toDp()
-    }
-    fun jumpTo(y: Float) {
-        val usableHeight = (railHeightPx - thumbHeightPx).coerceAtLeast(1f)
-        val index = (((y - thumbHeightPx / 2f).coerceIn(0f, usableHeight) / usableHeight) * (itemCount - 1))
-            .roundToInt().coerceIn(0, itemCount - 1)
-        activeIndex = index
-        scope.launch { listState.scrollToItem(scrollTargets[index]) }
-    }
-
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .onSizeChanged { railHeightPx = it.height.coerceAtLeast(1) }
-            .graphicsLayer { this.alpha = alpha }
-    ) {
-        if (visible || dragging) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .width(48.dp)
-                    .fillMaxSize()
-                    .semantics { contentDescription = "Drag to fast scroll the library" }
-                    .pointerInput(itemCount, scrollTargets, railHeightPx) {
-                        detectTapGestures { position ->
-                            jumpTo(position.y)
-                            dragging = true
-                            scope.launch {
-                                delay(800)
-                                dragging = false
-                            }
-                        }
-                    }
-                    .pointerInput(itemCount, scrollTargets, railHeightPx) {
-                        detectDragGestures(
-                            onDragStart = { position ->
-                                dragging = true
-                                jumpTo(position.y)
-                            },
-                            onDragEnd = { dragging = false },
-                            onDragCancel = { dragging = false }
-                        ) { change, _ ->
-                            change.consume()
-                            jumpTo(change.position.y)
-                        }
-                    }
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(end = 10.dp)
-                                .width(3.dp)
-                                .fillMaxSize()
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f), RoundedCornerShape(50))
-                        )
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(end = 4.dp)
-                                .offset { IntOffset(0, currentThumbTop.roundToInt()) }
-                                .width(4.dp)
-                                .height(24.dp)
-                                .clip(RoundedCornerShape(50))
-                                .background(MaterialTheme.colorScheme.primary)
-                        )
-                    }
-            }
-
-        val currentDragLabel = dragLabel(activeIndex)
-        if (dragging && currentDragLabel.isNotBlank()) {
-            Text(
-                text = currentDragLabel,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset(
-                        x = (-12).dp,
-                        y = labelTop
-                    )
-                    .widthIn(max = 140.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
-                    .padding(horizontal = 8.dp, vertical = 5.dp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)

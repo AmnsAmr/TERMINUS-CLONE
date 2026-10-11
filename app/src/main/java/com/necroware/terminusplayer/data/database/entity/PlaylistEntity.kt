@@ -13,7 +13,10 @@ data class PlaylistEntity(
     @ColumnInfo(defaultValue = "0") val syncPending: Boolean = false,
     @ColumnInfo(defaultValue = "0") val deletePending: Boolean = false,
     @ColumnInfo(defaultValue = "0") val remoteSongCount: Int = 0,
-    @ColumnInfo(defaultValue = "NULL") val ownerUsername: String? = null
+    @ColumnInfo(defaultValue = "NULL") val ownerUsername: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val remoteContentSignature: String? = null,
+    @ColumnInfo(defaultValue = "0") val remoteSnapshotSongCount: Int = 0,
+    @ColumnInfo(defaultValue = "0") val remoteSnapshotCheckedAt: Long = 0L
 )
 
 /**

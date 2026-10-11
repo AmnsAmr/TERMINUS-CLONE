@@ -10,26 +10,44 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.data.model.Song
+import com.necroware.terminusplayer.data.model.PlaylistOfflineAvailability
 import com.necroware.terminusplayer.ui.screens.library.LibrarySongRow
 import com.necroware.terminusplayer.ui.components.TerminalBorder
 import com.necroware.terminusplayer.ui.components.TerminalState
+import com.necroware.terminusplayer.ui.components.FastScrollRail
+import com.necroware.terminusplayer.ui.components.LibrarySortControls
+import com.necroware.terminusplayer.ui.components.fastScrollTargets
+import com.necroware.terminusplayer.ui.components.stableSortedList
+import com.necroware.terminusplayer.ui.components.reconcileSelection
+import com.necroware.terminusplayer.ui.components.selectAllItemIds
+import com.necroware.terminusplayer.ui.components.playlistSelectionIdentity
+import com.necroware.terminusplayer.ui.components.shouldShowFastScroll
+import com.necroware.terminusplayer.ui.components.toggleSelection
+import com.necroware.terminusplayer.ui.components.PlaylistSelectionActionBar
+import com.necroware.terminusplayer.ui.components.PlaylistSelectionControls
 
 @Composable
 fun PlaylistDetailScreen(
@@ -39,14 +57,47 @@ fun PlaylistDetailScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
-    var actionSong by remember { mutableStateOf<Song?>(null) }
     var playlistSong by remember { mutableStateOf<Song?>(null) }
     var showDownloadPrompt by remember { mutableStateOf(false) }
+    var showBulkActions by remember { mutableStateOf(false) }
+    var showBulkPlaylistPicker by remember { mutableStateOf(false) }
+    val playlistIdentity = playlistSelectionIdentity(state.currentPlaylistId, state.kind?.name)
+    var sortField by rememberSaveable(playlistIdentity) { mutableStateOf("PLAYLIST_ORDER") }
+    var sortAscending by rememberSaveable(playlistIdentity) { mutableStateOf(true) }
+    var selectedSongIds by remember(playlistIdentity) { mutableStateOf<Set<String>>(emptySet()) }
+    val haptic = LocalHapticFeedback.current
+    val sortedSongs = remember(state.songs, sortField, sortAscending) {
+        stableSortedList(
+            state.songs,
+            descending = !sortAscending,
+            comparator = when (sortField) {
+                "TITLE" -> compareBy(String.CASE_INSENSITIVE_ORDER, Song::title)
+                "ARTIST" -> compareBy(String.CASE_INSENSITIVE_ORDER, Song::artist)
+                "ALBUM" -> compareBy(String.CASE_INSENSITIVE_ORDER, Song::album)
+                "DURATION" -> compareBy(Song::duration)
+                else -> compareBy<Song> { 0 }
+            }
+        )
+    }
+    val currentSongIds = remember(sortedSongs) { sortedSongs.map { it.id }.toSet() }
+    val selectedIds = reconcileSelection(selectedSongIds, currentSongIds)
+    LaunchedEffect(playlistIdentity, currentSongIds) {
+        if (selectedSongIds != selectedIds) selectedSongIds = selectedIds
+    }
+    val listState = rememberLazyListState()
+    val playlistHeaderItems = 4 + (if (actionMessage != null) 1 else 0)
+    val songIndexById = remember(sortedSongs) { sortedSongs.withIndex().associate { it.value.id to it.index } }
+    val firstVisibleSongIndex = listState.layoutInfo.visibleItemsInfo.firstNotNullOfOrNull { item ->
+        (item.key as? String)?.let(songIndexById::get)
+    } ?: 0
 
-    LazyColumn(
+    Box(Modifier.fillMaxSize()) {
+      LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
+        contentPadding = PaddingValues(bottom = if (selectedIds.isNotEmpty()) 120.dp else 28.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
+      ) {
         item {
             Text(
                 text = "︿",
@@ -92,13 +143,67 @@ fun PlaylistDetailScreen(
                     text = "▶ PLAY ALL",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { viewModel.playAll() }
+                    modifier = Modifier.clickable { viewModel.playAll(sortedSongs) }
                 )
-                Text(
-                    text = "↓ DOWNLOAD ALL",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.clickable { showDownloadPrompt = true }
+                when (val availability = state.offlineAvailability) {
+                    PlaylistOfflineAvailability.Checking -> Text(
+                        "… CHECKING OFFLINE FILES",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    is PlaylistOfflineAvailability.Failed -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("! ${availability.message}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                        Text("[ RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { viewModel.retryOfflineAvailability() }.padding(start = 8.dp))
+                    }
+                    is PlaylistOfflineAvailability.Ready -> {
+                        val plan = availability.plan
+                        if (plan.downloadableSongs.isNotEmpty()) {
+                            Text(
+                                text = "↓ DOWNLOAD MISSING (${plan.downloadableSongs.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.secondary,
+                                modifier = Modifier.clickable { showDownloadPrompt = true }
+                            )
+                        } else if (plan.serverSongs.isNotEmpty()) {
+                            Text(
+                                text = if (plan.unresolvedTrackCount > 0 || plan.unavailableCount > 0) {
+                                    "! SERVER ENTRIES NEED CHECKING"
+                                } else "✓ OFFLINE · OPTIONS",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (plan.unresolvedTrackCount > 0 || plan.unavailableCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary,
+                                modifier = if (plan.unresolvedTrackCount > 0 || plan.unavailableCount > 0) {
+                                    Modifier
+                                } else Modifier.clickable { showDownloadPrompt = true }
+                            )
+                        } else if (plan.unresolvedTrackCount > 0) {
+                            Text("! ENTRIES NEED VERIFYING", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                        } else if (plan.unavailableCount > 0) {
+                            Text("! ${plan.unavailableCount} TRACKS UNAVAILABLE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                        } else if (sortedSongs.isNotEmpty()) {
+                            Text("✓ AVAILABLE OFFLINE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Column {
+                LibrarySortControls(
+                    selectedField = sortField,
+                    fields = listOf("PLAYLIST_ORDER", "TITLE", "ARTIST", "ALBUM", "DURATION"),
+                    ascending = sortAscending,
+                    title = "SORT PLAYLIST TRACKS",
+                    onFieldSelected = { sortField = it },
+                    onDirectionSelected = { sortAscending = it },
+                    showDirectionControl = sortField != "PLAYLIST_ORDER"
+                )
+                PlaylistSelectionControls(
+                    selectedCount = selectedIds.size,
+                    totalCount = sortedSongs.size,
+                    onSelectAll = { selectedSongIds = selectAllItemIds(currentSongIds.toList()) },
+                    onClearSelection = { selectedSongIds = emptySet() }
                 )
             }
         }
@@ -109,30 +214,59 @@ fun PlaylistDetailScreen(
             }
         }
 
-        items(state.songs, key = { it.id }) { song ->
+        items(sortedSongs, key = { it.id }) { song ->
             LibrarySongRow(
                 song = song,
-                isSelected = false,
-                onClick = { viewModel.playFrom(song) },
-                onLongClick = { actionSong = song },
+                isSelected = song.id in selectedIds,
+                onClick = {
+                    selectedSongIds = if (selectedIds.isNotEmpty()) {
+                        toggleSelection(selectedIds, song.id)
+                    } else {
+                        viewModel.playFrom(song, sortedSongs)
+                        selectedSongIds
+                    }
+                },
+                onLongClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    selectedSongIds = selectedIds + song.id
+                },
                 onLike = { viewModel.toggleLike(song) },
                 onAddToPlaylist = { playlistSong = song },
                 onPlayNext = { viewModel.playNext(song) }
             )
         }
+      }
+      if (shouldShowFastScroll(sortedSongs.size)) {
+          FastScrollRail(
+              modifier = Modifier.align(Alignment.CenterEnd),
+              listState = listState,
+              itemCount = sortedSongs.size,
+              scrollTargets = remember(sortedSongs, playlistHeaderItems) { fastScrollTargets(sortedSongs.size, playlistHeaderItems) },
+              initialIndex = firstVisibleSongIndex
+          )
+      }
+      if (selectedIds.isNotEmpty()) {
+          PlaylistSelectionActionBar(
+              selectedCount = selectedIds.size,
+              onActions = { showBulkActions = true },
+              onDone = { selectedSongIds = emptySet() },
+              modifier = Modifier.align(Alignment.BottomCenter)
+          )
+      }
     }
 
     playlistSong?.let { song ->
+        val availablePlaylists = playlists.filter { it.id != state.currentPlaylistId }
         Dialog(onDismissRequest = { playlistSong = null }) {
             Box(Modifier.background(MaterialTheme.colorScheme.background)) {
                 TerminalBorder(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("ADD TO PLAYLIST", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                        if (playlists.isEmpty()) {
-                            Text("Create a playlist first to save this track.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (availablePlaylists.isEmpty()) {
+                            Text("No other playlists are available.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         } else {
                             LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.height(240.dp)) {
-                                items(playlists, key = { it.id }) { playlist ->
+                                items(availablePlaylists, key = { it.id }) { playlist ->
                                     Text(
                                         "[ ${playlist.name} ]",
                                         color = MaterialTheme.colorScheme.primary,
@@ -154,32 +288,109 @@ fun PlaylistDetailScreen(
         }
     }
 
-    actionSong?.let { song ->
-        Dialog(onDismissRequest = { actionSong = null }) {
+    if (showBulkActions) {
+        val selectedSongs = sortedSongs.filter { it.id in selectedIds }
+        val readyPlan = (state.offlineAvailability as? PlaylistOfflineAvailability.Ready)?.plan
+        val missingSelectedCount = readyPlan?.downloadableSongs?.count { it.id in selectedIds } ?: 0
+        val unavailableSelectedCount = readyPlan?.unavailableSongIds?.count { it in selectedIds } ?: 0
+        val serverSelectedCount = selectedSongs.count { it.providerId == "navidrome" || !it.navidromeId.isNullOrBlank() }
+        val localSelectedCount = selectedSongs.count { it.providerId == "local" }
+        Dialog(onDismissRequest = { showBulkActions = false }) {
             Box(Modifier.background(MaterialTheme.colorScheme.background)) {
                 TerminalBorder(Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Text(song.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("BULK ACTIONS (${selectedSongs.size})", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            if (song.providerId == "local") {
+                            if (readyPlan == null && serverSelectedCount > 0) {
+                                val availabilityMessage = when (val availability = state.offlineAvailability) {
+                                    PlaylistOfflineAvailability.Checking -> "Checking selected tracks' offline availability…"
+                                    is PlaylistOfflineAvailability.Failed -> "Offline check failed: ${availability.message}"
+                                    is PlaylistOfflineAvailability.Ready -> ""
+                                }
+                                Text(availabilityMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (state.offlineAvailability is PlaylistOfflineAvailability.Failed) {
+                                    Text("[ RETRY CHECK ]", color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.clickable { viewModel.retryOfflineAvailability() })
+                                }
+                            } else if (readyPlan != null && missingSelectedCount > 0) {
                                 Text(
-                                    "[ UPLOAD TO SERVER ]",
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.clickable { viewModel.uploadSong(song); actionSong = null }
+                                    "[ DOWNLOAD SELECTED ($missingSelectedCount MISSING) ]",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.clickable {
+                                        viewModel.downloadSelected(selectedSongs)
+                                        selectedSongIds = emptySet()
+                                        showBulkActions = false
+                                    }
                                 )
-                            } else if (song.downloadedUri == null) {
+                            } else if (readyPlan != null && serverSelectedCount > 0 && unavailableSelectedCount > 0) {
                                 Text(
-                                    "[ DOWNLOAD ]",
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.clickable { viewModel.downloadSong(song); actionSong = null }
+                                    "[ $unavailableSelectedCount SELECTED TRACKS UNAVAILABLE ]",
+                                    color = MaterialTheme.colorScheme.error
                                 )
-                            } else {
-                                Text("[ DOWNLOADED ]", color = MaterialTheme.colorScheme.tertiary)
+                            } else if (readyPlan != null && serverSelectedCount > 0) {
+                                Text(
+                                    "[ SELECTED SERVER TRACKS ARE OFFLINE ]",
+                                    color = MaterialTheme.colorScheme.tertiary
+                                )
+                            }
+                            if (localSelectedCount > 0) {
+                                Text(
+                                    "[ UPLOAD SELECTED ($localSelectedCount LOCAL) ]",
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.clickable {
+                                        viewModel.uploadSelected(selectedSongs)
+                                        selectedSongIds = emptySet()
+                                        showBulkActions = false
+                                    }
+                                )
+                            }
+                            if (playlists.any { it.id != state.currentPlaylistId }) {
+                                Text(
+                                    "[ ADD SELECTED TO PLAYLIST ]",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.clickable { showBulkPlaylistPicker = true; showBulkActions = false }
+                                )
                             }
                         }
+                        Text("[ CANCEL ]", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.End).clickable { showBulkActions = false }.padding(8.dp))
+                    }
+                }
+            }
+        }
+    }
+
+    if (showBulkPlaylistPicker) {
+        val availablePlaylists = playlists.filter { it.id != state.currentPlaylistId }
+        Dialog(onDismissRequest = { showBulkPlaylistPicker = false }) {
+            Box(Modifier.background(MaterialTheme.colorScheme.background)) {
+                TerminalBorder(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("ADD ${selectedIds.size} TRACKS TO PLAYLIST", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                        if (availablePlaylists.isEmpty()) {
+                            Text("No other playlists are available.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.height(240.dp)) {
+                                items(availablePlaylists, key = { it.id }) { playlist ->
+                                    Text(
+                                        "[ ${playlist.name} ]",
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.fillMaxWidth().clickable {
+                                            viewModel.addSongsToPlaylist(playlist.id, sortedSongs.filter { it.id in selectedIds }.map { it.id })
+                                            selectedSongIds = emptySet()
+                                            showBulkPlaylistPicker = false
+                                        }.padding(vertical = 10.dp)
+                                    )
+                                }
+                            }
+                        }
+                        Text("[ CANCEL ]", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.End).clickable { showBulkPlaylistPicker = false }.padding(8.dp))
                     }
                 }
             }
@@ -194,25 +405,48 @@ fun PlaylistDetailScreen(
                         modifier = Modifier.padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Text("DOWNLOAD PLAYLIST?", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                        Text("Download missing tracks or force re-download all tracks?", style = MaterialTheme.typography.bodyMedium)
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(
-                                "[ MISSING ONLY ]",
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.fillMaxWidth().clickable {
-                                    viewModel.downloadAll(force = false)
-                                    showDownloadPrompt = false
-                                }.padding(vertical = 8.dp)
-                            )
-                            Text(
-                                "[ FORCE ALL ]",
-                                color = MaterialTheme.colorScheme.tertiary,
-                                modifier = Modifier.fillMaxWidth().clickable {
-                                    viewModel.downloadAll(force = true)
-                                    showDownloadPrompt = false
-                                }.padding(vertical = 8.dp)
-                            )
+                        Text("DOWNLOAD OPTIONS", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                        when (val availability = state.offlineAvailability) {
+                            PlaylistOfflineAvailability.Checking -> Text("Checking offline availability…", style = MaterialTheme.typography.bodyMedium)
+                            is PlaylistOfflineAvailability.Failed -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Could not check offline availability: ${availability.message}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                                Text("[ RETRY CHECK ]", color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.clickable { viewModel.retryOfflineAvailability() }.padding(vertical = 8.dp))
+                            }
+                            is PlaylistOfflineAvailability.Ready -> {
+                                val plan = availability.plan
+                                Text(
+                                    when {
+                                        plan.downloadableSongs.isNotEmpty() -> "${plan.downloadableSongs.size} tracks are missing offline; ${plan.alreadyOfflineCount} are already available."
+                                        plan.unresolvedTrackCount > 0 -> "${plan.unresolvedTrackCount} playlist entries are not represented in the cache. Refresh while online to confirm them."
+                                        plan.unavailableCount > 0 -> "${plan.unavailableCount} tracks have no readable local file or usable server source."
+                                        else -> "All available tracks are already offline."
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    if (plan.downloadableSongs.isNotEmpty()) {
+                                        Text(
+                                            "[ DOWNLOAD MISSING (${plan.downloadableSongs.size}) ]",
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.fillMaxWidth().clickable {
+                                                viewModel.downloadAll(force = false)
+                                                showDownloadPrompt = false
+                                            }.padding(vertical = 8.dp)
+                                        )
+                                    }
+                                    if (plan.serverSongs.isNotEmpty()) {
+                                        Text(
+                                            "[ FORCE RE-DOWNLOAD (${plan.serverSongs.size}) ]",
+                                            color = MaterialTheme.colorScheme.tertiary,
+                                            modifier = Modifier.fillMaxWidth().clickable {
+                                                viewModel.downloadAll(force = true)
+                                                showDownloadPrompt = false
+                                            }.padding(vertical = 8.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                         Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                             Text(

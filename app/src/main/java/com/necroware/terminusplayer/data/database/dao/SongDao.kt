@@ -56,6 +56,12 @@ interface SongDao {
     @Query("SELECT * FROM songs WHERE (providerId = 'navidrome' AND providerRemoteId IN (:ids)) OR navidromeId IN (:ids)")
     suspend fun getByNavidromeIds(ids: List<String>): List<SongEntity>
 
+    @Query("SELECT * FROM songs WHERE providerId = 'local' AND navidromeId IN (:ids)")
+    suspend fun getLocalSongsByNavidromeIds(ids: List<String>): List<SongEntity>
+
+    @Query("SELECT * FROM songs WHERE providerId = 'local' AND TRIM(title) COLLATE NOCASE IN (:titles)")
+    suspend fun getLocalSongsByTitles(titles: List<String>): List<SongEntity>
+
     @Query("SELECT * FROM songs")
     suspend fun getAllSongs(): List<SongEntity>
 
