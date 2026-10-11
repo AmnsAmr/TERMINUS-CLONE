@@ -115,7 +115,7 @@ fun UploadScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
                     Text("> QUEUE_", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
-                    Text("${queue.count { it.state == "UPLOADING" || it.state == "CONVERTING" }} active · ${queue.count { it.state == "WAITING" || it.state == "FAILED" }} pending · ${queue.count { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }} failed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${queue.count { it.state == "UPLOADING" }} active · ${queue.count { it.state == "WAITING" || it.state == "FAILED" }} pending · ${queue.count { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }} failed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                     if (queue.any { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }) {
@@ -138,7 +138,6 @@ fun UploadScreen(
                     item = item,
                     progress = activeProgress?.takeIf { it.first == item.songId }?.second,
                     onRetry = { viewModel.retryUpload(item.songId) },
-                    onConvertRetry = { viewModel.retryWithConversion(item.songId) },
                     onRemove = { viewModel.removeFromQueue(item.songId) }
                 )
             }
@@ -151,13 +150,12 @@ private fun UploadQueueRow(
     item: UploadQueueEntity,
     progress: Int?,
     onRetry: () -> Unit,
-    onConvertRetry: () -> Unit,
     onRemove: () -> Unit
 ) {
     val isFailure = item.state == "PERMANENT_FAILURE" || item.state == "CONVERSION_FAILED"
     val stateColor = when {
         isFailure -> MaterialTheme.colorScheme.error
-        item.state == "UPLOADING" || item.state == "CONVERTING" -> MaterialTheme.colorScheme.primary
+        item.state == "UPLOADING" -> MaterialTheme.colorScheme.primary
         item.state == "SUCCESS" || item.state == "ALREADY_EXISTS" -> MaterialTheme.colorScheme.secondary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -167,12 +165,12 @@ private fun UploadQueueRow(
             Text(
                 text = when (item.state) {
                     "UPLOADING" -> "UPLOADING · attempt ${item.attemptCount + 1} of 3"
-                    "CONVERTING" -> "CONVERTING TO AAC · attempt ${item.attemptCount + 1} of 3"
-                    "WAITING" -> if (item.forceConvert) "WAITING · CONVERT TO AAC" else "WAITING IN QUEUE"
+                    "CONVERTING" -> "WAITING IN QUEUE"
+                    "WAITING" -> "WAITING IN QUEUE"
                     "FAILED" -> "RETRYING · attempt ${item.attemptCount} of 3"
                     "SUCCESS" -> "UPLOAD COMPLETE"
                     "ALREADY_EXISTS" -> "ALREADY ON SERVER"
-                    "CONVERSION_FAILED" -> "CONVERSION FAILED"
+                    "CONVERSION_FAILED" -> "UPLOAD FAILED"
                     "PERMANENT_FAILURE" -> "UPLOAD FAILED"
                     else -> item.state
                 },
@@ -191,15 +189,11 @@ private fun UploadQueueRow(
             item.errorMessage?.takeIf { it.isNotBlank() }?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
-            if (isFailure || (item.state != "UPLOADING" && item.state != "CONVERTING")) {
+            if (isFailure || item.state != "UPLOADING") {
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     if (isFailure) {
                         Text("[ RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.clickable(onClick = onRetry).padding(vertical = 8.dp))
-                        if (item.state == "CONVERSION_FAILED" || item.title.endsWith(".opus", ignoreCase = true)) {
-                            Text("[ CONVERT & RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.clickable(onClick = onConvertRetry).padding(vertical = 8.dp))
-                        }
                     }
                     Text("[ REMOVE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.clickable(onClick = onRemove).padding(vertical = 8.dp))

@@ -113,6 +113,29 @@ interface SubsonicApiService {
         @Query("f") format: String = "json"
     ): SubsonicResponse
 
+    @GET("rest/getGenres")
+    suspend fun getGenres(
+        @Query("u") user: String,
+        @Query("t") token: String,
+        @Query("s") salt: String,
+        @Query("v") version: String = "1.16.1",
+        @Query("c") client: String = "Terminus",
+        @Query("f") format: String = "json"
+    ): SubsonicResponse
+
+    @GET("rest/getSongsByGenre")
+    suspend fun getSongsByGenre(
+        @Query("genre") genre: String,
+        @Query("count") count: Int = 50,
+        @Query("offset") offset: Int = 0,
+        @Query("u") user: String,
+        @Query("t") token: String,
+        @Query("s") salt: String,
+        @Query("v") version: String = "1.16.1",
+        @Query("c") client: String = "Terminus",
+        @Query("f") format: String = "json"
+    ): SubsonicResponse
+
     @GET("rest/scrobble")
     suspend fun scrobble(
         @Query("id") id: String,

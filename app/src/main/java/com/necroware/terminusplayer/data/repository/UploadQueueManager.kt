@@ -38,19 +38,14 @@ class UploadQueueManager @Inject constructor(
     }
 
     suspend fun retryUpload(songId: String) = withContext(Dispatchers.IO) {
-        uploadQueueDao.updateStateWithForceConvert(songId, "WAITING", 0, false)
-        startWorker()
-    }
-
-    suspend fun retryWithConversion(songId: String) = withContext(Dispatchers.IO) {
-        uploadQueueDao.updateStateWithForceConvert(songId, "WAITING", 0, true)
+        uploadQueueDao.resetForRetry(songId)
         startWorker()
     }
 
     suspend fun retryAllFailed() = withContext(Dispatchers.IO) {
         val all = uploadQueueDao.getAll()
         all.filter { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }.forEach {
-            uploadQueueDao.updateStateWithForceConvert(it.songId, "WAITING", 0, it.forceConvert)
+            uploadQueueDao.resetForRetry(it.songId)
         }
         startWorker()
     }

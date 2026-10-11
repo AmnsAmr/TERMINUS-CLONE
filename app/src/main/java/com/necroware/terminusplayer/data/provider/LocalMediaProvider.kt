@@ -4,6 +4,7 @@ import android.content.ContentUris
 import android.content.Context
 import android.provider.MediaStore
 import com.necroware.terminusplayer.data.database.entity.SongEntity
+import com.necroware.terminusplayer.data.model.normalizeGenreKey
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -121,7 +122,7 @@ class LocalMediaProvider @Inject constructor(
 
     /** MediaStore keeps genres in a separate table, so attach them during the same library scan. */
     private fun loadGenresByAudioId(): Map<Long, String> {
-        val genresByAudioId = mutableMapOf<Long, String>()
+        val genresByAudioId = mutableMapOf<Long, LinkedHashSet<String>>()
         return try {
             val genresUri = MediaStore.Audio.Genres.EXTERNAL_CONTENT_URI
             val genreProjection = arrayOf(MediaStore.Audio.Genres._ID, MediaStore.Audio.Genres.NAME)
@@ -139,13 +140,15 @@ class LocalMediaProvider @Inject constructor(
                     context.contentResolver.query(membersUri, memberProjection, null, null, null)?.use { members ->
                         val audioIdColumn = members.getColumnIndexOrThrow(MediaStore.Audio.Genres.Members.AUDIO_ID)
                         while (members.moveToNext()) {
-                            // Keep the first genre when a track has multiple genre tags.
-                            genresByAudioId.getOrPut(members.getLong(audioIdColumn)) { genreName }
+                            val genres = genresByAudioId.getOrPut(members.getLong(audioIdColumn)) { linkedSetOf() }
+                            if (genres.none { normalizeGenreKey(it) == normalizeGenreKey(genreName) }) {
+                                genres += genreName
+                            }
                         }
                     }
                 }
             }
-            genresByAudioId
+            genresByAudioId.mapValues { (_, genres) -> genres.joinToString("; ") }
         } catch (_: Exception) {
             // Genre support varies across MediaStore implementations; scanning still works without it.
             emptyMap()

@@ -99,5 +99,4 @@ dependencies {
     androidTestImplementation("androidx.work:work-testing:2.9.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
-    implementation("dev.ffmpegkit-maintained:ffmpeg-kit-audio:6.0.3")
 }

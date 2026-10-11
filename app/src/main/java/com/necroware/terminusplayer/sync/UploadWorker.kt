@@ -26,8 +26,7 @@ class UploadWorker @AssistedInject constructor(
     @Assisted private val context: Context,
     @Assisted params: WorkerParameters,
     private val uploadRepository: NavidromeUploadRepository,
-    private val uploadQueueDao: UploadQueueDao,
-    private val audioConverter: com.necroware.terminusplayer.util.AudioConverter
+    private val uploadQueueDao: UploadQueueDao
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
@@ -90,28 +89,14 @@ class UploadWorker @AssistedInject constructor(
             updateNotification(notificationManager, "Uploading music", "${completedCount + failedCount + 1} / $total files\n\nUploading ${item.title}...", false)
 
             try {
-                var uploadUri = Uri.parse(item.uriString)
-                val originalName = uploadRepository.getFileName(uploadUri) ?: item.title
-                var tempFile: java.io.File? = null
-                
-                try {
-                    if (item.forceConvert || audioConverter.isOpus(context, uploadUri)) {
-                        uploadQueueDao.updateState(item.songId, "CONVERTING", item.attemptCount)
-                        updateNotification(notificationManager, "Converting music", "${completedCount + failedCount + 1} / $total files\n\nConverting ${item.title}...", false)
-                        tempFile = audioConverter.convertOpusToAac(context, uploadUri, originalName)
-                        uploadUri = Uri.fromFile(tempFile)
-                    }
-
-                    uploadQueueDao.updateState(item.songId, "UPLOADING", item.attemptCount)
-                    uploadRepository.upload(uploadUri) { progress ->
-                        setProgressAsync(workDataOf(KEY_SONG_ID to item.songId, KEY_PROGRESS to progress))
-                        updateNotification(notificationManager, "Uploading music", "${completedCount + failedCount + 1} / $total files\n\nUploading ${item.title}\n$progress%", false, progress)
-                    }
-                    uploadQueueDao.updateState(item.songId, "SUCCESS", item.attemptCount + 1)
-                    completedCount++
-                } finally {
-                    tempFile?.delete()
+                val uploadUri = Uri.parse(item.uriString)
+                uploadQueueDao.updateState(item.songId, "UPLOADING", item.attemptCount)
+                uploadRepository.upload(uploadUri) { progress ->
+                    setProgressAsync(workDataOf(KEY_SONG_ID to item.songId, KEY_PROGRESS to progress))
+                    updateNotification(notificationManager, "Uploading music", "${completedCount + failedCount + 1} / $total files\n\nUploading ${item.title}\n$progress%", false, progress)
                 }
+                uploadQueueDao.updateState(item.songId, "SUCCESS", item.attemptCount + 1)
+                completedCount++
             } catch (e: CancellationException) {
                 // A user stop keeps this item queued so it can be resumed later.
                 uploadQueueDao.updateState(item.songId, "WAITING", item.attemptCount)
@@ -119,16 +104,14 @@ class UploadWorker @AssistedInject constructor(
                 throw e
             } catch (e: Exception) {
                 val msg = e.message ?: ""
-                val isConversionFail = msg.contains("FFmpeg conversion failed", ignoreCase = true)
-                if (!isConversionFail && (msg.contains("already exists", ignoreCase = true) || msg.contains("Server did not accept", ignoreCase = true))) {
+                if (msg.contains("already exists", ignoreCase = true) || msg.contains("Server did not accept", ignoreCase = true)) {
                     // It was rejected immediately, mark as ALREADY_EXISTS or PERMANENT_FAILURE without retrying
                     uploadQueueDao.updateStateWithError(item.songId, "ALREADY_EXISTS", item.attemptCount, msg)
                     completedCount++
                 } else {
                     val nextAttempt = item.attemptCount + 1
-                    val finalState = if (isConversionFail) "CONVERSION_FAILED" else "PERMANENT_FAILURE"
-                    if (isConversionFail || nextAttempt >= 3) {
-                        uploadQueueDao.updateStateWithError(item.songId, finalState, nextAttempt, msg)
+                    if (nextAttempt >= 3) {
+                        uploadQueueDao.updateStateWithError(item.songId, "PERMANENT_FAILURE", nextAttempt, msg)
                         failedCount++
                     } else {
                         uploadQueueDao.updateStateWithError(item.songId, "FAILED", nextAttempt, msg)
