@@ -29,6 +29,10 @@ import com.necroware.terminusplayer.data.model.Playlist
 import com.necroware.terminusplayer.data.model.PlaylistAccountInfo
 import com.necroware.terminusplayer.data.model.GenreMix
 import com.necroware.terminusplayer.data.model.Song
+import com.necroware.terminusplayer.data.model.PlaylistDownloadPlan
+import com.necroware.terminusplayer.data.model.buildPlaylistDownloadPlan
+import com.necroware.terminusplayer.data.model.playlistDownloadLookupKeys
+import com.necroware.terminusplayer.data.model.sqliteQueryBatches
 import com.necroware.terminusplayer.data.model.normalizeGenreKey
 import com.necroware.terminusplayer.data.model.parseGenreTags
 import com.necroware.terminusplayer.util.matchM3uEntryToSong
@@ -348,7 +352,11 @@ class MusicRepository @Inject constructor(
     ): String = withContext(Dispatchers.IO) {
         val song = songDao.getById(songId) ?: throw PermanentTransferException("Track is no longer in the library")
         try {
-            if (song.providerId != "navidrome") throw PermanentTransferException("Only server tracks can be downloaded")
+            val serverTrackId = when {
+                song.providerId == "navidrome" -> song.providerRemoteId
+                !song.navidromeId.isNullOrBlank() -> song.navidromeId
+                else -> throw PermanentTransferException("Only server tracks can be downloaded")
+            }
             val prefs = preferencesRepository.preferences.first()
             val name = downloadFileName(song)
             
@@ -370,7 +378,7 @@ class MusicRepository @Inject constructor(
             val salt = newSubsonicSalt()
             val token = buildSubsonicToken(config.password, salt)
             
-            val response = subsonicApi.download(song.providerRemoteId, config.username, token, salt)
+            val response = subsonicApi.download(serverTrackId, config.username, token, salt)
             if (!response.isSuccessful) {
                 response.errorBody()?.close()
                 val message = "Download failed with HTTP ${response.code()}"
@@ -485,7 +493,13 @@ class MusicRepository @Inject constructor(
     }
 
     private fun findExistingDownload(name: String, folderUri: String?): Uri? {
+        return findExistingDownloads(setOf(name), folderUri)[name]
+    }
+
+    private fun findExistingDownloads(names: Set<String>, folderUri: String?): Map<String, Uri> {
+        if (names.isEmpty()) return emptyMap()
         val resolver = context.contentResolver
+        val matches = mutableMapOf<String, Uri>()
         if (!folderUri.isNullOrBlank()) {
             val treeUri = Uri.parse(folderUri)
             val treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri)
@@ -501,36 +515,41 @@ class MusicRepository @Inject constructor(
                 val nameColumn = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
                 if (idColumn >= 0 && nameColumn >= 0) {
                     while (cursor.moveToNext()) {
-                        if (cursor.getString(nameColumn) == name) {
+                        val name = cursor.getString(nameColumn)
+                        if (name in names && name !in matches) {
                             val documentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, cursor.getString(idColumn))
-                            if (isReadableDownload(documentUri)) return documentUri
+                            if (isReadableDownload(documentUri)) matches[name] = documentUri
                         }
                     }
                 }
             }
-            return null
+            return matches
         }
 
         val relativePath = Environment.DIRECTORY_MUSIC + "/Terminus/"
         resolver.query(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-            arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.SIZE),
-            "${MediaStore.Audio.Media.DISPLAY_NAME} = ? AND ${MediaStore.Audio.Media.RELATIVE_PATH} = ?",
-            arrayOf(name, relativePath),
+            arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.SIZE, MediaStore.Audio.Media.DISPLAY_NAME),
+            "${MediaStore.Audio.Media.RELATIVE_PATH} = ?",
+            arrayOf(relativePath),
             null
         )?.use { cursor ->
             val idColumn = cursor.getColumnIndex(MediaStore.Audio.Media._ID)
             val sizeColumn = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
+            val nameColumn = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
             while (cursor.moveToNext()) {
-                if (idColumn >= 0 && sizeColumn >= 0 && cursor.getLong(sizeColumn) > 0L) {
-                    return ContentUris.withAppendedId(
-                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                        cursor.getLong(idColumn)
-                    )
+                if (idColumn >= 0 && sizeColumn >= 0 && nameColumn >= 0 && cursor.getLong(sizeColumn) > 0L) {
+                    val name = cursor.getString(nameColumn)
+                    if (name in names) {
+                        matches.putIfAbsent(name, ContentUris.withAppendedId(
+                            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                            cursor.getLong(idColumn)
+                        ))
+                    }
                 }
             }
         }
-        return null
+        return matches
     }
 
     private fun downloadFileName(song: SongEntity): String {
@@ -806,24 +825,131 @@ class MusicRepository @Inject constructor(
         }
 
     suspend fun getSongsForPlaylist(playlistId: String): List<Song> {
-        val playlist = playlistDao.getPlaylist(playlistId)
-        val serverId = playlist?.serverPlaylistId
-        if (serverId != null) {
-            try {
-                refreshServerPlaylistSongs(playlist, replaceMembership = playlist.id.startsWith(SERVER_PLAYLIST_PREFIX))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                // Keep the cached playlist usable when the server is offline.
-            }
+        try {
+            refreshPlaylistSongsFromServer(playlistId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Keep the cached playlist usable when the server is offline.
         }
-        return withContext(Dispatchers.Default) {
-            val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
-            playlistDao.getSongsForPlaylist(playlistId).map { it.toSong(isLiked = it.remoteId in likedIds) }
-                .groupBy { "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}" }
-                .map { (_, group) -> group.find { it.providerId == "local" } ?: group.first() }
+        return getCachedSongsForPlaylist(playlistId)
+    }
+
+    /** Reads the persisted playlist snapshot without waiting for the network. */
+    suspend fun getCachedSongsForPlaylist(playlistId: String): List<Song> = withContext(Dispatchers.Default) {
+        val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
+        playlistDao.getSongsForPlaylist(playlistId).map { it.toSong(isLiked = it.remoteId in likedIds) }
+            .groupBy { offlineTrackKey(it.title, it.artist) }
+            .map { (_, group) -> group.find { it.providerId == "local" } ?: group.first() }
+    }
+
+    /** Refreshes the stored remote snapshot; callers can show cached songs while this runs. */
+    suspend fun refreshPlaylistSongsFromServer(playlistId: String) {
+        val playlist = playlistDao.getPlaylist(playlistId)
+        if (playlist?.serverPlaylistId != null) {
+            val refreshWindowMs = 5 * 60 * 1000L
+            val snapshotIsFresh = playlist.remoteContentSignature != null &&
+                playlist.remoteSnapshotSongCount == playlist.remoteSongCount &&
+                System.currentTimeMillis() - playlist.remoteSnapshotCheckedAt < refreshWindowMs
+            if (snapshotIsFresh) return
+            refreshServerPlaylistSongs(playlist, replaceMembership = playlist.id.startsWith(SERVER_PLAYLIST_PREFIX))
         }
     }
+
+    /** Checks the current playlist files and prior downloads before offering a transfer. */
+    suspend fun getPlaylistDownloadPlan(
+        songs: List<Song>,
+        expectedTrackCount: Int = songs.size
+    ): PlaylistDownloadPlan = withContext(Dispatchers.IO) {
+        val prefs = preferencesRepository.preferences.first()
+        val lookupKeys = playlistDownloadLookupKeys(songs)
+        val playlistEntities = sqliteQueryBatches(lookupKeys.songIds).flatMap { songDao.getByIds(it) }
+        val mappedLocalEntities = sqliteQueryBatches(lookupKeys.navidromeIds)
+            .flatMap { songDao.getLocalSongsByNavidromeIds(it) }
+        val titleCandidates = sqliteQueryBatches(lookupKeys.titles)
+            .flatMap { songDao.getLocalSongsByTitles(it) }
+        val entitiesById = playlistEntities.associateBy { it.remoteId }
+        val localEntities = (playlistEntities.filter { it.providerId == "local" } + mappedLocalEntities + titleCandidates)
+            .distinctBy { it.remoteId }
+        val localsByServerId = localEntities.filter { !it.navidromeId.isNullOrBlank() }
+            .groupBy { it.navidromeId.orEmpty() }
+        val localsByTrack = localEntities.groupBy { offlineTrackKey(it.title, it.artist) }
+        val offlineIds = mutableSetOf<String>()
+        val unavailableIds = mutableSetOf<String>()
+        val downloadEntitiesBySong = songs.mapNotNull { song ->
+            val entity = entitiesById[song.id]
+            val serverId = if (song.providerId == "navidrome") song.providerRemoteId else song.navidromeId.orEmpty()
+            val matchingLocals = (localsByServerId[serverId].orEmpty() + localsByTrack[offlineTrackKey(song.title, song.artist)].orEmpty())
+                .distinctBy { it.remoteId }
+            val localMatch = if (song.providerId == "local") entity else matchingLocals.firstOrNull()
+            val downloadEntity = entity ?: localMatch
+            if (serverId.isNotBlank() && downloadEntity != null &&
+                (song.providerId == "navidrome" || !song.navidromeId.isNullOrBlank())
+            ) song.id to downloadEntity else null
+        }.toMap()
+        val existingDownloads = runCatching {
+            findExistingDownloads(downloadEntitiesBySong.values.map(::downloadFileName).toSet(), prefs.downloadFolderUri)
+        }.getOrDefault(emptyMap())
+
+        songs.forEach { song ->
+            val entity = entitiesById[song.id]
+            val serverId = when {
+                song.providerId == "navidrome" -> song.providerRemoteId
+                else -> song.navidromeId.orEmpty()
+            }
+            val matchingLocals = (localsByServerId[serverId].orEmpty() + localsByTrack[offlineTrackKey(song.title, song.artist)].orEmpty())
+                .distinctBy { it.remoteId }
+            val localFileAvailable = (matchingLocals + listOfNotNull(entity?.takeIf { it.providerId == "local" }))
+                .distinctBy { it.remoteId }
+                .any { isReadableUri(it.uriString) }
+            if (localFileAvailable) {
+                offlineIds += song.id
+                return@forEach
+            }
+
+            val currentDownload = entity?.downloadedUri?.let(Uri::parse)?.takeIf(::isReadableDownload)
+            if (currentDownload != null) {
+                offlineIds += song.id
+                return@forEach
+            }
+            if (entity?.downloadedUri != null) songDao.setDownloadedUri(entity.remoteId, null)
+
+            if (song.providerId == "local" && song.navidromeId.isNullOrBlank()) {
+                unavailableIds += song.id
+                return@forEach
+            }
+            if (song.providerId != "navidrome" && song.navidromeId.isNullOrBlank()) {
+                unavailableIds += song.id
+                return@forEach
+            }
+
+            val downloadEntity = downloadEntitiesBySong[song.id]
+            if (downloadEntity == null || serverId.isBlank()) {
+                unavailableIds += song.id
+                return@forEach
+            }
+            val existingFile = existingDownloads[downloadFileName(downloadEntity)]
+            if (existingFile != null) {
+                songDao.setDownloadedUri(downloadEntity.remoteId, existingFile.toString())
+                offlineIds += song.id
+            } else if (song.providerId == "navidrome" || !song.navidromeId.isNullOrBlank()) {
+                // A valid server identity is enough to queue it; the server will report if it is unavailable.
+            } else {
+                unavailableIds += song.id
+            }
+        }
+
+        buildPlaylistDownloadPlan(songs, offlineIds, unavailableIds, expectedTrackCount)
+    }
+
+    private fun isReadableUri(uriString: String): Boolean = try {
+        context.contentResolver.openAssetFileDescriptor(Uri.parse(uriString), "r")?.use { it.length != 0L } ?: false
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun offlineTrackKey(title: String, artist: String) =
+        "${title.trim().lowercase()}|${artist.trim().lowercase()}"
 
     suspend fun refreshRemotePlaylists() = withContext(Dispatchers.IO) {
         val (user, token, salt) = subsonicCredentials()
@@ -880,6 +1006,15 @@ class MusicRepository @Inject constructor(
         if (response.response.status != "ok") throw IOException("Could not load playlist tracks")
         val remote = response.response.playlist ?: throw IOException("Server returned no playlist data")
         val entries = remote.entries.orEmpty()
+        val signature = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(entries.joinToString("\u0000") { it.id }.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        val checkedAt = System.currentTimeMillis()
+        if (playlist.remoteContentSignature == signature) {
+            playlistDao.updateRemoteSnapshot(playlist.id, entries.size, signature, checkedAt)
+            return
+        }
+
         val entryIds = entries.map { it.id }.distinct()
         val existingSongs = entryIds.chunked(400).flatMap { songDao.getByNavidromeIds(it) }
         val byNavidromeId = buildMap {
@@ -924,7 +1059,7 @@ class MusicRepository @Inject constructor(
             missingSongs.chunked(900).forEach { songDao.upsertAll(it) }
             if (replaceMembership) playlistDao.purgePlaylistSongs(playlist.id)
             if (newMemberships.isNotEmpty()) newMemberships.chunked(400).forEach { playlistDao.insertPlaylistSongs(it) }
-            playlistDao.updateRemoteSongCount(playlist.id, entries.size)
+            playlistDao.updateRemoteSnapshot(playlist.id, entries.size, signature, checkedAt)
         }
     }
 
@@ -968,9 +1103,10 @@ class MusicRepository @Inject constructor(
         }
     }
 
-    suspend fun addSongToPlaylist(playlistId: String, songId: String) {
-        val playlist = playlistDao.getPlaylist(playlistId) ?: return
-        val song = songDao.getById(songId) ?: return
+    suspend fun addSongToPlaylist(playlistId: String, songId: String): Boolean {
+        val playlist = playlistDao.getPlaylist(playlistId) ?: return false
+        val song = songDao.getById(songId) ?: return false
+        if (playlistDao.containsSong(playlistId, songId)) return false
         val position = playlistDao.nextSongPosition(playlistId)
         val localAlreadyOnServer = song.providerId == "local"
         playlistDao.insertPlaylistSongIfMissing(
@@ -980,6 +1116,7 @@ class MusicRepository @Inject constructor(
             playlistDao.markPlaylistPending(playlistId)
             enqueuePlaylistSync()
         }
+        return true
     }
 
     suspend fun syncPendingPlaylists(): Boolean {
@@ -1181,7 +1318,8 @@ fun SongEntity.toSong(isLiked: Boolean = false): Song = Song(
     dateAdded = dateAdded,
     isLiked = isLiked,
     downloadedUri = downloadedUri,
-    genre = genre
+    genre = genre,
+    navidromeId = navidromeId
 )
 
 private fun namespacedSongId(providerId: String, providerRemoteId: String): String =

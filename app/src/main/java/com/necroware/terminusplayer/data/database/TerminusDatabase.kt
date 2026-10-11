@@ -28,7 +28,7 @@ import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
         LyricsCacheEntity::class,
         UploadQueueEntity::class
     ],
-    version = 16,
+    version = 18,
     exportSchema = false
 )
 abstract class TerminusDatabase : RoomDatabase() {
@@ -134,6 +134,19 @@ abstract class TerminusDatabase : RoomDatabase() {
         val MIGRATION_15_16 = object : Migration(15, 16) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE upload_queue ADD COLUMN partialUri TEXT DEFAULT NULL")
+            }
+        }
+
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE playlists ADD COLUMN remoteContentSignature TEXT DEFAULT NULL")
+            }
+        }
+
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE playlists ADD COLUMN remoteSnapshotSongCount INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE playlists ADD COLUMN remoteSnapshotCheckedAt INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

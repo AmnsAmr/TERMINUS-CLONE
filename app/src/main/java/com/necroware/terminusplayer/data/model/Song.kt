@@ -17,8 +17,39 @@ data class Song(
     val dateAdded: Long = 0L,
     val isLiked: Boolean = false,
     val downloadedUri: String? = null,
-    val genre: String = ""
+    val genre: String = "",
+    /** Navidrome identity for a local track matched with a server track. */
+    val navidromeId: String? = null
 )
+
+data class PlaylistDownloadPlan(
+    val downloadableSongs: List<Song>,
+    val serverSongs: List<Song>,
+    val alreadyOfflineCount: Int,
+    val unavailableCount: Int,
+    val offlineSongIds: Set<String>,
+    val unavailableSongIds: Set<String>,
+    val unresolvedTrackCount: Int = 0
+)
+
+fun buildPlaylistDownloadPlan(
+    songs: List<Song>,
+    offlineSongIds: Set<String>,
+    unavailableSongIds: Set<String>,
+    expectedTrackCount: Int = songs.size
+): PlaylistDownloadPlan {
+    val serverSongs = songs.filter { it.providerId == "navidrome" || !it.navidromeId.isNullOrBlank() }
+    val downloadable = serverSongs.filter { it.id !in offlineSongIds && it.id !in unavailableSongIds }
+    return PlaylistDownloadPlan(
+        downloadableSongs = downloadable,
+        serverSongs = serverSongs.filterNot { it.id in unavailableSongIds },
+        alreadyOfflineCount = songs.count { it.id in offlineSongIds },
+        unavailableCount = songs.count { it.id in unavailableSongIds },
+        offlineSongIds = offlineSongIds,
+        unavailableSongIds = unavailableSongIds,
+        unresolvedTrackCount = (expectedTrackCount - songs.size).coerceAtLeast(0)
+    )
+}
 
 data class GenreMix(val genre: String, val songs: List<Song>)
 

@@ -92,11 +92,17 @@ interface PlaylistDao {
     @Query("SELECT * FROM playlist_songs WHERE playlistId = :playlistId ORDER BY position ASC")
     suspend fun getPlaylistMemberships(playlistId: String): List<PlaylistSongEntity>
 
+    @Query("SELECT EXISTS(SELECT 1 FROM playlist_songs WHERE playlistId = :playlistId AND songId = :songId)")
+    suspend fun containsSong(playlistId: String, songId: String): Boolean
+
     @Query("UPDATE playlists SET name = :name, remoteSongCount = :songCount, ownerUsername = :ownerUsername WHERE serverPlaylistId = :serverId")
     suspend fun updateRemotePlaylist(serverId: String, name: String, songCount: Int, ownerUsername: String?)
 
     @Query("UPDATE playlists SET remoteSongCount = :songCount WHERE id = :playlistId")
     suspend fun updateRemoteSongCount(playlistId: String, songCount: Int)
+
+    @Query("UPDATE playlists SET remoteSongCount = :songCount, remoteContentSignature = :signature, remoteSnapshotSongCount = :songCount, remoteSnapshotCheckedAt = :checkedAt WHERE id = :playlistId")
+    suspend fun updateRemoteSnapshot(playlistId: String, songCount: Int, signature: String, checkedAt: Long)
 
     @Query("SELECT playlist_songs.songId, songs.providerId, songs.providerRemoteId, playlist_songs.syncedToServer FROM playlist_songs INNER JOIN songs ON songs.remoteId = playlist_songs.songId WHERE playlist_songs.playlistId = :playlistId ORDER BY playlist_songs.position ASC")
     suspend fun getPlaylistSongsForSync(playlistId: String): List<PlaylistSongForSync>

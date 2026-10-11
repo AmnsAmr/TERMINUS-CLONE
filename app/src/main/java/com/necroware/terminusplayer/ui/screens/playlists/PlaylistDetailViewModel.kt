@@ -5,6 +5,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.model.Playlist
+import com.necroware.terminusplayer.data.model.PlaylistOfflineAvailability
+import com.necroware.terminusplayer.data.model.PlaylistDownloadPlan
+import com.necroware.terminusplayer.data.model.playlistOfflineAvailabilityFromResult
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.data.repository.UploadQueueManager
 import com.necroware.terminusplayer.playback.PlaybackController
@@ -23,8 +26,10 @@ data class PlaylistDetailUiState(
     val errorMessage: String? = null,
     val kind: PlaylistKind? = null,
     val title: String = "",
+    val currentPlaylistId: String? = null,
     val emptyMessage: String = "",
-    val songs: List<Song> = emptyList()
+    val songs: List<Song> = emptyList(),
+    val offlineAvailability: PlaylistOfflineAvailability = PlaylistOfflineAvailability.Checking
 )
 
 @HiltViewModel
@@ -48,6 +53,7 @@ class PlaylistDetailViewModel @Inject constructor(
     val playlists: StateFlow<List<Playlist>> = _playlists.asStateFlow()
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage.asStateFlow()
+    private var offlineCheckRequestId = 0L
 
     init {
         viewModelScope.launch {
@@ -57,23 +63,50 @@ class PlaylistDetailViewModel @Inject constructor(
             val playlistId = customPlaylistId
             val resolvedPlaylistId = remotePlaylistId?.let { "server:$it" } ?: playlistId
             if (resolvedPlaylistId != null) {
-                val songs = repository.getSongsForPlaylist(resolvedPlaylistId)
-                val deduplicatedSongs = songs.groupBy { "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}" }
-                    .map { (_, group) -> group.find { it.providerId == "local" } ?: group.first() }
-                
+                val cachedSongs = repository.getCachedSongsForPlaylist(resolvedPlaylistId)
                 val name = repository.getPlaylistName(resolvedPlaylistId)
                 val remoteTrackCount = repository.getRemotePlaylistSongCount(resolvedPlaylistId)
                 _uiState.value = PlaylistDetailUiState(
-                    isLoading = false,
+                    isLoading = cachedSongs.isEmpty() && (remoteTrackCount > 0 || remotePlaylistId != null),
                     kind = null,
                     title = name,
+                    currentPlaylistId = resolvedPlaylistId,
                     emptyMessage = when {
                         remotePlaylistId != null && remoteTrackCount > 0 -> "[ connect to the server to fetch these tracks ]"
                         remotePlaylistId != null -> "[ this server playlist has no tracks ]"
                         else -> "[ nothing matched when this was imported ]"
                     },
-                    songs = deduplicatedSongs
+                    songs = cachedSongs,
+                    offlineAvailability = PlaylistOfflineAvailability.Checking
                 )
+
+                if (cachedSongs.isNotEmpty()) {
+                    checkOfflineAvailability(resolvedPlaylistId, cachedSongs, remoteTrackCount)
+                }
+                viewModelScope.launch {
+                    val refreshError = try {
+                        repository.refreshPlaylistSongsFromServer(resolvedPlaylistId)
+                        null
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        e
+                    }
+                    val refreshedSongs = repository.getCachedSongsForPlaylist(resolvedPlaylistId)
+                    val refreshedCount = repository.getRemotePlaylistSongCount(resolvedPlaylistId)
+                    val current = _uiState.value
+                    if (current.currentPlaylistId == resolvedPlaylistId) {
+                        _uiState.value = current.copy(
+                            isLoading = false,
+                            songs = refreshedSongs,
+                            errorMessage = if (refreshedSongs.isEmpty() && refreshedCount > 0 && refreshError != null) {
+                                "Could not refresh this playlist: ${refreshError.message ?: "server unavailable"}"
+                            } else null,
+                            offlineAvailability = PlaylistOfflineAvailability.Checking
+                        )
+                        checkOfflineAvailability(resolvedPlaylistId, refreshedSongs, refreshedCount)
+                    }
+                }
             } else {
                 val resolvedKind = kind
                 if (resolvedKind == null) {
@@ -92,7 +125,6 @@ class PlaylistDetailViewModel @Inject constructor(
                 }
                 val deduplicatedSongs = songs.groupBy { "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}" }
                     .map { (_, group) -> group.find { it.providerId == "local" } ?: group.first() }
-
                 _uiState.value = PlaylistDetailUiState(
                     isLoading = false,
                     kind = resolvedKind,
@@ -102,23 +134,113 @@ class PlaylistDetailViewModel @Inject constructor(
                         PlaylistKind.RECENT -> "[ nothing played yet ]"
                         PlaylistKind.MOST_PLAYED -> "[ nothing played yet ]"
                     },
-                    songs = deduplicatedSongs
+                    songs = deduplicatedSongs,
+                    offlineAvailability = if (deduplicatedSongs.isEmpty()) {
+                        PlaylistOfflineAvailability.Ready(emptyPlaylistDownloadPlan())
+                    } else PlaylistOfflineAvailability.Checking
                 )
+                checkOfflineAvailability(null, deduplicatedSongs, deduplicatedSongs.size)
             }
         }
     }
 
-    fun playAll() {
-        val songs = _uiState.value.songs
+    private fun checkOfflineAvailability(playlistId: String?, songs: List<Song>, expectedCount: Int) {
+        val requestId = ++offlineCheckRequestId
+        if (songs.isEmpty()) {
+            val current = _uiState.value
+            if (current.currentPlaylistId == playlistId && current.songs.isEmpty()) {
+                _uiState.value = current.copy(offlineAvailability = PlaylistOfflineAvailability.Ready(emptyPlaylistDownloadPlan()))
+            }
+            return
+        }
+        viewModelScope.launch {
+            val result = try {
+                Result.success(repository.getPlaylistDownloadPlan(songs, expectedCount))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+            val current = _uiState.value
+            if (requestId == offlineCheckRequestId && current.currentPlaylistId == playlistId && current.songs.map { it.id } == songs.map { it.id }) {
+                _uiState.value = current.copy(offlineAvailability = playlistOfflineAvailabilityFromResult(result))
+            }
+        }
+    }
+
+    fun retryOfflineAvailability() = viewModelScope.launch {
+        val current = _uiState.value
+        val playlistId = current.currentPlaylistId
+        val songIds = current.songs.map { it.id }
+        val requestId = ++offlineCheckRequestId
+        _uiState.value = current.copy(offlineAvailability = PlaylistOfflineAvailability.Checking)
+        val expectedCount = try {
+            playlistId?.let { repository.getRemotePlaylistSongCount(it) } ?: current.songs.size
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (requestId == offlineCheckRequestId && _uiState.value.currentPlaylistId == playlistId && _uiState.value.songs.map { it.id } == songIds) {
+                _uiState.value = _uiState.value.copy(
+                    offlineAvailability = PlaylistOfflineAvailability.Failed(e.message ?: "Could not check playlist tracks.")
+                )
+            }
+            return@launch
+        }
+        if (requestId == offlineCheckRequestId && _uiState.value.currentPlaylistId == playlistId && _uiState.value.songs.map { it.id } == songIds) {
+            checkOfflineAvailability(playlistId, current.songs, expectedCount)
+        }
+    }
+
+    private fun emptyPlaylistDownloadPlan() = PlaylistDownloadPlan(
+        emptyList(), emptyList(), 0, 0, emptySet(), emptySet()
+    )
+
+    fun playAll(songs: List<Song> = _uiState.value.songs) {
         if (songs.isNotEmpty()) playbackController.playSongs(songs.toMediaItems(), 0)
     }
 
-    
     fun downloadAll(force: Boolean = false) = viewModelScope.launch {
         try {
-            val songs = _uiState.value.songs.filter { it.providerId == "navidrome" }
+            val current = _uiState.value
+            val plan = (current.offlineAvailability as? PlaylistOfflineAvailability.Ready)?.plan
+            if (plan == null) {
+                _actionMessage.value = "Check offline availability before downloading this playlist."
+                return@launch
+            }
+            _uiState.value = current.copy(offlineAvailability = PlaylistOfflineAvailability.Checking)
+            val refreshedPlan = try {
+                val expectedTrackCount = current.currentPlaylistId
+                    ?.let { repository.getRemotePlaylistSongCount(it) }
+                    ?.coerceAtLeast(current.songs.size)
+                    ?: current.songs.size
+                repository.getPlaylistDownloadPlan(current.songs, expectedTrackCount)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (_uiState.value.currentPlaylistId == current.currentPlaylistId && _uiState.value.songs.map { it.id } == current.songs.map { it.id }) {
+                    _uiState.value = _uiState.value.copy(
+                        offlineAvailability = PlaylistOfflineAvailability.Failed(e.message ?: "Could not recheck offline availability.")
+                    )
+                }
+                _actionMessage.value = "Could not recheck offline availability: ${e.message ?: "Unknown error"}"
+                return@launch
+            }
+            val latest = _uiState.value
+            if (latest.currentPlaylistId == current.currentPlaylistId && latest.songs.map { it.id } == current.songs.map { it.id }) {
+                _uiState.value = latest.copy(offlineAvailability = PlaylistOfflineAvailability.Ready(refreshedPlan))
+            }
+            val songs = if (force) refreshedPlan.serverSongs else refreshedPlan.downloadableSongs
+            if (songs.isEmpty()) {
+                _actionMessage.value = when {
+                    refreshedPlan.unresolvedTrackCount > 0 -> "${refreshedPlan.unresolvedTrackCount} playlist entries are not loaded yet; refresh while online before downloading them."
+                    refreshedPlan.unavailableCount > 0 -> "No downloadable tracks are available; ${refreshedPlan.unavailableCount} tracks have no local or server source."
+                    refreshedPlan.alreadyOfflineCount == current.songs.size && current.songs.isNotEmpty() -> "All tracks in this playlist are already available offline."
+                    else -> "No tracks in this playlist are available for download."
+                }
+                return@launch
+            }
             uploadQueueManager.enqueueDownloads(songs, force)
-            _actionMessage.value = "Queued ${songs.size} downloads. Track progress in Stats."
+            _actionMessage.value = "Queued ${songs.size} ${if (force) "server tracks for re-download" else "missing downloads"}. Track progress in Stats."
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -128,8 +250,14 @@ class PlaylistDetailViewModel @Inject constructor(
     
     fun downloadSong(song: Song) = viewModelScope.launch {
         try {
-            uploadQueueManager.enqueueDownloads(listOf(song))
-            _actionMessage.value = "Queued ${song.title} for download. Track progress in Stats."
+            val plan = repository.getPlaylistDownloadPlan(listOf(song))
+            if (plan.downloadableSongs.isEmpty()) {
+                _actionMessage.value = if (plan.alreadyOfflineCount > 0) "${song.title} is already available offline."
+                else "${song.title} is not available from the server."
+            } else {
+                uploadQueueManager.enqueueDownloads(plan.downloadableSongs)
+                _actionMessage.value = "Queued ${song.title} for download. Track progress in Stats."
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -150,10 +278,71 @@ class PlaylistDetailViewModel @Inject constructor(
 
     fun dismissActionMessage() { _actionMessage.value = null }
 
-    fun playFrom(song: Song) {
-        val songs = _uiState.value.songs
+    fun playFrom(song: Song, songs: List<Song> = _uiState.value.songs) {
         val index = songs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
         playbackController.playSongs(songs.toMediaItems(), index)
+    }
+
+    fun downloadSelected(songs: List<Song>) = viewModelScope.launch {
+        try {
+            if (_uiState.value.offlineAvailability !is PlaylistOfflineAvailability.Ready) {
+                _actionMessage.value = "Check offline availability before downloading selected tracks."
+                return@launch
+            }
+            val plan = repository.getPlaylistDownloadPlan(songs.distinctBy { it.id })
+            if (plan.downloadableSongs.isEmpty()) {
+                _actionMessage.value = when {
+                    plan.unresolvedTrackCount > 0 -> "Some selected tracks are not loaded yet; refresh the playlist while online."
+                    plan.alreadyOfflineCount == songs.size && songs.isNotEmpty() -> "All selected tracks are already available offline."
+                    plan.unavailableCount > 0 -> "${plan.unavailableCount} selected tracks are unavailable for download."
+                    else -> "No selected tracks are currently downloadable."
+                }
+            } else {
+                uploadQueueManager.enqueueDownloads(plan.downloadableSongs)
+                _actionMessage.value = buildString {
+                    append("Queued ${plan.downloadableSongs.size} of ${songs.size} selected tracks; ${plan.alreadyOfflineCount} already offline")
+                    if (plan.unavailableCount > 0) append("; ${plan.unavailableCount} unavailable")
+                    append(". Track progress in Stats.")
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not queue selected downloads: ${e.message ?: "Unknown error"}"
+        }
+    }
+
+    fun addSongsToPlaylist(playlistId: String, songIds: List<String>) = viewModelScope.launch {
+        try {
+            val uniqueIds = songIds.distinct()
+            var addedCount = 0
+            for (songId in uniqueIds) if (repository.addSongToPlaylist(playlistId, songId)) addedCount++
+            _actionMessage.value = when {
+                addedCount == uniqueIds.size -> "Added $addedCount selected tracks."
+                addedCount == 0 -> "Those tracks are already in that playlist."
+                else -> "Added $addedCount tracks; ${uniqueIds.size - addedCount} were already there."
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not add selected tracks: ${e.message ?: "Unknown error"}"
+        }
+    }
+
+    fun uploadSelected(songs: List<Song>) = viewModelScope.launch {
+        try {
+            val localSongs = songs.filter { it.providerId == "local" }.distinctBy { it.id }
+            if (localSongs.isEmpty()) {
+                _actionMessage.value = "No selected local tracks can be uploaded."
+            } else {
+                uploadQueueManager.enqueueUploads(localSongs)
+                _actionMessage.value = "Queued ${localSongs.size} selected local tracks for upload. Track progress in Stats."
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not queue selected uploads: ${e.message ?: "Unknown error"}"
+        }
     }
 
     fun playNext(song: Song) = playbackController.playSongNext(song)
@@ -170,7 +359,17 @@ class PlaylistDetailViewModel @Inject constructor(
     }
 
     fun addSongToPlaylist(playlistId: String, songId: String) = viewModelScope.launch {
-        repository.addSongToPlaylist(playlistId, songId)
+        try {
+            _actionMessage.value = if (repository.addSongToPlaylist(playlistId, songId)) {
+                "Added track to playlist."
+            } else {
+                "Track is already in that playlist."
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not add track: ${e.message ?: "Unknown error"}"
+        }
     }
 }
 
