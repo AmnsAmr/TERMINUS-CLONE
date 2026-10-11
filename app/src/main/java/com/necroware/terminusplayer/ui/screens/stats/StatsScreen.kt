@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.data.repository.StatsRange
@@ -42,6 +43,14 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var showDownloadEvents by remember { mutableStateOf(false) }
     var showUploadEvents by remember { mutableStateOf(false) }
+    val uploadPositions = remember(state.uploadQueue) {
+        state.uploadQueue.filter { it.state in setOf("WAITING", "FAILED", "UPLOADING") }
+            .mapIndexed { index, item -> item.songId to index + 1 }.toMap()
+    }
+    val downloadPositions = remember(state.downloadQueue) {
+        state.downloadQueue.filter { it.state in setOf("WAITING", "FAILED", "DOWNLOADING") }
+            .mapIndexed { index, item -> item.songId to index + 1 }.toMap()
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -202,29 +211,19 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
 
         item {
             Text(
-                text = "${if (showDownloadEvents) "▾" else "▸"} DOWNLOAD ACTIVITY · ${state.downloadEvents.size}",
+                text = "${if (showDownloadEvents) "▾" else "▸"} DOWNLOAD QUEUE · ${state.downloadQueue.size}",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.fillMaxWidth().clickable { showDownloadEvents = !showDownloadEvents }.padding(vertical = 8.dp)
             )
         }
-        if (showDownloadEvents && state.downloadEvents.isEmpty()) {
-            item { TerminalState("NO DOWNLOAD ACTIVITY", "Downloads will appear here while they run.") }
+        if (showDownloadEvents && state.downloadQueue.isEmpty()) {
+            item { TerminalState("DOWNLOAD QUEUE EMPTY", "Downloads you start will appear here.") }
         }
-        if (showDownloadEvents) {
-            itemsIndexed(state.downloadEvents.asReversed().take(50), key = { index, _ -> "download-$index" }) { _, event ->
-                TerminalBorder(Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            text = "${event.status}: ${event.songTitle}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (event.status == "Failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(event.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
+        if (showDownloadEvents && state.downloadQueue.isNotEmpty()) {
+            item { TransferQueueActions(state.downloadQueue, viewModel::cancelAllTransfers, viewModel::retryAllFailedUploads) }
+            itemsIndexed(state.downloadQueue.asReversed().take(50), key = { _, row -> "download-${row.songId}" }) { index, event ->
+                TransferQueueRow(event, downloadPositions[event.songId] ?: 0, state.transferWorkerState, "DOWNLOAD", onRetry = { viewModel.retryFailedDownload(event.songId) }, onRemove = { viewModel.removeTransfer(event.songId) })
             }
         }
 
@@ -240,36 +239,9 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
             item { TerminalState("UPLOAD QUEUE EMPTY", "Uploads you start will appear here.") }
         }
         if (showUploadEvents && state.uploadQueue.isNotEmpty()) {
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
-                    if (state.uploadQueue.any { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }) {
-                        Text("[ RETRY FAILED ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { viewModel.retryAllFailedUploads() })
-                    }
-                    Text("[ CLEAR QUEUE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.clickable { viewModel.cancelAllUploads() })
-                }
-            }
-            items(state.uploadQueue.asReversed().take(50), key = { "upload-${it.songId}" }) { event ->
-                TerminalBorder(Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(
-                                text = "${if (event.state == "CONVERSION_FAILED") "UPLOAD FAILED" else event.state}: ${event.title}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (event.state.contains("FAIL")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
-                            if (event.state == "PERMANENT_FAILURE" || event.state == "CONVERSION_FAILED") {
-                                Text("[ RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { viewModel.retryFailedUpload(event.songId) })
-                            }
-                        }
-                        Text("Attempt: ${event.attemptCount}/3", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (!event.errorMessage.isNullOrBlank()) {
-                            Text("Reason: ${event.errorMessage}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
+            item { TransferQueueActions(state.uploadQueue, viewModel::cancelAllTransfers, viewModel::retryAllFailedUploads) }
+            itemsIndexed(state.uploadQueue.asReversed().take(50), key = { _, row -> "upload-${row.songId}" }) { index, event ->
+                TransferQueueRow(event, uploadPositions[event.songId] ?: 0, state.transferWorkerState, "UPLOAD", onRetry = { viewModel.retryFailedUpload(event.songId) }, onRemove = { viewModel.removeTransfer(event.songId) })
             }
         }
 
@@ -309,6 +281,102 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
 }
 
 @Composable
+private fun TransferQueueActions(
+    queue: List<com.necroware.terminusplayer.data.database.entity.UploadQueueEntity>,
+    onCancel: () -> Unit,
+    onRetryFailed: () -> Unit
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+        if (queue.any { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }) {
+            Text("[ RETRY FAILED ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onRetryFailed))
+        }
+        if (queue.any { it.state == "WAITING" || it.state == "UPLOADING" || it.state == "DOWNLOADING" || it.state == "FAILED" }) {
+            Text("[ CANCEL TRANSFERS ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.clickable(onClick = onCancel))
+        }
+    }
+}
+
+@Composable
+private fun TransferQueueRow(
+    item: com.necroware.terminusplayer.data.database.entity.UploadQueueEntity,
+    queuePosition: Int,
+    workerState: androidx.work.WorkInfo.State?,
+    operation: String,
+    onRetry: () -> Unit,
+    onRemove: () -> Unit
+) {
+    val active = item.state == "UPLOADING" || item.state == "DOWNLOADING"
+    val isFailure = item.state == "PERMANENT_FAILURE" || item.state == "CONVERSION_FAILED"
+    val totalBytes = item.totalBytes?.takeIf { it > 0L }
+    val progress = totalBytes?.let { (item.bytesTransferred.toFloat() / it.toFloat()).coerceIn(0f, 1f) }
+    val context = LocalContext.current
+    val transferWord = if (operation == "UPLOAD") "sent" else "received"
+    val elapsed = item.startedAtEpochMs?.let { ((System.currentTimeMillis() - it).coerceAtLeast(0L) / 1000L) }
+    val quietFor = item.lastProgressAtEpochMs?.let { ((System.currentTimeMillis() - it).coerceAtLeast(0L) / 1000L) }
+
+    TerminalBorder(Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    text = item.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (isFailure) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isFailure) {
+                    Text("[ RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onRetry))
+                }
+            }
+            Text(
+                text = when {
+                    item.state == "WAITING" && workerState == androidx.work.WorkInfo.State.ENQUEUED -> "WAITING · worker/network constraint pending${if (queuePosition > 0) " · position $queuePosition" else ""}"
+                    item.state == "WAITING" && item.phase == "INTERRUPTED" -> "INTERRUPTED · queued to resume"
+                    item.state == "WAITING" -> "WAITING IN QUEUE${if (queuePosition > 0) " · position $queuePosition" else ""}"
+                    item.state == "UPLOADING" -> "UPLOADING${if (queuePosition > 0) " · song $queuePosition" else ""} · attempt ${item.attemptCount + 1} of 3"
+                    item.state == "DOWNLOADING" -> "DOWNLOADING${if (queuePosition > 0) " · song $queuePosition" else ""} · attempt ${item.attemptCount + 1} of 3"
+                    item.state == "FAILED" -> "RETRYING · attempt ${item.attemptCount} of 3"
+                    item.state == "SUCCESS" -> if (operation == "UPLOAD") "UPLOAD COMPLETE" else "DOWNLOAD COMPLETE"
+                    item.state == "ALREADY_EXISTS" -> "ALREADY ON SERVER"
+                    isFailure -> "$operation FAILED · ${item.attemptCount} attempts"
+                    else -> item.state
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = if (isFailure) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+            )
+            if (active) {
+                if (progress != null) {
+                    androidx.compose.material3.LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                    Text("${(progress * 100).toInt()}% · ${android.text.format.Formatter.formatShortFileSize(context, item.bytesTransferred)} / ${android.text.format.Formatter.formatShortFileSize(context, totalBytes ?: 0L)}", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Text("${android.text.format.Formatter.formatShortFileSize(context, item.bytesTransferred)} $transferWord · total size unknown", style = MaterialTheme.typography.bodySmall)
+                }
+            } else if (item.bytesTransferred > 0L) {
+                val size = item.totalBytes?.let { " / ${android.text.format.Formatter.formatShortFileSize(context, it)}" }.orEmpty()
+                Text("${android.text.format.Formatter.formatShortFileSize(context, item.bytesTransferred)} $transferWord$size", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item.startedAtEpochMs?.let { startedAt ->
+                val startedLabel = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(startedAt))
+                val timeLabel = if (active && elapsed != null) "Elapsed ${elapsed}s" else "Started $startedLabel"
+                Text("$timeLabel · attempt ${item.attemptCount}/3", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item.lastProgressAtEpochMs?.let {
+                Text("Last progress update: ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(it))}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (active && item.bytesTransferred > 0L && quietFor != null && quietFor >= 120L) {
+                Text("No byte progress for ${quietFor / 60} min; it may be waiting on the network or server. Cause unknown.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+            }
+            item.errorMessage?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (isFailure) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
+            if (!active) {
+                Text("[ REMOVE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clickable(onClick = onRemove).padding(vertical = 4.dp))
+            }
+        }
+    }
+}
+
+@Composable
 private fun SummaryTile(label: String, value: String, modifier: Modifier = Modifier) {
     TerminalBorder(modifier = modifier.fillMaxWidth()) {
         Column {
@@ -343,7 +411,7 @@ private fun TopCategoryRow(item: TopCategoryItem, rank: Int, maxPlays: Int) {
                 Text("${item.playCount}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             androidx.compose.material3.LinearProgressIndicator(
-                progress = if (maxPlays > 0) (item.playCount.toFloat() / maxPlays).coerceIn(0f, 1f) else 0f,
+                progress = { if (maxPlays > 0) (item.playCount.toFloat() / maxPlays).coerceIn(0f, 1f) else 0f },
                 modifier = Modifier.fillMaxWidth(),
                 color = MaterialTheme.colorScheme.primary,
                 trackColor = MaterialTheme.colorScheme.surfaceVariant

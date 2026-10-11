@@ -34,6 +34,7 @@ import com.necroware.terminusplayer.data.model.parseGenreTags
 import com.necroware.terminusplayer.util.matchM3uEntryToSong
 import com.necroware.terminusplayer.util.normalizeForMatch
 import com.necroware.terminusplayer.util.parseM3u
+import com.necroware.terminusplayer.util.TransferProgress
 import com.necroware.terminusplayer.data.model.SyncedLyrics
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -77,7 +78,7 @@ class MusicRepository @Inject constructor(
     private val subsonicApi: SubsonicApiService,
     private val preferencesRepository: UserPreferencesRepository,
     private val lrclibLyricsRepository: LrclibLyricsRepository
-) {
+) : DownloadTransferRepository {
 
     private val syncMutex = Mutex()
     private val _playlistAccountInfo = MutableStateFlow(PlaylistAccountInfo())
@@ -340,32 +341,24 @@ class MusicRepository @Inject constructor(
         return song.toSong(isLiked = likedSongDao.isLiked(song.remoteId))
     }
 
-    data class DownloadEvent(val songTitle: String, val status: String, val detail: String)
-    private val _downloadEvents = kotlinx.coroutines.flow.MutableStateFlow<List<DownloadEvent>>(emptyList())
-    val downloadEvents: kotlinx.coroutines.flow.Flow<List<DownloadEvent>> = _downloadEvents
-
-    private fun addDownloadEvent(title: String, status: String, detail: String) {
-        _downloadEvents.value = (_downloadEvents.value + DownloadEvent(title, status, detail)).takeLast(20)
-    }
-
-    suspend fun downloadSong(songId: String, force: Boolean = false): String = withContext(Dispatchers.IO) {
-        val song = songDao.getById(songId) ?: throw IOException("Track is no longer in the library")
-        val title = "${song.artist} - ${song.title}"
-        addDownloadEvent(title, "Starting", "Initializing download")
+    override suspend fun downloadSong(
+        songId: String,
+        force: Boolean,
+        onProgress: ((TransferProgress) -> Unit)?
+    ): String = withContext(Dispatchers.IO) {
+        val song = songDao.getById(songId) ?: throw PermanentTransferException("Track is no longer in the library")
         try {
-            if (song.providerId != "navidrome") throw IOException("Only server tracks can be downloaded")
+            if (song.providerId != "navidrome") throw PermanentTransferException("Only server tracks can be downloaded")
             val prefs = preferencesRepository.preferences.first()
             val name = downloadFileName(song)
             
             if (!force) {
                 song.downloadedUri?.let(Uri::parse)?.takeIf(::isReadableDownload)?.let { existing ->
-                    addDownloadEvent(title, "Skipped", "Already downloaded and readable")
                     return@withContext existing.toString()
                 }
                 if (song.downloadedUri != null) songDao.setDownloadedUri(songId, null)
                 findExistingDownload(name, prefs.downloadFolderUri)?.let { existing ->
                     songDao.setDownloadedUri(songId, existing.toString())
-                    addDownloadEvent(title, "Found", "Found existing file in storage")
                     return@withContext existing.toString()
                 }
             } else {
@@ -373,35 +366,52 @@ class MusicRepository @Inject constructor(
             }
 
             val config = preferencesRepository.awaitServerConnectionConfig()
-            if (config.username.isBlank() || config.password.isBlank()) throw IOException("Navidrome credentials are missing")
+            if (config.username.isBlank() || config.password.isBlank()) throw PermanentTransferException("Navidrome credentials are missing")
             val salt = newSubsonicSalt()
             val token = buildSubsonicToken(config.password, salt)
             
-            addDownloadEvent(title, "Connecting", "Requesting file from server")
             val response = subsonicApi.download(song.providerRemoteId, config.username, token, salt)
             if (!response.isSuccessful) {
                 response.errorBody()?.close()
-                throw IOException("Download failed with HTTP ${response.code()}")
+                val message = "Download failed with HTTP ${response.code()}"
+                if (response.code() in 400..499) throw PermanentTransferException(message)
+                throw IOException(message)
             }
             val body = response.body() ?: throw IOException("Server returned an empty download")
             if (body.contentType()?.subtype?.contains("json", ignoreCase = true) == true) {
                 body.close()
-                throw IOException("Server returned an authentication or download error")
+                throw PermanentTransferException("Server returned an authentication or download error")
             }
             
-            addDownloadEvent(title, "Downloading", "Saving file to storage")
             val destination = createDownloadDestination(name, prefs.downloadFolderUri)
             try {
+                val totalBytes = body.contentLength().takeIf { it >= 0L }
+                onProgress?.invoke(TransferProgress(0L, totalBytes, destination.uri.toString()))
                 body.use { downloaded ->
                     downloaded.byteStream().use { input ->
                         context.contentResolver.openOutputStream(destination.uri, "w")?.use { output ->
-                            input.copyTo(output, DEFAULT_BUFFER_SIZE)
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            var bytesTransferred = 0L
+                            var lastReportedBytes = 0L
+                            var lastReportedAt = System.currentTimeMillis()
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                output.write(buffer, 0, count)
+                                bytesTransferred += count
+                                val now = System.currentTimeMillis()
+                                if (bytesTransferred - lastReportedBytes >= 256L * 1024L || now - lastReportedAt >= 500L) {
+                                    onProgress?.invoke(TransferProgress(bytesTransferred, totalBytes))
+                                    lastReportedBytes = bytesTransferred
+                                    lastReportedAt = now
+                                }
+                            }
+                            onProgress?.invoke(TransferProgress(bytesTransferred, totalBytes))
                         } ?: throw IOException("Cannot open the selected download folder")
                     }
                 }
                 destination.publish()
                 songDao.setDownloadedUri(songId, destination.uri.toString())
-                addDownloadEvent(title, "Success", "Download complete")
                 destination.uri.toString()
             } catch (e: CancellationException) {
                 destination.delete()
@@ -411,12 +421,20 @@ class MusicRepository @Inject constructor(
                 throw e
             }
         } catch (e: CancellationException) {
-            addDownloadEvent(title, "Cancelled", "Download cancelled")
             throw e
         } catch (e: Exception) {
-            addDownloadEvent(title, "Failed", e.message ?: "Unknown error")
             throw e
         }
+    }
+
+    override suspend fun cleanupInterruptedDownload(partialUri: String) = withContext(Dispatchers.IO) {
+        val uri = Uri.parse(partialUri)
+        if (DocumentsContract.isDocumentUri(context, uri)) {
+            DocumentsContract.deleteDocument(context.contentResolver, uri)
+        } else {
+            context.contentResolver.delete(uri, null, null)
+        }
+        Unit
     }
 
     private data class DownloadDestination(

@@ -28,7 +28,7 @@ import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
         LyricsCacheEntity::class,
         UploadQueueEntity::class
     ],
-    version = 14,
+    version = 16,
     exportSchema = false
 )
 abstract class TerminusDatabase : RoomDatabase() {
@@ -115,6 +115,25 @@ abstract class TerminusDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE songs ADD COLUMN genre TEXT NOT NULL DEFAULT ''")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_songs_genre ON songs(genre)")
+            }
+        }
+
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE upload_queue ADD COLUMN transferType TEXT NOT NULL DEFAULT 'UPLOAD'")
+                db.execSQL("ALTER TABLE upload_queue ADD COLUMN remoteSongId TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE upload_queue ADD COLUMN bytesTransferred INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE upload_queue ADD COLUMN totalBytes INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE upload_queue ADD COLUMN startedAtEpochMs INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE upload_queue ADD COLUMN lastProgressAtEpochMs INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE upload_queue ADD COLUMN phase TEXT NOT NULL DEFAULT 'QUEUED'")
+                db.execSQL("ALTER TABLE upload_queue ADD COLUMN forceDownload INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE upload_queue ADD COLUMN partialUri TEXT DEFAULT NULL")
             }
         }
     }

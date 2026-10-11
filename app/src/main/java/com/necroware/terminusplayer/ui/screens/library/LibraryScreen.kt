@@ -427,7 +427,7 @@ fun LibraryScreen(
                                 softWrap = false,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.clickable {
-                                    selectedSongs.filter { it.providerId != "local" && it.downloadedUri == null }.forEach { viewModel.downloadSong(it) }
+                                    viewModel.downloadSongs(selectedSongs.filter { it.providerId != "local" && it.downloadedUri == null })
                                     showBulkActionDialog = false
                                     selectedSongs = emptySet()
                                 }.padding(vertical = 8.dp)

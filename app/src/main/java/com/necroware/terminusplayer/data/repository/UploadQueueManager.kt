@@ -6,10 +6,12 @@ import androidx.work.Constraints
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import android.net.Uri
 import com.necroware.terminusplayer.data.database.dao.UploadQueueDao
 import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.sync.UploadWorker
+import com.necroware.terminusplayer.sync.TransferNotifications
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -33,8 +35,55 @@ class UploadQueueManager @Inject constructor(
                 title = song.title
             )
         }
-        uploadQueueDao.insertAll(entities)
+        if (entities.isNotEmpty()) {
+            uploadQueueDao.insertIfAbsent(entities)
+            startWorker()
+        }
+    }
+
+    suspend fun enqueueUploadFile(uri: Uri, title: String) = withContext(Dispatchers.IO) {
+        uploadQueueDao.insertIfAbsent(listOf(
+            UploadQueueEntity(
+                songId = "upload-file:$uri",
+                uriString = uri.toString(),
+                state = "WAITING",
+                attemptCount = 0,
+                addedAtEpochMs = System.currentTimeMillis(),
+                title = title
+            )
+        ))
         startWorker()
+    }
+
+    suspend fun enqueueDownloads(songs: List<Song>, force: Boolean = false) = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val entities = songs.filter { it.providerId == "navidrome" }.mapIndexed { index, song ->
+            UploadQueueEntity(
+                songId = downloadQueueId(song.id),
+                remoteSongId = song.id,
+                uriString = song.uriString,
+                transferType = TRANSFER_DOWNLOAD,
+                state = "WAITING",
+                attemptCount = 0,
+                addedAtEpochMs = now + index,
+                title = "${song.artist} - ${song.title}",
+                forceDownload = force
+            )
+        }
+        if (entities.isNotEmpty()) {
+            val existing = uploadQueueDao.getAll().associateBy { it.songId }
+            val eligible = entities.filter { queued ->
+                val previous = existing[queued.songId]
+                previous == null || (force && previous.state in setOf("SUCCESS", "ALREADY_EXISTS", "PERMANENT_FAILURE", "CONVERSION_FAILED"))
+            }
+            val replacements = eligible.filter { it.songId in existing }
+            val newItems = eligible.filterNot { it.songId in existing }
+            if (newItems.isNotEmpty()) uploadQueueDao.insertIfAbsent(newItems)
+            if (replacements.isNotEmpty()) uploadQueueDao.insertAll(replacements)
+            if (eligible.isNotEmpty()) {
+            startWorker()
+            }
+        }
     }
 
     suspend fun retryUpload(songId: String) = withContext(Dispatchers.IO) {
@@ -53,35 +102,46 @@ class UploadQueueManager @Inject constructor(
     suspend fun cancelAllUploads() = withContext(Dispatchers.IO) {
         WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_WORK_NAME)
         uploadQueueDao.clearAll()
+        (context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager)
+            .apply {
+                cancel(TransferNotifications.NOTIFICATION_ID)
+                cancel(TransferNotifications.QUEUE_NOTIFICATION_ID)
+            }
     }
+
+    suspend fun cancelAllTransfers() = cancelAllUploads()
 
     suspend fun removeFromQueue(songId: String) = withContext(Dispatchers.IO) {
         uploadQueueDao.removeIfNotUploading(songId)
     }
 
-    fun schedulePendingUploads() = startWorker()
+    suspend fun schedulePendingUploads() = withContext(Dispatchers.IO) { startWorker() }
 
     suspend fun resumePendingUploads() = withContext(Dispatchers.IO) {
         val hasPendingWork = uploadQueueDao.getAll().any {
-            it.state == "WAITING" || it.state == "FAILED" || it.state == "UPLOADING" || it.state == "CONVERTING"
+            it.state == "WAITING" || it.state == "FAILED" || it.state == "UPLOADING" || it.state == "DOWNLOADING" || it.state == "CONVERTING"
         }
         if (hasPendingWork) {
-            val request = uploadWorkRequest()
-            WorkManager.getInstance(context).enqueueUniqueWork(
-                UNIQUE_WORK_NAME,
-                ExistingWorkPolicy.KEEP,
-                request
-            )
+            startWorker(ExistingWorkPolicy.KEEP)
         }
     }
 
-    private fun startWorker() {
+    private suspend fun startWorker(policy: ExistingWorkPolicy = ExistingWorkPolicy.APPEND_OR_REPLACE) {
+        val workManager = WorkManager.getInstance(context)
+        val wasRunning = workManager.getWorkInfosForUniqueWork(UNIQUE_WORK_NAME).get()
+            .any { it.state == androidx.work.WorkInfo.State.RUNNING }
         val request = uploadWorkRequest()
-        WorkManager.getInstance(context).enqueueUniqueWork(
+        workManager.enqueueUniqueWork(
             UNIQUE_WORK_NAME,
-            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            policy,
             request
         )
+        if (!wasRunning) {
+            val pendingCount = uploadQueueDao.getAll().count {
+                it.state == "WAITING" || it.state == "FAILED" || it.state == "UPLOADING" || it.state == "DOWNLOADING"
+            }
+            if (pendingCount > 0) TransferNotifications.postQueued(context, pendingCount)
+        }
     }
 
     private fun uploadWorkRequest() = OneTimeWorkRequestBuilder<UploadWorker>()
@@ -94,5 +154,8 @@ class UploadQueueManager @Inject constructor(
 
     companion object {
         const val UNIQUE_WORK_NAME = "UploadQueueWorker"
+        const val TRANSFER_UPLOAD = "UPLOAD"
+        const val TRANSFER_DOWNLOAD = "DOWNLOAD"
+        fun downloadQueueId(songId: String) = "download:$songId"
     }
 }

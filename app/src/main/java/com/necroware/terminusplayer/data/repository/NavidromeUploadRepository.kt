@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import com.necroware.terminusplayer.data.api.custom.NavidromeNativeApiService
 import com.necroware.terminusplayer.data.api.custom.UploadCheckRequest
 import com.necroware.terminusplayer.data.api.custom.UploadQuotaResponse
+import com.necroware.terminusplayer.util.TransferProgress
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -34,11 +35,11 @@ open class NavidromeUploadRepository @Inject constructor(
         null
     }
 
-    open suspend fun upload(uri: Uri, onProgress: ((Int) -> Unit)? = null): String {
+    open suspend fun upload(uri: Uri, onProgress: ((TransferProgress) -> Unit)? = null): String {
         val (name, size) = withContext(Dispatchers.IO) { fileMetadataFor(uri) }
         val extension = name.substringAfterLast('.', "").lowercase()
-        if (extension !in ALLOWED_EXTENSIONS) throw IOException("Unsupported audio format")
-        if (size != null && size > MAX_UPLOAD_BYTES) throw IOException("File exceeds the 100 MB limit")
+        if (extension !in ALLOWED_EXTENSIONS) throw PermanentTransferException("Unsupported audio format")
+        if (size != null && size > MAX_UPLOAD_BYTES) throw PermanentTransferException("File exceeds the 100 MB limit")
 
         val check = api.checkUploads(UploadCheckRequest(listOf(name)))
         val checkResult = check.body()
@@ -47,8 +48,8 @@ open class NavidromeUploadRepository @Inject constructor(
             throw IOException("Could not check for duplicate files (${check.code()})")
         }
         if (name !in checkResult.accepted) {
-            if (name in checkResult.rejected) throw IOException("$name already exists or is pending")
-            throw IOException("Server did not accept $name for upload")
+            if (name in checkResult.rejected) throw DuplicateUploadException("$name already exists or is pending")
+            throw PermanentTransferException("Server did not accept $name for upload")
         }
 
         val contentType = withContext(Dispatchers.IO) { context.contentResolver.getType(uri) }
@@ -75,6 +76,7 @@ open class NavidromeUploadRepository @Inject constructor(
                 400, 413 -> "File is too large or invalid"
                 else -> "Upload request returned ${response.code()}"
             }
+            if (response.code() in setOf(400, 403, 413)) throw PermanentTransferException(message)
             throw IOException(message)
         }
         return name

@@ -4,12 +4,50 @@ import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class DatabaseMigrationTest {
+    @Test
+    fun uploadQueueProgressMigrationPreservesExistingRows() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val databaseName = "upload-queue-migration-test.db"
+        context.deleteDatabase(databaseName)
+        val config = SupportSQLiteOpenHelper.Configuration.builder(context)
+            .name(databaseName)
+            .callback(object : SupportSQLiteOpenHelper.Callback(14) {
+                override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL("CREATE TABLE upload_queue (songId TEXT NOT NULL PRIMARY KEY, uriString TEXT NOT NULL, state TEXT NOT NULL, attemptCount INTEGER NOT NULL, addedAtEpochMs INTEGER NOT NULL, title TEXT NOT NULL, errorMessage TEXT DEFAULT NULL, forceConvert INTEGER NOT NULL DEFAULT 0)")
+                    db.execSQL("INSERT INTO upload_queue (songId, uriString, state, attemptCount, addedAtEpochMs, title) VALUES ('local:track-1', 'content://music/1', 'WAITING', 0, 123, 'My Song.flac')")
+                }
+                override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+            })
+            .build()
+        val helper = FrameworkSQLiteOpenHelperFactory().create(config)
+        try {
+            val db = helper.writableDatabase
+            TerminusDatabase.MIGRATION_14_15.migrate(db)
+            TerminusDatabase.MIGRATION_15_16.migrate(db)
+            db.query("SELECT songId, state, title, transferType, bytesTransferred, phase, partialUri FROM upload_queue").use { cursor ->
+                check(cursor.moveToFirst())
+                assertEquals("local:track-1", cursor.getString(0))
+                assertEquals("WAITING", cursor.getString(1))
+                assertEquals("My Song.flac", cursor.getString(2))
+                assertEquals("UPLOAD", cursor.getString(3))
+                assertEquals(0L, cursor.getLong(4))
+                assertEquals("QUEUED", cursor.getString(5))
+                assertEquals(true, cursor.isNull(6))
+            }
+        } finally {
+            helper.close()
+            context.deleteDatabase(databaseName)
+        }
+    }
+
     @Test
     fun versionFiveRowsAndSongReferencesSurviveNamespacingMigration() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext

@@ -8,10 +8,12 @@ import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -77,8 +79,9 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
+                    var continueWithoutNotifications by remember { mutableStateOf(false) }
 
-                    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                    val permissionLauncher = rememberLauncherForActivityResult(
                         ActivityResultContracts.RequestMultiplePermissions()
                     ) { permissions ->
                         hasEssentialPermission = permissions[essentialAudioPermission] ?: isGranted(essentialAudioPermission)
@@ -86,21 +89,29 @@ class MainActivity : ComponentActivity() {
                             hasNotificationPermission = permissions[Manifest.permission.POST_NOTIFICATIONS] ?: isGranted(Manifest.permission.POST_NOTIFICATIONS)
                         }
                     }
+                    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+                        ActivityResultContracts.RequestPermission()
+                    ) { granted ->
+                        hasNotificationPermission = granted
+                        if (!granted) continueWithoutNotifications = true
+                    }
 
-                    if (hasEssentialPermission && hasNotificationPermission) {
+                    if (hasEssentialPermission && (hasNotificationPermission || continueWithoutNotifications)) {
                         TerminusNavGraph(
                             motionPreference = motionPreference,
                             onInitialContentReady = { initialContentReady.set(true) }
                         )
-                    } else {
+                    } else if (!hasEssentialPermission) {
                         SideEffect { initialContentReady.set(true) }
                         PermissionGate(onRequestPermission = {
-                            val reqs = mutableListOf(essentialAudioPermission)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                reqs.add(Manifest.permission.POST_NOTIFICATIONS)
-                            }
-                            permissionLauncher.launch(reqs.toTypedArray())
+                            permissionLauncher.launch(arrayOf(essentialAudioPermission))
                         })
+                    } else {
+                        SideEffect { initialContentReady.set(true) }
+                        NotificationPermissionGate(
+                            onGrant = { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
+                            onContinue = { continueWithoutNotifications = true }
+                        )
                     }
                 }
             }
@@ -110,6 +121,25 @@ class MainActivity : ComponentActivity() {
     private companion object {
         const val MIN_SPLASH_DURATION_MS = 650L
         const val MAX_SPLASH_WAIT_MS = 3_000L
+    }
+}
+
+@androidx.compose.runtime.Composable
+private fun NotificationPermissionGate(onGrant: () -> Unit, onContinue: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("> TRANSFER NOTIFICATIONS", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
+        Text(
+            "Allow notifications to see upload and download progress while Terminus is in the background. You can continue without them; Android will hide transfer notifications from the drawer, though the active transfer remains in system Active apps.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(vertical = 16.dp)
+        )
+        Button(onClick = onGrant) { Text("ENABLE NOTIFICATIONS") }
+        Text("CONTINUE WITHOUT", color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 16.dp).clickable(onClick = onContinue))
     }
 }
 
@@ -128,7 +158,7 @@ private fun PermissionGate(onRequestPermission: () -> Unit) {
             color = MaterialTheme.colorScheme.primary
         )
         Text(
-            text = "[ audio library & notification access required ]",
+            text = "[ audio library access required ]",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(vertical = 16.dp)

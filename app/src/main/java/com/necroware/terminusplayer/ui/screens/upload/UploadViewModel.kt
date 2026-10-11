@@ -5,16 +5,12 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
 import com.necroware.terminusplayer.data.api.custom.UploadQuotaResponse
 import com.necroware.terminusplayer.data.repository.NavidromeUploadRepository
-import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.data.repository.UploadQueueManager
 import com.necroware.terminusplayer.data.database.dao.UploadQueueDao
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
-import com.necroware.terminusplayer.sync.UploadWorker
 import com.necroware.terminusplayer.data.repository.toSong
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -31,7 +27,6 @@ import javax.inject.Inject
 class UploadViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val uploadRepository: NavidromeUploadRepository,
-    private val musicRepository: MusicRepository,
     private val songDao: com.necroware.terminusplayer.data.database.dao.SongDao,
     private val uploadQueueDao: UploadQueueDao,
     private val uploadQueueManager: UploadQueueManager
@@ -48,9 +43,6 @@ class UploadViewModel @Inject constructor(
     private val _queue = MutableStateFlow<List<UploadQueueEntity>>(emptyList())
     val queue = _queue.asStateFlow()
 
-    private val _activeProgress = MutableStateFlow<Pair<String, Int>?>(null)
-    val activeProgress = _activeProgress.asStateFlow()
-
     init { 
         fetchQuota() 
 
@@ -58,17 +50,6 @@ class UploadViewModel @Inject constructor(
             uploadQueueDao.observeAll().collect { _queue.value = it }
         }
 
-        viewModelScope.launch {
-            WorkManager.getInstance(context)
-                .getWorkInfosForUniqueWorkFlow(UploadQueueManager.UNIQUE_WORK_NAME)
-                .collect { workInfos ->
-                    val running = workInfos.firstOrNull { it.state == WorkInfo.State.RUNNING }
-                    val songId = running?.progress?.getString(UploadWorker.KEY_SONG_ID)
-                    val progress = running?.progress?.getInt(UploadWorker.KEY_PROGRESS, -1) ?: -1
-                    _activeProgress.value = if (songId != null && progress >= 0) songId to progress else null
-                }
-        }
-        
         viewModelScope.launch {
             combine(
                 songDao.observeAllSongs(),
@@ -109,18 +90,7 @@ class UploadViewModel @Inject constructor(
                 ?.takeIf { it.isNotBlank() }
                 ?: uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':')
                 ?: "Selected audio file"
-            val songId = "upload-file:${uri}"
-            uploadQueueDao.insert(
-                UploadQueueEntity(
-                    songId = songId,
-                    uriString = uri.toString(),
-                    state = "WAITING",
-                    attemptCount = 0,
-                    addedAtEpochMs = System.currentTimeMillis(),
-                    title = name
-                )
-            )
-            uploadQueueManager.schedulePendingUploads()
+            uploadQueueManager.enqueueUploadFile(uri, name)
             _uploadStatus.value = "Added $name to the upload queue."
         } catch (e: CancellationException) {
             throw e
