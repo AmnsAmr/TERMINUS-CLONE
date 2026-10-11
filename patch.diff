@@ -1,0 +1,41 @@
+--- app/src/main/java/com/necroware/terminusplayer/MainActivity.kt
++++ app/src/main/java/com/necroware/terminusplayer/MainActivity.kt
+@@ -58,14 +58,35 @@
+                     var hasEssentialPermission by remember {
+                         mutableStateOf(isGranted(essentialAudioPermission))
+                     }
++                    var hasNotificationPermission by remember {
++                        mutableStateOf(
++                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
++                                isGranted(Manifest.permission.POST_NOTIFICATIONS)
++                            } else {
++                                true
++                            }
++                        )
++                    }
+ 
+-                    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+-                        ActivityResultContracts.RequestPermission()
+-                    ) { granted -> hasEssentialPermission = granted || isGranted(essentialAudioPermission) }
++                    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
++                        ActivityResultContracts.RequestMultiplePermissions()
++                    ) { permissions -> 
++                        hasEssentialPermission = permissions[essentialAudioPermission] ?: isGranted(essentialAudioPermission)
++                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
++                            hasNotificationPermission = permissions[Manifest.permission.POST_NOTIFICATIONS] ?: isGranted(Manifest.permission.POST_NOTIFICATIONS)
++                        }
++                    }
+ 
+                     if (hasEssentialPermission) {
+                         TerminusNavGraph(motionPreference = motionPreference)
+                     } else {
+-                        PermissionGate(onRequestPermission = { permissionLauncher.launch(essentialAudioPermission) })
++                        PermissionGate(onRequestPermission = { 
++                            val reqs = mutableListOf(essentialAudioPermission)
++                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
++                                reqs.add(Manifest.permission.POST_NOTIFICATIONS)
++                            }
++                            permissionLauncher.launch(reqs.toTypedArray())
++                        })
+                     }
+                 }

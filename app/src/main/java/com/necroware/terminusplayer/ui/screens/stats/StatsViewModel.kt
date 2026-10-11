@@ -74,12 +74,6 @@ class StatsViewModel @Inject constructor(
         }
     }
 
-    fun retryWithConversion(songId: String) {
-        viewModelScope.launch {
-            uploadQueueManager.retryWithConversion(songId)
-        }
-    }
-
     fun retryAllFailedUploads() {
         viewModelScope.launch {
             uploadQueueManager.retryAllFailed()

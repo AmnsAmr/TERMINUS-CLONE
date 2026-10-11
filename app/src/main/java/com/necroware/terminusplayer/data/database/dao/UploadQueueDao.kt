@@ -27,8 +27,8 @@ interface UploadQueueDao {
     @Query("UPDATE upload_queue SET state = :state, attemptCount = :attemptCount WHERE songId = :songId")
     suspend fun updateState(songId: String, state: String, attemptCount: Int)
 
-    @Query("UPDATE upload_queue SET state = :state, attemptCount = :attemptCount, forceConvert = :forceConvert WHERE songId = :songId")
-    suspend fun updateStateWithForceConvert(songId: String, state: String, attemptCount: Int, forceConvert: Boolean)
+    @Query("UPDATE upload_queue SET state = 'WAITING', attemptCount = 0, forceConvert = 0 WHERE songId = :songId")
+    suspend fun resetForRetry(songId: String)
 
     @Query("UPDATE upload_queue SET state = :state, attemptCount = :attemptCount, errorMessage = :errorMessage WHERE songId = :songId")
     suspend fun updateStateWithError(songId: String, state: String, attemptCount: Int, errorMessage: String?)

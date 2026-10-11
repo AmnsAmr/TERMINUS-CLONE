@@ -12,5 +12,5 @@ data class UploadQueueEntity(
     val addedAtEpochMs: Long,
     val title: String,
     val errorMessage: String? = null,
-    val forceConvert: Boolean = false
+    val forceConvert: Boolean = false // Legacy database column retained for existing installs.
 )

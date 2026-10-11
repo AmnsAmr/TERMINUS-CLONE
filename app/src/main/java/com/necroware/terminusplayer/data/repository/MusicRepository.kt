@@ -29,6 +29,8 @@ import com.necroware.terminusplayer.data.model.Playlist
 import com.necroware.terminusplayer.data.model.PlaylistAccountInfo
 import com.necroware.terminusplayer.data.model.GenreMix
 import com.necroware.terminusplayer.data.model.Song
+import com.necroware.terminusplayer.data.model.normalizeGenreKey
+import com.necroware.terminusplayer.data.model.parseGenreTags
 import com.necroware.terminusplayer.util.matchM3uEntryToSong
 import com.necroware.terminusplayer.util.normalizeForMatch
 import com.necroware.terminusplayer.util.parseM3u
@@ -41,6 +43,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
@@ -129,7 +134,10 @@ class MusicRepository @Inject constructor(
             val key = "${local.title.trim().lowercase()}|${local.artist.trim().lowercase()}"
             val match = remoteSongsByKey[key]
             if (match != null) {
-                local.copy(navidromeId = match.providerRemoteId)
+                val mergedGenres = (parseGenreTags(local.genre) + parseGenreTags(match.genre))
+                    .distinctBy(::normalizeGenreKey)
+                    .joinToString("; ")
+                local.copy(navidromeId = match.providerRemoteId, genre = mergedGenres)
             } else {
                 local
             }
@@ -175,6 +183,7 @@ class MusicRepository @Inject constructor(
         }
 
     fun observeSongCount(): Flow<Int> = songDao.observeSongCount()
+    fun observeGenreTags(): Flow<List<String>> = songDao.observeGenreTags()
     fun observeLikedSongCount(): Flow<Int> = likedSongDao.observeLikedSongCount()
 
     fun observeAllArtists(): Flow<List<Artist>> =
@@ -632,19 +641,136 @@ class MusicRepository @Inject constructor(
             .shuffled()
     }
 
-    /** Genre-based Home mixes use server tags and only load a small sample per genre. */
+    /** Build genre mixes from cached tags, then fill missing genres from Navidrome's genre API. */
     suspend fun getGenreMixes(limit: Int = 6, songsPerGenre: Int = 30): List<GenreMix> =
         withContext(Dispatchers.Default) {
-            val genres = songDao.getTopGenres(limit)
-            if (genres.isEmpty()) return@withContext emptyList()
             val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
-            genres.mapNotNull { genreRow ->
-                val songs = songDao.getSongsByGenre(genreRow.genre, songsPerGenre)
-                    .map { it.toSong(isLiked = it.remoteId in likedIds) }
-                    .shuffled()
-                songs.takeIf { it.size >= 3 }?.let { GenreMix(genreRow.genre, it) }
+            val groupedTags = songDao.getSongsWithGenres()
+                .flatMap { entity ->
+                    parseGenreTags(entity.genre).map { genre -> genre to entity }
+                }
+                .groupBy { (genre, _) -> normalizeGenreKey(genre) }
+                .mapValues { (_, taggedSongs) ->
+                    taggedSongs.first().first to taggedSongs.map { it.second }.distinctBy { it.remoteId }
+                }
+
+            val mixesByGenre = linkedMapOf<String, GenreMix>()
+            groupedTags.values
+                .filter { (_, songs) -> songs.size >= 3 }
+                .sortedByDescending { (_, songs) -> songs.size }
+                .take(limit)
+                .forEach { (genre, entities) ->
+                    val songs = entities.map { it.toSong(isLiked = it.remoteId in likedIds) }
+                        .shuffled()
+                        .take(songsPerGenre)
+                    mixesByGenre[normalizeGenreKey(genre)] = GenreMix(genre, songs)
+                }
+
+            if (mixesByGenre.size < limit) {
+                fetchNavidromeGenreMixes(
+                    count = limit - mixesByGenre.size,
+                    songsPerGenre = songsPerGenre,
+                    excludedGenres = mixesByGenre.keys,
+                    likedIds = likedIds
+                ).forEach { mix -> mixesByGenre.putIfAbsent(normalizeGenreKey(mix.genre), mix) }
             }
+            mixesByGenre.values.take(limit)
         }
+
+    private suspend fun fetchNavidromeGenreMixes(
+        count: Int,
+        songsPerGenre: Int,
+        excludedGenres: Set<String>,
+        likedIds: Set<String>
+    ): List<GenreMix> {
+        if (count <= 0) return emptyList()
+        return try {
+            val config = preferencesRepository.awaitServerConnectionConfig()
+            if (config.serverUrl.isBlank() || config.username.isBlank() || config.password.isBlank()) {
+                return emptyList()
+            }
+            val salt = newSubsonicSalt()
+            val token = buildSubsonicToken(config.password, salt)
+            val genresResponse = subsonicApi.getGenres(config.username, token, salt)
+            if (genresResponse.response.status != "ok") return emptyList()
+
+            val candidates = genresResponse.response.genres?.genres.orEmpty()
+                .filter { (it.songCount ?: 0) >= 3 && normalizeGenreKey(it.value) !in excludedGenres }
+                .distinctBy { normalizeGenreKey(it.value) }
+                .sortedByDescending { it.songCount ?: 0 }
+                .take(count)
+
+            val genreEntries = coroutineScope {
+                candidates.map { genre ->
+                    async(Dispatchers.IO) {
+                        try {
+                            val response = subsonicApi.getSongsByGenre(
+                                genre = genre.value,
+                                count = songsPerGenre.coerceIn(3, 500),
+                                user = config.username,
+                                token = token,
+                                salt = salt
+                            )
+                            if (response.response.status != "ok") null
+                            else genre to response.response.songsByGenre?.songs.orEmpty()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                }.awaitAll().filterNotNull()
+            }
+            val entriesByGenre = genreEntries.filter { it.second.isNotEmpty() }
+            if (entriesByGenre.isEmpty()) return emptyList()
+            val allServerIds = entriesByGenre.flatMap { (_, entries) -> entries.map { it.id } }.distinct()
+            val cachedByServerId = allServerIds.chunked(400).flatMap { songDao.getByNavidromeIds(it) }
+                .groupBy { if (it.providerId == "navidrome") it.providerRemoteId else it.navidromeId.orEmpty() }
+            val resolvedByServerId = mutableMapOf<String, SongEntity>()
+            val entitiesToUpsert = linkedMapOf<String, SongEntity>()
+            val mixes = entriesByGenre.mapNotNull { (genre, entries) ->
+                val songs = entries.mapNotNull { entry ->
+                    val existing = resolvedByServerId[entry.id]
+                        ?: cachedByServerId[entry.id]?.firstOrNull { it.providerId == "local" }
+                        ?: cachedByServerId[entry.id]?.firstOrNull()
+                    val baseEntity = existing?.let { entitiesToUpsert[it.remoteId] ?: it }
+                        ?: SongEntity(
+                            remoteId = namespacedSongId("navidrome", entry.id),
+                            providerId = "navidrome",
+                            providerRemoteId = entry.id,
+                            title = entry.title,
+                            artist = entry.artist?.takeIf { it.isNotBlank() } ?: "Unknown Artist",
+                            album = entry.album?.takeIf { it.isNotBlank() } ?: "Unknown Album",
+                            albumId = entry.albumId.orEmpty(),
+                            duration = (entry.duration?.toLong() ?: 0L) * 1_000L,
+                            uriString = "terminus://${entry.id}",
+                            dateAdded = System.currentTimeMillis(),
+                            trackNumber = entry.track ?: 0,
+                            year = entry.year ?: 0,
+                            folderPath = entry.path.orEmpty(),
+                            sizeBytes = entry.size ?: 0L,
+                            genre = ""
+                        )
+                    val mergedGenres = (parseGenreTags(baseEntity.genre) + parseGenreTags(entry.genre) + genre.value)
+                        .distinctBy(::normalizeGenreKey)
+                        .joinToString("; ")
+                    val entity = baseEntity.copy(genre = mergedGenres)
+                    resolvedByServerId[entry.id] = entity
+                    if (existing == null || entity != baseEntity) {
+                        entitiesToUpsert[entity.remoteId] = entity
+                    }
+                    entity.toSong(isLiked = entity.remoteId in likedIds)
+                }.distinctBy { it.id }.shuffled().take(songsPerGenre)
+                songs.takeIf { it.size >= 3 }?.let { GenreMix(genre.value, it) }
+            }
+            entitiesToUpsert.values.toList().chunked(400).forEach { songDao.upsertAll(it) }
+            mixes
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
 
     // ---- Custom playlists ------------------------------------------------
 

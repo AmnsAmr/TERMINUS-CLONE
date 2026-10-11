@@ -1,5 +1,8 @@
 package com.necroware.terminusplayer.data.repository
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import com.necroware.terminusplayer.data.api.lyrics.LrclibApiService
 import com.necroware.terminusplayer.data.database.dao.LyricsCacheDao
 import com.necroware.terminusplayer.data.database.entity.LyricsCacheEntity
@@ -10,6 +13,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
+import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.MessageDigest
 import java.util.Locale
 import javax.inject.Inject
@@ -18,7 +22,8 @@ import javax.inject.Singleton
 @Singleton
 class LrclibLyricsRepository @Inject constructor(
     private val api: LrclibApiService,
-    private val cacheDao: LyricsCacheDao
+    private val cacheDao: LyricsCacheDao,
+    @ApplicationContext private val context: Context
 ) {
     suspend fun getLyrics(song: SongEntity): SyncedLyrics? {
         if (song.title.isBlank() || song.artist.isBlank()) return null
@@ -31,7 +36,11 @@ class LrclibLyricsRepository @Inject constructor(
             if (cached.plainLyrics == null && cached.syncedLyrics == null) negativeTtl else positiveTtl
         ) return cached.asLyrics()
 
-        val lookup = withTimeoutOrNull(2_200L) {
+        // Reuse cached lyrics on any connection, but only query the external
+        // lyrics service when the active default network is Wi-Fi.
+        if (!isOnWifi()) return cached?.asLyrics()
+
+        val lookup = withTimeoutOrNull(5_000L) {
             try {
                 val exact = try {
                     api.getLyrics(song.title, song.artist, song.album, (song.duration + 500L) / 1_000L)
@@ -72,8 +81,8 @@ class LrclibLyricsRepository @Inject constructor(
         val artist = normalize(record.optString("artistName"))
         if (title.isBlank() || artist.isBlank() || title != normalize(song.title) || artist != normalize(song.artist)) return false
         val resultDurationMs = (record.optDouble("duration", Double.NaN) * 1_000.0).toLong()
-        return resultDurationMs > 0L && kotlin.math.abs(resultDurationMs - song.duration) <=
-            maxOf(3_000L, (song.duration * 0.02).toLong())
+        if (song.duration <= 0L || resultDurationMs <= 0L) return true
+        return kotlin.math.abs(resultDurationMs - song.duration) <= maxOf(3_000L, (song.duration * 0.02).toLong())
     }
 
     private fun lyricsFields(record: JSONObject): Pair<String?, String?> {
@@ -120,6 +129,17 @@ class LrclibLyricsRepository @Inject constructor(
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
         .trim()
         .replace(Regex("\\s+"), " ")
+
+    private fun isOnWifi(): Boolean {
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val activeNetwork = connectivity.activeNetwork ?: return false
+        val capabilities = connectivity.getNetworkCapabilities(activeNetwork) ?: return false
+        return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+            !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
 
     private companion object {
         const val DAY_MS = 86_400_000L

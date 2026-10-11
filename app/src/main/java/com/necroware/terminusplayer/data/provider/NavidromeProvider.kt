@@ -2,6 +2,9 @@ package com.necroware.terminusplayer.data.provider
 
 import com.necroware.terminusplayer.data.api.subsonic.SubsonicApiService
 import com.necroware.terminusplayer.data.database.entity.SongEntity
+import com.necroware.terminusplayer.data.api.subsonic.model.SongItem
+import com.necroware.terminusplayer.data.model.normalizeGenreKey
+import com.necroware.terminusplayer.data.model.parseGenreTags
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.model.SyncedLyrics
 import com.necroware.terminusplayer.data.model.LyricLine
@@ -76,7 +79,7 @@ class NavidromeProvider @Inject constructor(
                 uriString = "terminus://${song.id}",
                 trackNumber = song.track ?: 0,
                 year = song.year ?: 0,
-                genre = song.genre.orEmpty(),
+                genre = song.genreTags(),
                 folderPath = song.path ?: "",
                 sizeBytes = song.size ?: 0L,
                 dateAdded = System.currentTimeMillis()
@@ -222,4 +225,21 @@ class NavidromeProvider @Inject constructor(
             null
         }
     }
+}
+
+private fun SongItem.genreTags(): String {
+    val tags = buildList {
+        addAll(parseGenreTags(genre))
+        fun collect(value: Any?) {
+            when (value) {
+                is String -> addAll(parseGenreTags(value))
+                is List<*> -> value.forEach(::collect)
+                is Map<*, *> -> listOf("name", "value", "genre").forEach { key ->
+                    value[key]?.let(::collect)
+                }
+            }
+        }
+        collect(genres)
+    }
+    return tags.distinctBy(::normalizeGenreKey).joinToString("; ")
 }

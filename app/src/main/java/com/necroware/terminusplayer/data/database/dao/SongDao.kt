@@ -59,6 +59,12 @@ interface SongDao {
     @Query("SELECT * FROM songs")
     suspend fun getAllSongs(): List<SongEntity>
 
+    @Query("SELECT * FROM songs WHERE TRIM(genre) != ''")
+    suspend fun getSongsWithGenres(): List<SongEntity>
+
+    @Query("SELECT DISTINCT genre FROM songs WHERE TRIM(genre) != '' ORDER BY genre COLLATE NOCASE ASC")
+    fun observeGenreTags(): Flow<List<String>>
+
     @Query("DELETE FROM songs WHERE remoteId IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
 

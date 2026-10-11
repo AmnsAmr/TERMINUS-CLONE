@@ -101,7 +101,11 @@ fun HomeScreen(
                     )
                     if (state.genreMixes.isEmpty()) {
                         Text(
-                            text = "Genre playlists appear here when tracks have genre tags.",
+                            text = if (state.isLoadingGenreMixes) {
+                                "Finding genre playlists..."
+                            } else {
+                                "No genre has at least three playable tracks yet."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 20.dp)

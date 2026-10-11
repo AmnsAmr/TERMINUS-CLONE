@@ -14,12 +14,27 @@ data class SubsonicResponseData(
     @Json(name = "version") val version: String,
     @Json(name = "error") val error: SubsonicError? = null,
     @Json(name = "searchResult3") val searchResult3: SearchResult3? = null,
+    @Json(name = "genres") val genres: GenresResponse? = null,
+    @Json(name = "songsByGenre") val songsByGenre: SongsByGenreResponse? = null,
     @Json(name = "lyrics") val lyrics: Any? = null,
     @Json(name = "lyricsList") val lyricsList: Any? = null,
     @Json(name = "playlist") val playlist: PlaylistResponse? = null,
     @Json(name = "playlists") val playlists: PlaylistsResponse? = null,
     @Json(name = "user") val user: UserResponse? = null
 )
+
+@JsonClass(generateAdapter = true)
+data class GenresResponse(@Json(name = "genre") val genres: List<GenreItem>? = null)
+
+@JsonClass(generateAdapter = true)
+data class GenreItem(
+    @Json(name = "value") val value: String,
+    @Json(name = "songCount") val songCount: Int? = null,
+    @Json(name = "albumCount") val albumCount: Int? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SongsByGenreResponse(@Json(name = "song") val songs: List<SongItem>? = null)
 
 @JsonClass(generateAdapter = true)
 data class PlaylistResponse(
@@ -77,5 +92,6 @@ data class SongItem(
     @Json(name = "duration") val duration: Int?,
     @Json(name = "size") val size: Long?,
     @Json(name = "path") val path: String?,
-    @Json(name = "albumId") val albumId: String?
+    @Json(name = "albumId") val albumId: String?,
+    @Json(name = "genres") val genres: Any? = null
 )

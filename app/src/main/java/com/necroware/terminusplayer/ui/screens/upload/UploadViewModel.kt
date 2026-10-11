@@ -130,7 +130,6 @@ class UploadViewModel @Inject constructor(
     }
 
     fun retryUpload(songId: String) = viewModelScope.launch { uploadQueueManager.retryUpload(songId) }
-    fun retryWithConversion(songId: String) = viewModelScope.launch { uploadQueueManager.retryWithConversion(songId) }
     fun retryAllFailed() = viewModelScope.launch { uploadQueueManager.retryAllFailed() }
     fun removeFromQueue(songId: String) = viewModelScope.launch { uploadQueueManager.removeFromQueue(songId) }
     fun cancelAllUploads() = viewModelScope.launch { uploadQueueManager.cancelAllUploads() }

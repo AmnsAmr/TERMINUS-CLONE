@@ -11,6 +11,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.CancellationException
@@ -26,6 +27,7 @@ data class HomeUiState(
     val weekMsPlayed: Long = 0L,
     val yourMix: List<Song> = emptyList(),
     val recentlyPlayed: List<Song> = emptyList(),
+    val isLoadingGenreMixes: Boolean = false,
     val genreMixes: List<GenreMix> = emptyList()
 )
 
@@ -40,10 +42,12 @@ class HomeViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            repository.observeSongCount()
+            combine(repository.observeSongCount(), repository.observeGenreTags()) { count, genres ->
+                count to genres
+            }
                 .distinctUntilChanged()
                 .debounce(350)
-                .collect { count ->
+                .collect { (count, _) ->
                     _uiState.value = _uiState.value.copy(songCount = count)
                     reloadMixAndRecents()
                     reloadWeekSummary()
@@ -87,10 +91,19 @@ class HomeViewModel @Inject constructor(
     }
 
     private suspend fun reloadMixAndRecents() {
-        val mix = repository.getYourMix(limit = 25)
-        val recent = repository.getRecentlyPlayed(limit = 20)
-        val genreMixes = repository.getGenreMixes()
-        _uiState.value = _uiState.value.copy(yourMix = mix, recentlyPlayed = recent, genreMixes = genreMixes)
+        _uiState.value = _uiState.value.copy(isLoadingGenreMixes = true)
+        try {
+            val mix = repository.getYourMix(limit = 25)
+            val recent = repository.getRecentlyPlayed(limit = 20)
+            val genreMixes = repository.getGenreMixes()
+            _uiState.value = _uiState.value.copy(
+                yourMix = mix,
+                recentlyPlayed = recent,
+                genreMixes = genreMixes
+            )
+        } finally {
+            _uiState.value = _uiState.value.copy(isLoadingGenreMixes = false)
+        }
     }
 
     private suspend fun reloadWeekSummary() {

@@ -253,7 +253,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(
-                                text = "${event.state}: ${event.title}",
+                                text = "${if (event.state == "CONVERSION_FAILED") "UPLOAD FAILED" else event.state}: ${event.title}",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = if (event.state.contains("FAIL")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
@@ -261,10 +261,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
                                 modifier = Modifier.weight(1f)
                             )
                             if (event.state == "PERMANENT_FAILURE" || event.state == "CONVERSION_FAILED") {
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text("[ RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { viewModel.retryFailedUpload(event.songId) })
-                                    Text("[ CONVERT & RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { viewModel.retryWithConversion(event.songId) })
-                                }
+                                Text("[ RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { viewModel.retryFailedUpload(event.songId) })
                             }
                         }
                         Text("Attempt: ${event.attemptCount}/3", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
