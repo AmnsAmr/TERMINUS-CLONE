@@ -9,42 +9,75 @@ import com.necroware.terminusplayer.data.database.entity.LyricsCacheEntity
 import com.necroware.terminusplayer.data.database.entity.SongEntity
 import com.necroware.terminusplayer.data.model.LyricLine
 import com.necroware.terminusplayer.data.model.SyncedLyrics
+import com.necroware.terminusplayer.data.model.toLyricsCacheFields
+import com.necroware.terminusplayer.data.model.parseLyricsText
+import com.necroware.terminusplayer.data.model.LyricsCacheIdentity
+import com.necroware.terminusplayer.data.model.lyricsCacheIdentity
+import com.necroware.terminusplayer.data.model.lrclibResultMatches
+import com.squareup.moshi.Json
+import com.squareup.moshi.JsonClass
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONArray
-import org.json.JSONObject
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.MessageDigest
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 
+@JsonClass(generateAdapter = true)
+internal data class LrclibRecord(
+    @Json(name = "trackName") val trackName: String? = null,
+    @Json(name = "artistName") val artistName: String? = null,
+    @Json(name = "duration") val duration: Double? = null,
+    @Json(name = "plainLyrics") val plainLyrics: String? = null,
+    @Json(name = "syncedLyrics") val syncedLyrics: String? = null
+)
+
 @Singleton
 class LrclibLyricsRepository @Inject constructor(
     private val api: LrclibApiService,
     private val cacheDao: LyricsCacheDao,
+    moshi: Moshi,
     @ApplicationContext private val context: Context
 ) {
+    private val recordAdapter = moshi.adapter(LrclibRecord::class.java)
+    private val recordsAdapter = moshi.adapter<List<LrclibRecord>>(
+        Types.newParameterizedType(List::class.java, LrclibRecord::class.java)
+    )
+
     suspend fun getLyrics(song: SongEntity): SyncedLyrics? {
         if (song.title.isBlank() || song.artist.isBlank()) return null
-        val key = cacheKey(song)
-        val cached = cacheDao.get(key)
-        val now = System.currentTimeMillis()
-        val positiveTtl = 90L * DAY_MS
-        val negativeTtl = 7L * DAY_MS
-        if (cached != null && now - cached.fetchedAtEpochMs <
-            if (cached.plainLyrics == null && cached.syncedLyrics == null) negativeTtl else positiveTtl
-        ) return cached.asLyrics()
+        val identity = lyricsCacheIdentity(song)
+        cachedForSong(song, identity)?.let { return it }
+        return fetchFromLrclib(song, identity)
+    }
 
-        // Reuse cached lyrics on any connection, but only query the external
-        // lyrics service when the active default network is Wi-Fi.
-        if (!isOnWifi()) return cached?.asLyrics()
+    suspend fun cachedForSong(song: SongEntity, identity: LyricsCacheIdentity = lyricsCacheIdentity(song)): SyncedLyrics? {
+        cacheDao.get(identity.cacheKey)?.asLyrics()?.let { return it }
+        val legacyKey = legacyCacheKey(song) ?: return null
+        val legacyLyrics = cacheDao.get(legacyKey)?.asLyrics() ?: return null
+        save(identity, legacyLyrics)
+        return legacyLyrics
+    }
 
+    suspend fun cached(vararg keys: String): SyncedLyrics? {
+        for (key in keys.distinct()) cacheDao.get(key)?.asLyrics()?.let { return it }
+        return null
+    }
+
+    suspend fun fetchFromLrclib(song: SongEntity, identity: LyricsCacheIdentity): SyncedLyrics? {
+        if (song.title.isBlank() || song.artist.isBlank() || !isOnline()) return null
+        val previousLookup = cacheDao.get(identity.cacheKey)
+        if (previousLookup != null && previousLookup.plainLyrics.isNullOrBlank() && previousLookup.syncedLyrics.isNullOrBlank() &&
+            System.currentTimeMillis() - previousLookup.fetchedAtEpochMs < NEGATIVE_CACHE_TTL_MS
+        ) return null
         val lookup = withTimeoutOrNull(5_000L) {
             try {
                 val exact = try {
                     api.getLyrics(song.title, song.artist, song.album, (song.duration + 500L) / 1_000L)
-                        .use { JSONObject(it.string()) }
+                        .use { recordAdapter.fromJson(it.string()) }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -59,35 +92,64 @@ class LrclibLyricsRepository @Inject constructor(
             }
         }
 
-        // A timeout or service outage is not a confirmed miss. Keep any stale
-        // result available and retry on the next request.
-        if (lookup == null || lookup === LookupResult.Failure) return cached?.asLyrics()
+        if (lookup == null || lookup === LookupResult.Failure) return null
         val fetched = (lookup as LookupResult.Success).lyrics
-        val entry = LyricsCacheEntity(key, fetched?.first, fetched?.second, now)
-        cacheDao.put(entry)
-        return entry.asLyrics()
+        val lyrics = fetched?.let { (plain, synced) ->
+            val timed = parseLyricsText(synced)
+            timed ?: parseLyricsText(plain)
+        }
+        if (lyrics == null) {
+            recordMiss(identity)
+            return null
+        }
+        save(identity, lyrics, fetched?.first)
+        return lyrics
     }
 
-    private suspend fun findSearchMatch(song: SongEntity): JSONObject? {
-        val results = api.searchLyrics(song.title, song.artist).use { JSONArray(it.string()) }
-        return (0 until results.length())
-            .asSequence()
-            .mapNotNull { results.optJSONObject(it) }
-            .firstOrNull { matches(it, song) }
+    private suspend fun recordMiss(identity: LyricsCacheIdentity) {
+        val existing = cacheDao.get(identity.cacheKey)
+        if (existing?.asLyrics() != null) return
+        val miss = LyricsCacheEntity(identity.cacheKey, null, null, System.currentTimeMillis())
+        if (identity.localFileIdentity != null) cacheDao.putLocalOnly(miss, identity.localFileIdentity) else cacheDao.put(miss)
     }
 
-    private fun matches(record: JSONObject, song: SongEntity): Boolean {
-        val title = normalize(record.optString("trackName"))
-        val artist = normalize(record.optString("artistName"))
-        if (title.isBlank() || artist.isBlank() || title != normalize(song.title) || artist != normalize(song.artist)) return false
-        val resultDurationMs = (record.optDouble("duration", Double.NaN) * 1_000.0).toLong()
-        if (song.duration <= 0L || resultDurationMs <= 0L) return true
-        return kotlin.math.abs(resultDurationMs - song.duration) <= maxOf(3_000L, (song.duration * 0.02).toLong())
+    suspend fun save(identity: LyricsCacheIdentity, lyrics: SyncedLyrics, plainFallback: String? = null): SyncedLyrics {
+        val fields = lyrics.toLyricsCacheFields()
+        val plain = plainFallback?.takeIf(String::isNotBlank) ?: fields.first
+        if (plain.isNullOrBlank() && fields.second.isNullOrBlank()) return lyrics
+        val existing = cacheDao.get(identity.cacheKey)
+        val existingLyrics = existing?.asLyrics()
+        val existingRank = existingLyrics?.let(::qualityRank) ?: -1
+        val incomingRank = qualityRank(lyrics)
+        if (existing == null || incomingRank > existingRank) {
+            val entry = LyricsCacheEntity(identity.cacheKey, plain, fields.second, System.currentTimeMillis())
+            if (identity.localFileIdentity != null) {
+                cacheDao.putLocalOnly(entry, identity.localFileIdentity)
+            } else {
+                cacheDao.put(entry)
+            }
+        } else if (identity.localFileIdentity != null) {
+            cacheDao.putFileReference(com.necroware.terminusplayer.data.database.entity.LyricsCacheFileEntity(identity.localFileIdentity, identity.cacheKey))
+        }
+        return existingLyrics?.takeIf { existingRank >= incomingRank } ?: lyrics
     }
 
-    private fun lyricsFields(record: JSONObject): Pair<String?, String?> {
-        return record.optString("plainLyrics").takeUnless { it.isBlank() || it == "null" } to
-            record.optString("syncedLyrics").takeUnless { it.isBlank() || it == "null" }
+    suspend fun cleanupConfirmedLocalFile(fileIdentity: String) {
+        cacheDao.cleanupFileReference(fileIdentity)
+    }
+
+    private suspend fun findSearchMatch(song: SongEntity): LrclibRecord? {
+        val results = api.searchLyrics(song.title, song.artist).use { recordsAdapter.fromJson(it.string()).orEmpty() }
+        return results.firstOrNull { matches(it, song) }
+    }
+
+    private fun matches(record: LrclibRecord, song: SongEntity): Boolean {
+        val resultDurationMs = record.duration?.let { (it * 1_000.0).toLong() }
+        return lrclibResultMatches(song, record.trackName.orEmpty(), record.artistName.orEmpty(), resultDurationMs)
+    }
+
+    private fun lyricsFields(record: LrclibRecord): Pair<String?, String?> {
+        return record.plainLyrics?.takeUnless(String::isBlank) to record.syncedLyrics?.takeUnless(String::isBlank)
     }
 
     private fun LyricsCacheEntity.asLyrics(): SyncedLyrics? {
@@ -117,32 +179,39 @@ class LrclibLyricsRepository @Inject constructor(
         }.sortedBy { it.startMs }.toList()
     }
 
-    private fun cacheKey(song: SongEntity): String {
+    fun isOnline(): Boolean {
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val activeNetwork = connectivity.activeNetwork ?: return false
+        val capabilities = connectivity.getNetworkCapabilities(activeNetwork) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
+    private fun qualityRank(lyrics: SyncedLyrics): Int = if (lyrics.lines.any { it.startMs > 0L }) 2 else 1
+
+    private fun legacyCacheKey(song: SongEntity): String? {
+        // Older keys stripped parenthesized/bracketed version markers, so they are unsafe for those titles.
+        if (legacyNormalize(song.title) != safeNormalize(song.title)) return null
         val source = listOf(song.title, song.artist, song.album, (song.duration / 1_000L).toString())
-            .joinToString("\u0000") { normalize(it) }
+            .joinToString("\u0000") { legacyNormalize(it) }
         return MessageDigest.getInstance("SHA-256").digest(source.toByteArray())
             .joinToString("") { "%02x".format(it) }
     }
 
-    private fun normalize(value: String): String = value.lowercase(Locale.ROOT)
+    private fun legacyNormalize(value: String): String = value.lowercase(Locale.ROOT)
         .replace(Regex("\\([^)]*\\)|\\[[^]]*]"), " ")
         .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
         .trim()
         .replace(Regex("\\s+"), " ")
 
-    private fun isOnWifi(): Boolean {
-        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            ?: return false
-        val activeNetwork = connectivity.activeNetwork ?: return false
-        val capabilities = connectivity.getNetworkCapabilities(activeNetwork) ?: return false
-        return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
-            !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
-            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-    }
+    private fun safeNormalize(value: String): String = value.lowercase(Locale.ROOT)
+        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+        .trim()
+        .replace(Regex("\\s+"), " ")
 
     private companion object {
-        const val DAY_MS = 86_400_000L
+        const val NEGATIVE_CACHE_TTL_MS = 24L * 60L * 60L * 1_000L
     }
 
     private sealed interface LookupResult {
