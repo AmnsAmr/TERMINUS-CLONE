@@ -111,17 +111,30 @@ class MusicRepository @Inject constructor(
         val scans = mutableMapOf<String, List<SongEntity>>()
         val failedProviders = mutableSetOf<String>()
         val retryableFailures = mutableSetOf<String>()
-        providers.forEach { (providerId, provider) ->
-            try {
-                scans[providerId] = provider.syncLibrary()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: ProviderSyncException) {
+        val scanResults = coroutineScope {
+            providers.map { (providerId, provider) ->
+                async {
+                    try {
+                        ProviderScanResult(providerId, songs = provider.syncLibrary())
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: ProviderSyncException) {
+                        ProviderScanResult(providerId, error = e)
+                    } catch (e: Exception) {
+                        ProviderScanResult(
+                            providerId,
+                            error = ProviderSyncException(e.message ?: "Provider scan failed", retryable = true)
+                        )
+                    }
+                }
+            }.awaitAll()
+        }
+        scanResults.forEach { (providerId, songs, error) ->
+            if (songs != null) {
+                scans[providerId] = songs
+            } else {
                 failedProviders += providerId
-                if (e.retryable) retryableFailures += providerId
-            } catch (_: Exception) {
-                failedProviders += providerId
-                retryableFailures += providerId
+                if (error?.retryable != false) retryableFailures += providerId
             }
         }
 
@@ -138,18 +151,14 @@ class MusicRepository @Inject constructor(
         val localSongs = allScanned.filter { it.providerId == "local" }
         val remoteSongs = allScanned.filter { it.providerId != "local" }
         
-        val remoteSongsByKey = remoteSongs.associateBy { 
-            "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}"
-        }
-        
-        val localKeys = localSongs.map { 
-            "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}"
-        }.toSet()
-        
+        val remoteSongsByKey = remoteSongs.groupBy(::normalizedRecordingMetadata)
+        val matchedRemoteIds = mutableSetOf<String>()
         val deduplicatedLocalSongs = localSongs.map { local ->
-            val key = "${local.title.trim().lowercase()}|${local.artist.trim().lowercase()}"
-            val match = remoteSongsByKey[key]
+            val key = normalizedRecordingMetadata(local)
+            val match = uniqueRecordingMatch(local, remoteSongsByKey[key].orEmpty())
+                ?.takeIf { it.providerRemoteId !in matchedRemoteIds }
             if (match != null) {
+                matchedRemoteIds += match.providerRemoteId
                 val mergedGenres = (parseGenreTags(local.genre) + parseGenreTags(match.genre))
                     .distinctBy(::normalizeGenreKey)
                     .joinToString("; ")
@@ -159,10 +168,7 @@ class MusicRepository @Inject constructor(
             }
         }
         
-        val remainingRemoteSongs = remoteSongs.filterNot { remote ->
-            val key = "${remote.title.trim().lowercase()}|${remote.artist.trim().lowercase()}"
-            localKeys.contains(key)
-        }
+        val remainingRemoteSongs = remoteSongs.filterNot { it.providerRemoteId in matchedRemoteIds }
         
         val scanned = (deduplicatedLocalSongs + remainingRemoteSongs).map { song ->
             song.copy(downloadedUri = existingSongs[song.remoteId]?.downloadedUri)
@@ -171,6 +177,7 @@ class MusicRepository @Inject constructor(
         // Diffing mechanism to prevent unnecessary UI recompositions
         val scannedIds = scanned.map { it.remoteId }.toSet()
         
+        val removedLocalSongs = mutableListOf<SongEntity>()
         database.withTransaction {
             val currentSongs = songDao.getAllSongs().associateBy { it.remoteId }
             val currentToUpsert = scanned.filter { currentSongs[it.remoteId] != it }
@@ -178,11 +185,21 @@ class MusicRepository @Inject constructor(
                 .filter { it.providerId !in failedProviders && it.remoteId !in scannedIds }
                 .map { it.remoteId }
 
+            removedLocalSongs += currentToDelete.mapNotNull(currentSongs::get).filter { it.providerId == "local" }
+
             if (currentToUpsert.isNotEmpty()) {
                 currentToUpsert.chunked(900).forEach { songDao.upsertAll(it) }
             }
             if (currentToDelete.isNotEmpty()) {
                 currentToDelete.chunked(900).forEach { songDao.deleteByIds(it) }
+            }
+        }
+
+        // A scan omission alone is not proof of deletion: directly re-query each old MediaStore URI.
+        // Permission failures, null cursors, and inaccessible files retain their lyric cache.
+        removedLocalSongs.forEach { removed ->
+            if (embeddedLyricsReader.confirmsPermanentDeletion(removed.uriString)) {
+                lrclibLyricsRepository.cleanupConfirmedLocalFile(removed.uriString)
             }
         }
 
@@ -196,7 +213,7 @@ class MusicRepository @Inject constructor(
             songs.map { it.toSong(isLiked = it.remoteId in likedSet) }
                 .groupBy { "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}" }
                 .map { (_, group) -> group.find { it.providerId == "local" } ?: group.first() }
-        }
+        }.flowOn(Dispatchers.Default)
 
     fun observeSongCount(): Flow<Int> = songDao.observeSongCount()
     fun observeGenreTags(): Flow<List<String>> = songDao.observeGenreTags()
