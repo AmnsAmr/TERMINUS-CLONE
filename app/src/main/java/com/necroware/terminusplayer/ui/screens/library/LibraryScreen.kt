@@ -257,6 +257,8 @@ fun LibraryScreen(
                         onLike = { viewModel.toggleLike(it.id) },
                         onAddToPlaylist = { playlistSong = it },
                         onPlayNext = viewModel::playNext,
+                        getCachedPreparedSongList = viewModel::cachedPreparedSongList,
+                        rememberPreparedSongList = viewModel::rememberPreparedSongList,
                         onListPrepared = { initialSongListPrepared = true }
                     )
                 }
@@ -271,7 +273,9 @@ fun LibraryScreen(
                             localSongs, selectedSongs, sortOrder, handleSongClick, handleSongLongPress,
                             onLike = { viewModel.toggleLike(it.id) },
                             onAddToPlaylist = { playlistSong = it },
-                            onPlayNext = viewModel::playNext
+                            onPlayNext = viewModel::playNext,
+                            getCachedPreparedSongList = viewModel::cachedPreparedSongList,
+                            rememberPreparedSongList = viewModel::rememberPreparedSongList
                         )
                     }
                 }
@@ -572,12 +576,21 @@ private fun SongList(
     onLike: (Song) -> Unit,
     onAddToPlaylist: (Song) -> Unit,
     onPlayNext: (Song) -> Unit,
+    getCachedPreparedSongList: (List<Song>, SortField) -> PreparedSongList?,
+    rememberPreparedSongList: (PreparedSongList) -> Unit,
     onListPrepared: () -> Unit = {}
 ) {
     val listState = rememberLazyListState()
     val haptic = LocalHapticFeedback.current
-    val preparedData by produceState<PreparedSongList?>(null, songs, sortOrder.field) {
-        value = withContext(Dispatchers.Default) {
+    val preparedData by produceState(
+        getCachedPreparedSongList(songs, sortOrder.field), songs, sortOrder.field
+    ) {
+        val cached = getCachedPreparedSongList(songs, sortOrder.field)
+        if (cached != null) {
+            value = cached
+            return@produceState
+        }
+        val prepared = withContext(Dispatchers.Default) {
             val sections = when (sortOrder.field) {
                 SortField.ARTIST -> songs.groupBy { it.artist.ifBlank { "Unknown artist" } }
                     .map { (label, sectionSongs) -> SongListSection(label, sectionSongs) }
@@ -600,6 +613,8 @@ private fun SongList(
                 songIndexById = songs.withIndex().associate { it.value.id to it.index }
             )
         }
+        value = prepared
+        rememberPreparedSongList(prepared)
     }
     val prepared = preparedData?.takeIf { it.sourceSongs === songs && it.sortField == sortOrder.field }
     LaunchedEffect(prepared, songs.isEmpty()) {
@@ -680,9 +695,9 @@ private fun SongList(
     }
 }
 
-private data class SongListSection(val label: String?, val songs: List<Song>)
+internal data class SongListSection(val label: String?, val songs: List<Song>)
 
-private data class PreparedSongList(
+internal data class PreparedSongList(
     val sourceSongs: List<Song>,
     val sortField: SortField,
     val sections: List<SongListSection>,
