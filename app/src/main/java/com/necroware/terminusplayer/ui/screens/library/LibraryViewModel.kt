@@ -68,6 +68,24 @@ class LibraryViewModel @Inject constructor(
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage = _actionMessage.asStateFlow()
 
+    // The library destination can be disposed while opening Now Playing. Keep a
+    // few prepared lists so returning to the same songs does not show a spinner
+    // while SongList rebuilds its sections and fast-scroll indexes.
+    private val preparedSongListCache = mutableListOf<PreparedSongList>()
+
+    @Synchronized
+    internal fun cachedPreparedSongList(songs: List<Song>, field: SortField): PreparedSongList? =
+        preparedSongListCache.firstOrNull { it.sourceSongs === songs && it.sortField == field }
+
+    @Synchronized
+    internal fun rememberPreparedSongList(prepared: PreparedSongList) {
+        preparedSongListCache.removeAll {
+            it.sourceSongs === prepared.sourceSongs && it.sortField == prepared.sortField
+        }
+        preparedSongListCache.add(0, prepared)
+        while (preparedSongListCache.size > 4) preparedSongListCache.removeAt(preparedSongListCache.lastIndex)
+    }
+
     fun playSong(song: Song, queue: List<Song>) {
         val index = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
         playbackController.playSongsFromSongs(queue, index)
