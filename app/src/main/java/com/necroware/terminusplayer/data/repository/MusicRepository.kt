@@ -40,6 +40,9 @@ import com.necroware.terminusplayer.util.normalizeForMatch
 import com.necroware.terminusplayer.util.parseM3u
 import com.necroware.terminusplayer.util.TransferProgress
 import com.necroware.terminusplayer.data.model.SyncedLyrics
+import com.necroware.terminusplayer.data.model.lyricsCacheIdentity
+import com.necroware.terminusplayer.data.model.normalizedRecordingMetadata
+import com.necroware.terminusplayer.data.model.uniqueRecordingMatch
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -65,10 +68,17 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.necroware.terminusplayer.sync.LikeSyncWorker
 import com.necroware.terminusplayer.sync.PlaylistSyncWorker
+import com.necroware.terminusplayer.sync.LyricsCacheWorker
 import androidx.work.Constraints
 import androidx.work.NetworkType
 import java.io.IOException
 import android.webkit.MimeTypeMap
+
+private data class ProviderScanResult(
+    val providerId: String,
+    val songs: List<SongEntity>? = null,
+    val error: ProviderSyncException? = null
+)
 
 @Singleton
 class MusicRepository @Inject constructor(
@@ -81,7 +91,8 @@ class MusicRepository @Inject constructor(
     private val providers: Map<String, @JvmSuppressWildcards MediaProvider>,
     private val subsonicApi: SubsonicApiService,
     private val preferencesRepository: UserPreferencesRepository,
-    private val lrclibLyricsRepository: LrclibLyricsRepository
+    private val lrclibLyricsRepository: LrclibLyricsRepository,
+    private val embeddedLyricsReader: EmbeddedLyricsReader
 ) : DownloadTransferRepository {
 
     private val syncMutex = Mutex()
@@ -362,11 +373,13 @@ class MusicRepository @Inject constructor(
             
             if (!force) {
                 song.downloadedUri?.let(Uri::parse)?.takeIf(::isReadableDownload)?.let { existing ->
+                    scheduleLyricsWarmup(songId)
                     return@withContext existing.toString()
                 }
                 if (song.downloadedUri != null) songDao.setDownloadedUri(songId, null)
                 findExistingDownload(name, prefs.downloadFolderUri)?.let { existing ->
                     songDao.setDownloadedUri(songId, existing.toString())
+                    scheduleLyricsWarmup(songId)
                     return@withContext existing.toString()
                 }
             } else {
@@ -420,6 +433,7 @@ class MusicRepository @Inject constructor(
                 }
                 destination.publish()
                 songDao.setDownloadedUri(songId, destination.uri.toString())
+                scheduleLyricsWarmup(songId)
                 destination.uri.toString()
             } catch (e: CancellationException) {
                 destination.delete()
@@ -565,19 +579,76 @@ class MusicRepository @Inject constructor(
         MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase())
             ?: "application/octet-stream"
 
-    suspend fun getLyrics(songId: String): SyncedLyrics? {
+    suspend fun getLyrics(songId: String): SyncedLyrics? = resolveLyrics(songId, reportCacheErrors = false)
+
+    private suspend fun resolveLyrics(songId: String, reportCacheErrors: Boolean): SyncedLyrics? {
         val song = songDao.getById(songId) ?: return null
         return try {
-            val providerLyrics = if (song.navidromeId != null) {
-                providers["navidrome"]?.getLyrics(song.navidromeId)
-            } else {
-                providers[song.providerId]?.getLyrics(song.providerRemoteId)
+            val identity = lyricsCacheIdentity(song)
+            val prefs = preferencesRepository.preferences.first()
+            val fileUri = song.downloadedUri ?: song.uriString.takeIf { song.providerId == "local" }
+
+            if (fileUri != null) {
+                val fileLyrics = embeddedLyricsReader.read(fileUri, prefs.downloadFolderUri, reportCacheErrors)
+                if (fileLyrics != null) {
+                    try {
+                        return lrclibLyricsRepository.save(identity, fileLyrics)
+                    } catch (e: Exception) {
+                        if (reportCacheErrors) throw e
+                        return fileLyrics
+                    }
+                }
             }
-            providerLyrics ?: lrclibLyricsRepository.getLyrics(song)
+
+            lrclibLyricsRepository.cachedForSong(song, identity)?.let { return it }
+
+            if (lrclibLyricsRepository.isOnline()) {
+                val providerId = when {
+                    !song.navidromeId.isNullOrBlank() -> "navidrome"
+                    else -> song.providerId
+                }
+                val providerRemoteId = song.navidromeId?.takeIf(String::isNotBlank) ?: song.providerRemoteId
+                val providerLyrics = try {
+                    providers[providerId]?.getLyrics(providerRemoteId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
+                providerLyrics?.takeIf { it.lines.any { line -> line.text.isNotBlank() } }?.let {
+                    try {
+                        return lrclibLyricsRepository.save(identity, it)
+                    } catch (e: Exception) {
+                        if (reportCacheErrors) throw e
+                        return it
+                    }
+                }
+            }
+
+            lrclibLyricsRepository.fetchFromLrclib(song, identity)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            null
+            if (reportCacheErrors) throw e else null
+        }
+    }
+
+    suspend fun warmLyricsCache(songId: String) {
+        resolveLyrics(songId, reportCacheErrors = true)
+    }
+
+    private fun scheduleLyricsWarmup(songId: String) {
+        try {
+            val request = OneTimeWorkRequestBuilder<LyricsCacheWorker>()
+                .setInputData(workDataOf(LyricsCacheWorker.KEY_SONG_ID to songId))
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                "lyrics-cache-$songId",
+                ExistingWorkPolicy.KEEP,
+                request
+            )
+        } catch (e: Exception) {
+            android.util.Log.w("MusicRepository", "Could not schedule lyrics cache warmup for $songId", e)
         }
     }
 
