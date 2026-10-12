@@ -82,6 +82,8 @@ dependencies {
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.session)
     implementation(libs.media3.common)
+    // Reads format-native lyric tags (including FLAC Vorbis comments and M4A/MP4 tags).
+    implementation("net.jthink:jaudiotagger:3.0.1")
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.datastore.preferences)
