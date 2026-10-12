@@ -13,6 +13,40 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class DatabaseMigrationTest {
     @Test
+    fun lyricsOwnershipMigrationPreservesLegacyCacheRows() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val databaseName = "lyrics-cache-migration-test.db"
+        context.deleteDatabase(databaseName)
+        val config = SupportSQLiteOpenHelper.Configuration.builder(context)
+            .name(databaseName)
+            .callback(object : SupportSQLiteOpenHelper.Callback(18) {
+                override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                    db.execSQL("CREATE TABLE lyrics_cache (cacheKey TEXT NOT NULL PRIMARY KEY, plainLyrics TEXT, syncedLyrics TEXT, fetchedAtEpochMs INTEGER NOT NULL)")
+                    db.execSQL("INSERT INTO lyrics_cache VALUES ('legacy-metadata-hash', 'cached words', NULL, 123)")
+                }
+                override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+            })
+            .build()
+        val helper = FrameworkSQLiteOpenHelperFactory().create(config)
+        try {
+            val db = helper.writableDatabase
+            TerminusDatabase.MIGRATION_18_19.migrate(db)
+            db.query("SELECT cacheKey, plainLyrics, fetchedAtEpochMs FROM lyrics_cache").use { cursor ->
+                check(cursor.moveToFirst())
+                assertEquals("legacy-metadata-hash", cursor.getString(0))
+                assertEquals("cached words", cursor.getString(1))
+                assertEquals(123L, cursor.getLong(2))
+            }
+            db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'lyrics_cache_files'").use {
+                check(it.moveToFirst())
+            }
+        } finally {
+            helper.close()
+            context.deleteDatabase(databaseName)
+        }
+    }
+
+    @Test
     fun uploadQueueProgressMigrationPreservesExistingRows() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val databaseName = "upload-queue-migration-test.db"
