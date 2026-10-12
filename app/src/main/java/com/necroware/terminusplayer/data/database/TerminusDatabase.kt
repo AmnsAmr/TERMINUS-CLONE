@@ -11,6 +11,7 @@ import com.necroware.terminusplayer.data.database.dao.PlaylistDao
 import com.necroware.terminusplayer.data.database.dao.SongDao
 import com.necroware.terminusplayer.data.database.entity.LikedSongEntity
 import com.necroware.terminusplayer.data.database.entity.LyricsCacheEntity
+import com.necroware.terminusplayer.data.database.entity.LyricsCacheFileEntity
 import com.necroware.terminusplayer.data.database.entity.PlayEventEntity
 import com.necroware.terminusplayer.data.database.entity.PlaylistEntity
 import com.necroware.terminusplayer.data.database.entity.PlaylistSongEntity
@@ -26,9 +27,10 @@ import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
         PlaylistEntity::class,
         PlaylistSongEntity::class,
         LyricsCacheEntity::class,
+        LyricsCacheFileEntity::class,
         UploadQueueEntity::class
     ],
-    version = 18,
+    version = 19,
     exportSchema = false
 )
 abstract class TerminusDatabase : RoomDatabase() {
@@ -147,6 +149,13 @@ abstract class TerminusDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE playlists ADD COLUMN remoteSnapshotSongCount INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE playlists ADD COLUMN remoteSnapshotCheckedAt INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS lyrics_cache_files (fileIdentity TEXT NOT NULL PRIMARY KEY, cacheKey TEXT NOT NULL, FOREIGN KEY(cacheKey) REFERENCES lyrics_cache(cacheKey) ON UPDATE NO ACTION ON DELETE CASCADE)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_lyrics_cache_files_cacheKey ON lyrics_cache_files(cacheKey)")
             }
         }
     }

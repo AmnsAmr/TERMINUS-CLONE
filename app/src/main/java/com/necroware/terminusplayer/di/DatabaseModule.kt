@@ -40,7 +40,8 @@ object DatabaseModule {
                 TerminusDatabase.MIGRATION_14_15,
                 TerminusDatabase.MIGRATION_15_16,
                 TerminusDatabase.MIGRATION_16_17,
-                TerminusDatabase.MIGRATION_17_18
+                TerminusDatabase.MIGRATION_17_18,
+                TerminusDatabase.MIGRATION_18_19
             )
         if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()
