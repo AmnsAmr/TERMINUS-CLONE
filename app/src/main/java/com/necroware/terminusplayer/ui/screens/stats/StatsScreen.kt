@@ -221,7 +221,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
             item { TerminalState("DOWNLOAD QUEUE EMPTY", "Downloads you start will appear here.") }
         }
         if (showDownloadEvents && state.downloadQueue.isNotEmpty()) {
-            item { TransferQueueActions(state.downloadQueue, viewModel::cancelAllTransfers, viewModel::retryAllFailedUploads) }
+            item { TransferQueueActions(state.downloadQueue, state.transfersPaused, viewModel::pauseTransfers, viewModel::resumeTransfers, viewModel::cancelAllTransfers, viewModel::retryAllFailedUploads) }
             itemsIndexed(state.downloadQueue.asReversed().take(50), key = { _, row -> "download-${row.songId}" }) { index, event ->
                 TransferQueueRow(event, downloadPositions[event.songId] ?: 0, state.transferWorkerState, "DOWNLOAD", onRetry = { viewModel.retryFailedDownload(event.songId) }, onRemove = { viewModel.removeTransfer(event.songId) })
             }
@@ -239,7 +239,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
             item { TerminalState("UPLOAD QUEUE EMPTY", "Uploads you start will appear here.") }
         }
         if (showUploadEvents && state.uploadQueue.isNotEmpty()) {
-            item { TransferQueueActions(state.uploadQueue, viewModel::cancelAllTransfers, viewModel::retryAllFailedUploads) }
+            item { TransferQueueActions(state.uploadQueue, state.transfersPaused, viewModel::pauseTransfers, viewModel::resumeTransfers, viewModel::cancelAllTransfers, viewModel::retryAllFailedUploads) }
             itemsIndexed(state.uploadQueue.asReversed().take(50), key = { _, row -> "upload-${row.songId}" }) { index, event ->
                 TransferQueueRow(event, uploadPositions[event.songId] ?: 0, state.transferWorkerState, "UPLOAD", onRetry = { viewModel.retryFailedUpload(event.songId) }, onRemove = { viewModel.removeTransfer(event.songId) })
             }
@@ -283,14 +283,22 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
 @Composable
 private fun TransferQueueActions(
     queue: List<com.necroware.terminusplayer.data.database.entity.UploadQueueEntity>,
+    paused: Boolean,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
     onCancel: () -> Unit,
     onRetryFailed: () -> Unit
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
-        if (queue.any { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }) {
+        if (queue.any { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" || it.state == "QUOTA_EXCEEDED" }) {
             Text("[ RETRY FAILED ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onRetryFailed))
         }
-        if (queue.any { it.state == "WAITING" || it.state == "UPLOADING" || it.state == "DOWNLOADING" || it.state == "FAILED" }) {
+        if (paused && queue.any { it.state in setOf("WAITING", "FAILED", "UPLOADING", "DOWNLOADING", "CONVERTING") }) {
+            Text("[ RESUME ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onResume))
+        } else if (!paused && queue.any { it.state in setOf("WAITING", "FAILED", "UPLOADING", "DOWNLOADING", "CONVERTING") }) {
+            Text("[ PAUSE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onPause))
+        }
+        if (queue.any { it.state in setOf("WAITING", "UPLOADING", "DOWNLOADING", "FAILED", "CONVERTING") }) {
             Text("[ CANCEL TRANSFERS ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.clickable(onClick = onCancel))
         }
     }
@@ -306,7 +314,7 @@ private fun TransferQueueRow(
     onRemove: () -> Unit
 ) {
     val active = item.state == "UPLOADING" || item.state == "DOWNLOADING"
-    val isFailure = item.state == "PERMANENT_FAILURE" || item.state == "CONVERSION_FAILED"
+    val isFailure = item.state == "PERMANENT_FAILURE" || item.state == "CONVERSION_FAILED" || item.state == "QUOTA_EXCEEDED"
     val totalBytes = item.totalBytes?.takeIf { it > 0L }
     val progress = totalBytes?.let { (item.bytesTransferred.toFloat() / it.toFloat()).coerceIn(0f, 1f) }
     val context = LocalContext.current
@@ -339,6 +347,7 @@ private fun TransferQueueRow(
                     item.state == "FAILED" -> "RETRYING · attempt ${item.attemptCount} of 3"
                     item.state == "SUCCESS" -> if (operation == "UPLOAD") "UPLOAD COMPLETE" else "DOWNLOAD COMPLETE"
                     item.state == "ALREADY_EXISTS" -> "ALREADY ON SERVER"
+                    item.state == "QUOTA_EXCEEDED" -> "BLOCKED · SERVER QUOTA FULL"
                     isFailure -> "$operation FAILED · ${item.attemptCount} attempts"
                     else -> item.state
                 },

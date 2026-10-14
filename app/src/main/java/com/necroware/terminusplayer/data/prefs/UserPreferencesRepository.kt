@@ -44,6 +44,7 @@ private object Keys {
     val HAS_SETUP_DEFAULT_EXCLUDES = booleanPreferencesKey("has_setup_default_excludes")
     val MAX_BIT_RATE = intPreferencesKey("max_bit_rate")
     val DOWNLOAD_FOLDER_URI = stringPreferencesKey("download_folder_uri")
+    val TRANSFERS_PAUSED = booleanPreferencesKey("transfers_paused")
 }
 
 private fun eqBandKey(index: Int) = intPreferencesKey("${Keys.EQ_BAND_PREFIX}$index")
@@ -60,6 +61,12 @@ data class ServerConnectionConfig(
 class UserPreferencesRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>
 ) {
+    val transfersPaused: Flow<Boolean> = dataStore.data
+        .catch { error ->
+            if (error is IOException) emit(emptyPreferences()) else throw error
+        }
+        .map { prefs -> prefs[Keys.TRANSFERS_PAUSED] ?: false }
+
     val preferences: Flow<UserPreferences> = dataStore.data
         .catch { error ->
             if (error is IOException) emit(emptyPreferences()) else throw error
@@ -87,6 +94,10 @@ class UserPreferencesRepository @Inject constructor(
 
     suspend fun setTheme(themeId: ThemePresetId) {
         dataStore.edit { it[Keys.THEME_ID] = themeId.name }
+    }
+
+    suspend fun setTransfersPaused(paused: Boolean) {
+        dataStore.edit { it[Keys.TRANSFERS_PAUSED] = paused }
     }
 
     suspend fun setSortOrder(order: LibrarySortOrder) {
