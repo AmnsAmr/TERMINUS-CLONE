@@ -9,7 +9,22 @@ enum class ThemePresetId {
     LUCY,
     MAINE,
     FLATLINE,
-    WIZ
+    WIZ,
+    AMBER_CRT,
+    CYBERPUNK,
+    DRACULA,
+    OCEAN_BLUE,
+    MONOCHROME,
+    SOLARIZED_DARK,
+    TERMINAL_GREEN
+}
+
+/** Typed palette roles persisted as sparse hexadecimal overrides. */
+enum class ThemeColorRole {
+    BACKGROUND, SURFACE, SURFACE_ELEVATED, ACCENT, SECONDARY_ACCENT,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED, BORDER,
+    HOME_BACKGROUND, PLAYER_BACKGROUND, NAVIGATION_BACKGROUND,
+    PLAYLIST_SURFACE, VISUALIZER_PRIMARY, VISUALIZER_SECONDARY
 }
 
 enum class SortField { TITLE, ARTIST, ALBUM, DATE_ADDED, DURATION }
@@ -49,6 +64,7 @@ data class CrossfadeSettings(
 
 data class UserPreferences(
     val themeId: ThemePresetId = ThemePresetId.TERMINAL,
+    val themeColorOverrides: Map<ThemeColorRole, String> = emptyMap(),
     val librarySortOrder: LibrarySortOrder = LibrarySortOrder(),
     val equalizer: EqualizerSettings = EqualizerSettings(),
     val crossfade: CrossfadeSettings = CrossfadeSettings(),

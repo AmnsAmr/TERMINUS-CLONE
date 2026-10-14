@@ -60,6 +60,7 @@ import com.necroware.terminusplayer.ui.screens.playlists.PlaylistsScreen
 import com.necroware.terminusplayer.ui.screens.search.SearchScreen
 import com.necroware.terminusplayer.ui.screens.settings.SettingsScreen
 import com.necroware.terminusplayer.ui.screens.stats.StatsScreen
+import com.necroware.terminusplayer.ui.theme.LocalAppPalette
 
 /** Index within the bottom-nav tab order, used to pick left/right slide direction. -1 if not a tab route. */
 private fun tabIndex(route: String?): Int = bottomNavItems.indexOfFirst { it.route == route }
@@ -152,8 +153,14 @@ fun TerminusNavGraph(
         Destination.ManageSources.route
     )
 
+    val appPalette = LocalAppPalette.current
+    val routeBackground = when (currentRoute) {
+        Destination.NowPlaying.route -> appPalette.playerBackground
+        Destination.Playlists.route, Destination.PlaylistDetail.route -> appPalette.playlistSurface
+        else -> appPalette.homeBackground
+    }
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = routeBackground,
         bottomBar = {
             if (currentRoute !in hideChromeRoutes) {
                 Column {
@@ -165,7 +172,7 @@ fun TerminusNavGraph(
                         onSkipPrevious = { playbackViewModel.skipToPrevious() },
                         onClick = { navController.navigate(Destination.NowPlaying.route) }
                     )
-                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                    NavigationBar(containerColor = appPalette.navigationBackground) {
                         bottomNavItems.forEach { destination ->
                             NavigationBarItem(
                                 selected = currentRoute == destination.route,

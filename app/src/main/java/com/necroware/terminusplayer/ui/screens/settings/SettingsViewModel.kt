@@ -11,6 +11,7 @@ import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
 import com.necroware.terminusplayer.data.prefs.SortDirection
 import com.necroware.terminusplayer.data.prefs.SortField
 import com.necroware.terminusplayer.data.prefs.ThemePresetId
+import com.necroware.terminusplayer.data.prefs.ThemeColorRole
 import com.necroware.terminusplayer.data.prefs.UserPreferences
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.repository.MusicRepository
@@ -49,6 +50,18 @@ class SettingsViewModel @Inject constructor(
     val importStatus: StateFlow<ImportStatus> = _importStatus.asStateFlow()
 
     fun setTheme(id: ThemePresetId) = viewModelScope.launch { preferencesRepository.setTheme(id) }
+
+    fun setThemeColor(role: ThemeColorRole, hex: String) = viewModelScope.launch {
+        preferencesRepository.setThemeColor(role, hex)
+    }
+
+    fun clearThemeColor(role: ThemeColorRole) = viewModelScope.launch {
+        preferencesRepository.clearThemeColor(role)
+    }
+
+    fun clearThemeColors(roles: Set<ThemeColorRole>? = null) = viewModelScope.launch {
+        preferencesRepository.clearThemeColors(roles)
+    }
 
     fun setSortField(field: SortField) = viewModelScope.launch {
         preferencesRepository.setSortOrder(preferences.value.librarySortOrder.copy(field = field))

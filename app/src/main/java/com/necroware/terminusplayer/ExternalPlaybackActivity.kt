@@ -44,6 +44,7 @@ import com.necroware.terminusplayer.ui.components.CompactTransportControls
 import com.necroware.terminusplayer.ui.components.TerminalBorder
 import com.necroware.terminusplayer.ui.theme.TerminusTheme
 import com.necroware.terminusplayer.ui.theme.themePresetById
+import com.necroware.terminusplayer.ui.theme.withOverrides
 import com.necroware.terminusplayer.util.toMinutesSeconds
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
@@ -68,7 +69,7 @@ class ExternalPlaybackActivity : ComponentActivity() {
             val preferences by preferencesRepository.preferences.collectAsStateWithLifecycle(
                 initialValue = UserPreferences()
             )
-            TerminusTheme(preset = themePresetById(preferences.themeId)) {
+            TerminusTheme(preset = themePresetById(preferences.themeId).withOverrides(preferences.themeColorOverrides)) {
                 val playback by playbackController.state.collectAsStateWithLifecycle()
                 CompactExternalPlayer(
                     playback = playback,

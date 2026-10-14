@@ -21,10 +21,12 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -47,9 +50,13 @@ import com.necroware.terminusplayer.data.prefs.SortDirection
 import com.necroware.terminusplayer.data.prefs.SortField
 import com.necroware.terminusplayer.data.prefs.MotionPreference
 import com.necroware.terminusplayer.data.prefs.ThemePresetId
+import com.necroware.terminusplayer.data.prefs.ThemeColorRole
 import com.necroware.terminusplayer.ui.components.TerminalBorder
 import com.necroware.terminusplayer.ui.components.TerminalSlider
 import com.necroware.terminusplayer.ui.theme.ThemePresets
+import com.necroware.terminusplayer.ui.theme.color
+import com.necroware.terminusplayer.ui.theme.themePresetById
+import com.necroware.terminusplayer.ui.theme.withOverrides
 import kotlinx.coroutines.delay
 
 @Composable
@@ -121,6 +128,24 @@ fun SettingsScreen(
                 motionPreference = prefs.motionPreference
             ) {
                 ThemeGrid(selected = prefs.themeId, onSelect = viewModel::setTheme)
+            }
+        }
+
+        item {
+            SettingsDropdown(
+                label = "CUSTOM COLORS",
+                expanded = expandedSections.contains("CUSTOM COLORS"),
+                onToggle = { toggleSection("CUSTOM COLORS") },
+                motionPreference = prefs.motionPreference
+            ) {
+                ThemeColorEditor(
+                    themeId = prefs.themeId,
+                    overrides = prefs.themeColorOverrides,
+                    onSet = viewModel::setThemeColor,
+                    onClear = viewModel::clearThemeColor,
+                    onClearRoles = { viewModel.clearThemeColors(it) },
+                    onResetAll = { viewModel.clearThemeColors() }
+                )
             }
         }
 
@@ -319,7 +344,7 @@ private fun ThemeGrid(selected: ThemePresetId, onSelect: (ThemePresetId) -> Unit
                 modifier = Modifier.fillMaxWidth().clickable { onSelect(preset.id) }
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Swatch(preset.background, preset.accent)
+                    Swatch(listOf(preset.background, preset.surface, preset.accent, preset.secondaryAccent))
                     Column(modifier = Modifier.padding(start = 8.dp)) {
                         Text(
                             text = preset.label,
@@ -339,11 +364,96 @@ private fun ThemeGrid(selected: ThemePresetId, onSelect: (ThemePresetId) -> Unit
 }
 
 @Composable
-private fun Swatch(background: Color, accent: Color) {
-    Row(modifier = Modifier.size(24.dp).clip(MaterialTheme.shapes.extraSmall)) {
-        Box(modifier = Modifier.weight(1f).fillMaxHeight().background(background))
-        Box(modifier = Modifier.weight(1f).fillMaxHeight().background(accent))
+private fun Swatch(colors: List<Color>) {
+    Row(modifier = Modifier.size(32.dp, 24.dp).clip(MaterialTheme.shapes.extraSmall)) {
+        colors.forEach { color -> Box(modifier = Modifier.weight(1f).fillMaxHeight().background(color)) }
     }
+}
+
+private val COLOR_GROUPS = listOf(
+    "GLOBAL" to listOf(ThemeColorRole.BACKGROUND, ThemeColorRole.SURFACE, ThemeColorRole.SURFACE_ELEVATED,
+        ThemeColorRole.ACCENT, ThemeColorRole.SECONDARY_ACCENT, ThemeColorRole.TEXT_PRIMARY,
+        ThemeColorRole.TEXT_SECONDARY, ThemeColorRole.TEXT_MUTED, ThemeColorRole.BORDER),
+    "HOME / LIBRARY" to listOf(ThemeColorRole.HOME_BACKGROUND),
+    "PLAYER" to listOf(ThemeColorRole.PLAYER_BACKGROUND),
+    "NAVIGATION" to listOf(ThemeColorRole.NAVIGATION_BACKGROUND),
+    "PLAYLISTS" to listOf(ThemeColorRole.PLAYLIST_SURFACE),
+    "VISUALIZER" to listOf(ThemeColorRole.VISUALIZER_PRIMARY, ThemeColorRole.VISUALIZER_SECONDARY)
+)
+
+private fun ThemeColorRole.label() = name.replace('_', ' ')
+
+@Composable
+private fun ThemeColorEditor(
+    themeId: ThemePresetId,
+    overrides: Map<ThemeColorRole, String>,
+    onSet: (ThemeColorRole, String) -> Unit,
+    onClear: (ThemeColorRole) -> Unit,
+    onClearRoles: (Set<ThemeColorRole>) -> Unit,
+    onResetAll: () -> Unit
+) {
+    var editing by remember { mutableStateOf<ThemeColorRole?>(null) }
+    val effective = themePresetById(themeId).withOverrides(overrides)
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        COLOR_GROUPS.forEach { (group, roles) ->
+            Text(group, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            roles.forEach { role ->
+                val color = overrides[role]?.let { com.necroware.terminusplayer.ui.theme.parseThemeColor(it) } ?: effective.color(role)
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable { editing = role }.padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(role.label(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(20.dp).background(color).clip(MaterialTheme.shapes.extraSmall))
+                        Text(overrides[role] ?: "${color.toArgb().toUInt().toString(16).takeLast(6).uppercase()}",
+                            modifier = Modifier.padding(start = 8.dp), style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (role in overrides) Text(" [RESET]", modifier = Modifier.clickable { onClear(role) }.padding(start = 4.dp),
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+            }
+            Text("[ RESET $group ]", modifier = Modifier.clickable { onClearRoles(roles.toSet()) },
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Text("[ RESTORE SELECTED PRESET ]", modifier = Modifier.clickable { onResetAll() }.padding(vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+    }
+    editing?.let { role ->
+        val base = overrides[role] ?: effective.color(role).toArgb().toUInt().toString(16).takeLast(6).uppercase()
+        ThemeColorPickerDialog(role, base, onDismiss = { editing = null }, onApply = { onSet(role, it); editing = null })
+    }
+}
+
+@Composable
+private fun ThemeColorPickerDialog(role: ThemeColorRole, initial: String, onDismiss: () -> Unit, onApply: (String) -> Unit) {
+    var hex by remember(role, initial) { mutableStateOf(initial.removePrefix("#").uppercase()) }
+    val valid = hex.matches(Regex("(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})"))
+    val preview = if (valid) com.necroware.terminusplayer.ui.theme.parseThemeColor("#$hex") ?: Color.Transparent else Color.Transparent
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${role.label()} COLOR", color = MaterialTheme.colorScheme.primary) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(Modifier.fillMaxWidth().height(48.dp).background(preview))
+                Text("SELECT A COLOR", style = MaterialTheme.typography.labelSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    listOf("#39FF14", "#FFB000", "#FF4FD8", "#42E8F5", "#FFFFFF", "#202020").forEach { sample ->
+                        Box(Modifier.size(30.dp).background(com.necroware.terminusplayer.ui.theme.parseThemeColor(sample) ?: Color.Transparent)
+                            .clickable { hex = sample.removePrefix("#") })
+                    }
+                }
+                OutlinedTextField(value = hex, onValueChange = { hex = it.removePrefix("#").take(8).uppercase() },
+                    label = { Text("HEX (RRGGBB)") }, singleLine = true, isError = !valid)
+                if (!valid) Text("Enter 6 or 8 hexadecimal digits", color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.labelSmall)
+            }
+        },
+        confirmButton = { TextButton(onClick = { if (valid) onApply("#$hex") }, enabled = valid) { Text("APPLY") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL") } }
+    )
 }
 
 private val EQ_BAND_LABELS = listOf("60", "230", "910", "3.6k", "14k")
