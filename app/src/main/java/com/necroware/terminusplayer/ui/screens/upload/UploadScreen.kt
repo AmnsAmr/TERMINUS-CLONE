@@ -33,6 +33,7 @@ fun UploadScreen(
     val status by viewModel.uploadStatus.collectAsStateWithLifecycle()
     val recommendedSongs by viewModel.recommendedSongs.collectAsStateWithLifecycle()
     val queue by viewModel.queue.collectAsStateWithLifecycle()
+    val transfersPaused by viewModel.transfersPaused.collectAsStateWithLifecycle()
 
     val fileLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -64,9 +65,16 @@ fun UploadScreen(
         quota?.let {
             item {
             TerminalBorder(modifier = Modifier.fillMaxWidth()) {
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("QUOTA", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                    Text("Used: ${it.used} bytes\nTotal: ${it.total} bytes", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                    val usedText = android.text.format.Formatter.formatFileSize(androidx.compose.ui.platform.LocalContext.current, it.used)
+                    val totalText = android.text.format.Formatter.formatFileSize(androidx.compose.ui.platform.LocalContext.current, it.total)
+                    val quotaFull = it.total > 0L && it.used >= it.total
+                    Text("Used: $usedText / $totalText", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                    if (quotaFull) {
+                        Text("QUOTA FULL · uploads are paused. Free server space, then retry.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                    Text("[ REFRESH QUOTA ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { viewModel.refreshQuota() })
                 }
             }
             }
@@ -114,15 +122,29 @@ fun UploadScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
                     Text("> QUEUE_", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
-                    Text("${queue.count { it.state == "UPLOADING" || it.state == "DOWNLOADING" }} active · ${queue.count { it.state == "WAITING" || it.state == "FAILED" }} pending · ${queue.count { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }} failed", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        "${queue.count { it.state == "UPLOADING" || it.state == "DOWNLOADING" }} active · " +
+                            "${queue.count { it.state == "WAITING" || it.state == "FAILED" }} pending · " +
+                            "${queue.count { it.state == "SUCCESS" || it.state == "ALREADY_EXISTS" }} done · " +
+                            "${queue.count { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" || it.state == "QUOTA_EXCEEDED" }} failed",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
-                    if (queue.any { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }) {
+                    if (queue.any { it.state in setOf("PERMANENT_FAILURE", "CONVERSION_FAILED", "QUOTA_EXCEEDED") }) {
                         Text("[ RETRY FAILED ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.clickable { viewModel.retryAllFailed() }.padding(4.dp))
                     }
-                    if (queue.isNotEmpty()) {
-                        Text("[ CLEAR ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error,
+                    if (transfersPaused && queue.any { it.state in setOf("WAITING", "FAILED", "UPLOADING", "DOWNLOADING", "CONVERTING") }) {
+                        Text("[ RESUME ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { viewModel.resumeTransfers() }.padding(4.dp))
+                    } else if (!transfersPaused && queue.any { it.state in setOf("WAITING", "FAILED", "UPLOADING", "DOWNLOADING", "CONVERTING") }) {
+                        Text("[ PAUSE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { viewModel.pauseTransfers() }.padding(4.dp))
+                    }
+                    if (queue.any { it.state in setOf("WAITING", "FAILED", "UPLOADING", "DOWNLOADING", "CONVERTING") }) {
+                        Text("[ CANCEL PENDING ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.clickable { viewModel.cancelAllUploads() }.padding(4.dp))
                     }
                 }
@@ -149,7 +171,7 @@ private fun UploadQueueRow(
     onRetry: () -> Unit,
     onRemove: () -> Unit
 ) {
-    val isFailure = item.state == "PERMANENT_FAILURE" || item.state == "CONVERSION_FAILED"
+    val isFailure = item.state == "PERMANENT_FAILURE" || item.state == "CONVERSION_FAILED" || item.state == "QUOTA_EXCEEDED"
     val stateColor = when {
         isFailure -> MaterialTheme.colorScheme.error
         item.state == "UPLOADING" -> MaterialTheme.colorScheme.primary
@@ -168,6 +190,7 @@ private fun UploadQueueRow(
                     "FAILED" -> "RETRYING · attempt ${item.attemptCount} of 3"
                     "SUCCESS" -> "UPLOAD COMPLETE"
                     "ALREADY_EXISTS" -> "ALREADY ON SERVER"
+                    "QUOTA_EXCEEDED" -> "BLOCKED · SERVER QUOTA FULL"
                     "CONVERSION_FAILED" -> "UPLOAD FAILED"
                     "PERMANENT_FAILURE" -> "UPLOAD FAILED"
                     else -> item.state

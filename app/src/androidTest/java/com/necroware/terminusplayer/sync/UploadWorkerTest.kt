@@ -11,6 +11,7 @@ import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
 import com.necroware.terminusplayer.data.repository.NavidromeUploadRepository
 import com.necroware.terminusplayer.data.repository.DownloadTransferRepository
 import com.necroware.terminusplayer.data.repository.DuplicateUploadException
+import com.necroware.terminusplayer.data.repository.UploadQuotaExceededException
 import com.necroware.terminusplayer.data.api.custom.NavidromeNativeApiService
 import com.necroware.terminusplayer.util.TransferProgress
 import kotlinx.coroutines.runBlocking
@@ -67,6 +68,16 @@ class UploadWorkerTest {
             val i = items.indexOfFirst { it.songId == songId }
             if (i >= 0) items[i] = items[i].copy(state = "WAITING", phase = "INTERRUPTED", errorMessage = errorMessage)
         }
+        override suspend fun markPendingUploadsQuotaExceeded(errorMessage: String): Int {
+            var count = 0
+            items.indices.forEach { i ->
+                if (items[i].transferType == "UPLOAD" && items[i].state in setOf("WAITING", "FAILED", "UPLOADING")) {
+                    items[i] = items[i].copy(state = "QUOTA_EXCEEDED", phase = "BLOCKED_QUOTA", errorMessage = errorMessage)
+                    count++
+                }
+            }
+            return count
+        }
         override suspend fun resetUploadingToWaiting() {
             items.indices.forEach { i ->
                 if (items[i].state == "UPLOADING" || items[i].state == "DOWNLOADING" || items[i].state == "CONVERTING") {
@@ -75,7 +86,7 @@ class UploadWorkerTest {
             }
         }
         override suspend fun trimHistory() {}
-        override suspend fun clearAll() {}
+        override suspend fun clearUnfinished() {}
         override suspend fun removeIfNotUploading(songId: String) {}
     }
 
@@ -84,10 +95,12 @@ class UploadWorkerTest {
         var uploadedUri: Uri? = null
         var failureMessage: String? = null
         var cancelUpload = false
+        var quotaExceeded = false
         override suspend fun upload(uri: Uri, onProgress: ((TransferProgress) -> Unit)?): String {
             uploadCalled++
             uploadedUri = uri
             if (cancelUpload) throw kotlinx.coroutines.CancellationException("test cancellation")
+            if (quotaExceeded) throw UploadQuotaExceededException("Server upload quota is full")
             failureMessage?.let {
                 if (it.contains("already exists", ignoreCase = true)) throw DuplicateUploadException(it)
                 throw IOException(it)
@@ -145,6 +158,53 @@ class UploadWorkerTest {
         assertEquals("SUCCESS", dao.items[0].state)
         assertEquals(20L, dao.items[0].bytesTransferred)
         assertEquals(46L, dao.items[0].totalBytes)
+    }
+
+    @Test
+    fun retryAfterPartialBatchOnlyProcessesWaitingSongs() = runBlocking {
+        val dao = FakeDao().apply {
+            items.add(UploadQueueEntity("already-uploaded", "content://fake/done.opus", "SUCCESS", 1, 0, "Done"))
+            items.add(UploadQueueEntity("remaining", "content://fake/remaining.opus", "WAITING", 0, 1, "Remaining"))
+        }
+        val repo = FakeRepo()
+        val worker = TestListenableWorkerBuilder<UploadWorker>(context)
+            .setWorkerFactory(object : androidx.work.WorkerFactory() {
+                override fun createWorker(appContext: Context, workerClassName: String, workerParameters: androidx.work.WorkerParameters) =
+                    UploadWorker(appContext, workerParameters, repo, dao, FakeDownloader())
+            })
+            .build()
+
+        val result = worker.doWork()
+
+        assertEquals(ListenableWorker.Result.success(), result)
+        assertEquals(1, repo.uploadCalled)
+        assertEquals("SUCCESS", dao.items.first { it.songId == "already-uploaded" }.state)
+        assertEquals("SUCCESS", dao.items.first { it.songId == "remaining" }.state)
+    }
+
+    @Test
+    fun quotaRejectionBlocksRemainingUploadsButAllowsDownloadsToContinue() = runBlocking {
+        val dao = FakeDao().apply {
+            items.add(UploadQueueEntity("upload-1", "content://fake/one.opus", "WAITING", 0, 0, "Upload one"))
+            items.add(UploadQueueEntity("upload-2", "content://fake/two.opus", "WAITING", 0, 1, "Upload two"))
+            items.add(UploadQueueEntity("download:navidrome:42", "", "WAITING", 0, 2, "Download", transferType = "DOWNLOAD", remoteSongId = "navidrome:42"))
+        }
+        val repo = FakeRepo().apply { quotaExceeded = true }
+        val downloader = FakeDownloader()
+        val worker = TestListenableWorkerBuilder<UploadWorker>(context)
+            .setWorkerFactory(object : androidx.work.WorkerFactory() {
+                override fun createWorker(appContext: Context, workerClassName: String, workerParameters: androidx.work.WorkerParameters) =
+                    UploadWorker(appContext, workerParameters, repo, dao, downloader)
+            })
+            .build()
+
+        val result = worker.doWork()
+
+        assertEquals(ListenableWorker.Result.success(), result)
+        assertEquals(1, repo.uploadCalled)
+        assertEquals("QUOTA_EXCEEDED", dao.items.first { it.songId == "upload-1" }.state)
+        assertEquals("QUOTA_EXCEEDED", dao.items.first { it.songId == "upload-2" }.state)
+        assertEquals("SUCCESS", dao.items.first { it.transferType == "DOWNLOAD" }.state)
     }
 
     @Test

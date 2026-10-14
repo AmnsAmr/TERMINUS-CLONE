@@ -9,6 +9,7 @@ import com.necroware.terminusplayer.data.repository.StatsRange
 import com.necroware.terminusplayer.data.repository.StatsRepository
 import com.necroware.terminusplayer.data.repository.TopCategory
 import com.necroware.terminusplayer.data.repository.TopCategoryItem
+import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,7 +41,8 @@ data class StatsUiState(
     val yearlyMonthlyTotals: List<Pair<String, Int>> = emptyList(),
     val uploadQueue: List<UploadQueueEntity> = emptyList(),
     val downloadQueue: List<UploadQueueEntity> = emptyList(),
-    val transferWorkerState: WorkInfo.State? = null
+    val transferWorkerState: WorkInfo.State? = null,
+    val transfersPaused: Boolean = false
 )
 
 @HiltViewModel
@@ -48,6 +50,7 @@ class StatsViewModel @Inject constructor(
     private val statsRepository: StatsRepository,
     private val uploadQueueDao: UploadQueueDao,
     private val uploadQueueManager: com.necroware.terminusplayer.data.repository.UploadQueueManager,
+    userPreferencesRepository: UserPreferencesRepository,
     @ApplicationContext context: Context
 ) : ViewModel() {
 
@@ -58,6 +61,12 @@ class StatsViewModel @Inject constructor(
     init {
         loadInsightsOnce()
         load(StatsRange.WEEK, TopCategory.ARTIST)
+
+        viewModelScope.launch {
+            userPreferencesRepository.transfersPaused.collect { paused ->
+                _uiState.value = _uiState.value.copy(transfersPaused = paused)
+            }
+        }
 
         viewModelScope.launch {
             uploadQueueDao.observeAll().collect { queue ->
@@ -103,6 +112,9 @@ class StatsViewModel @Inject constructor(
     fun cancelAllTransfers() {
         viewModelScope.launch { uploadQueueManager.cancelAllTransfers() }
     }
+
+    fun pauseTransfers() { viewModelScope.launch { uploadQueueManager.pauseTransfers() } }
+    fun resumeTransfers() { viewModelScope.launch { uploadQueueManager.resumeTransfers() } }
 
     fun removeTransfer(songId: String) {
         viewModelScope.launch { uploadQueueManager.removeFromQueue(songId) }

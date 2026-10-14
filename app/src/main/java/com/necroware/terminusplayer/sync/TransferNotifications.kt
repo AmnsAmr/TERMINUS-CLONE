@@ -16,6 +16,7 @@ object TransferNotifications {
     const val QUEUE_NOTIFICATION_ID = 1004
     private const val CANCEL_REQUEST_CODE = 1002
     private const val OPEN_APP_REQUEST_CODE = 1003
+    private const val PAUSE_REQUEST_CODE = 1005
 
     fun createChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -24,7 +25,7 @@ object TransferNotifications {
         }
     }
 
-    fun postQueued(context: Context, pendingCount: Int, detail: String? = null) {
+    fun postQueued(context: Context, pendingCount: Int, detail: String? = null, paused: Boolean = false) {
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
         createChannel(context)
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -32,10 +33,15 @@ object TransferNotifications {
             QUEUE_NOTIFICATION_ID,
             builder(
                 context,
-                if (detail == null) "Transfers queued" else "Transfer retry scheduled",
+                when {
+                    paused -> "Transfers paused"
+                    detail != null -> "Transfer retry scheduled"
+                    else -> "Transfers queued"
+                },
                 detail ?: "$pendingCount songs queued · waiting for network or Android scheduling",
                 -1,
-                false
+                false,
+                paused
             ).build()
         )
     }
@@ -48,7 +54,7 @@ object TransferNotifications {
         manager.cancel(NOTIFICATION_ID)
     }
 
-    fun builder(context: Context, title: String, text: String, progress: Int, finished: Boolean): NotificationCompat.Builder {
+    fun builder(context: Context, title: String, text: String, progress: Int, finished: Boolean, paused: Boolean = false): NotificationCompat.Builder {
         val openIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
@@ -78,6 +84,19 @@ object TransferNotifications {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "CANCEL TRANSFERS", cancelPendingIntent)
+            val controlIntent = Intent(context, CancelUploadNotificationReceiver::class.java)
+                .setAction(if (paused) CancelUploadNotificationReceiver.ACTION_RESUME_TRANSFERS else CancelUploadNotificationReceiver.ACTION_PAUSE_TRANSFERS)
+            val controlPendingIntent = PendingIntent.getBroadcast(
+                context,
+                PAUSE_REQUEST_CODE,
+                controlIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(
+                if (paused) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause,
+                if (paused) "RESUME" else "PAUSE",
+                controlPendingIntent
+            )
             if (progress >= 0) builder.setProgress(100, progress, false) else builder.setProgress(0, 0, true)
         }
         return builder

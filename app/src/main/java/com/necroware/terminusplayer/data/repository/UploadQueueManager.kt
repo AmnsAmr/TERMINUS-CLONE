@@ -10,10 +10,12 @@ import android.net.Uri
 import com.necroware.terminusplayer.data.database.dao.UploadQueueDao
 import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
 import com.necroware.terminusplayer.data.model.Song
+import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.sync.UploadWorker
 import com.necroware.terminusplayer.sync.TransferNotifications
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,7 +23,8 @@ import javax.inject.Singleton
 @Singleton
 class UploadQueueManager @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val uploadQueueDao: UploadQueueDao
+    private val uploadQueueDao: UploadQueueDao,
+    private val userPreferencesRepository: UserPreferencesRepository
 ) {
     suspend fun enqueueUploads(songs: List<Song>) = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
@@ -95,15 +98,18 @@ class UploadQueueManager @Inject constructor(
 
     suspend fun retryAllFailed() = withContext(Dispatchers.IO) {
         val all = uploadQueueDao.getAll()
-        all.filter { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" }.forEach {
+        all.filter { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" || it.state == "QUOTA_EXCEEDED" }.forEach {
             uploadQueueDao.resetForRetry(it.songId)
         }
         startWorker()
     }
 
     suspend fun cancelAllUploads() = withContext(Dispatchers.IO) {
+        userPreferencesRepository.setTransfersPaused(false)
         WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_WORK_NAME)
-        uploadQueueDao.clearAll()
+        // Keep terminal rows as deduplication markers. Re-adding the same songs
+        // after a cancellation must not queue tracks that already reached the server.
+        uploadQueueDao.clearUnfinished()
         (context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager)
             .apply {
                 cancel(TransferNotifications.NOTIFICATION_ID)
@@ -113,6 +119,25 @@ class UploadQueueManager @Inject constructor(
 
     suspend fun cancelAllTransfers() = cancelAllUploads()
 
+    suspend fun pauseTransfers() = withContext(Dispatchers.IO) {
+        userPreferencesRepository.setTransfersPaused(true)
+        WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_WORK_NAME)
+        val pendingCount = uploadQueueDao.getAll().count {
+            it.state in setOf("WAITING", "FAILED", "UPLOADING", "DOWNLOADING", "CONVERTING")
+        }
+        context.getSystemService(Context.NOTIFICATION_SERVICE)?.let { service ->
+            val manager = service as android.app.NotificationManager
+            manager.cancel(TransferNotifications.NOTIFICATION_ID)
+            if (pendingCount > 0) TransferNotifications.postQueued(context, pendingCount, "Transfers paused. Resume from the app when ready.", paused = true)
+            else manager.cancel(TransferNotifications.QUEUE_NOTIFICATION_ID)
+        }
+    }
+
+    suspend fun resumeTransfers() = withContext(Dispatchers.IO) {
+        userPreferencesRepository.setTransfersPaused(false)
+        startWorker()
+    }
+
     suspend fun removeFromQueue(songId: String) = withContext(Dispatchers.IO) {
         uploadQueueDao.removeIfNotUploading(songId)
     }
@@ -120,6 +145,7 @@ class UploadQueueManager @Inject constructor(
     suspend fun schedulePendingUploads() = withContext(Dispatchers.IO) { startWorker() }
 
     suspend fun resumePendingUploads() = withContext(Dispatchers.IO) {
+        if (userPreferencesRepository.transfersPaused.first()) return@withContext
         val hasPendingWork = uploadQueueDao.getAll().any {
             it.state == "WAITING" || it.state == "FAILED" || it.state == "UPLOADING" || it.state == "DOWNLOADING" || it.state == "CONVERTING"
         }
@@ -129,6 +155,7 @@ class UploadQueueManager @Inject constructor(
     }
 
     private suspend fun startWorker(policy: ExistingWorkPolicy = ExistingWorkPolicy.APPEND_OR_REPLACE) {
+        if (userPreferencesRepository.transfersPaused.first()) return
         val workManager = WorkManager.getInstance(context)
         val wasRunning = workManager.getWorkInfosForUniqueWork(UNIQUE_WORK_NAME).get()
             .any { it.state == androidx.work.WorkInfo.State.RUNNING }

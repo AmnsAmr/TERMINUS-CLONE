@@ -39,7 +39,7 @@ open class NavidromeUploadRepository @Inject constructor(
         val (name, size) = withContext(Dispatchers.IO) { fileMetadataFor(uri) }
         val extension = name.substringAfterLast('.', "").lowercase()
         if (extension !in ALLOWED_EXTENSIONS) throw PermanentTransferException("Unsupported audio format")
-        if (size != null && size > MAX_UPLOAD_BYTES) throw PermanentTransferException("File exceeds the 100 MB limit")
+        if (size != null && size > MAX_UPLOAD_BYTES) throw PermanentTransferException("File exceeds the 1024 MB limit")
 
         val check = api.checkUploads(UploadCheckRequest(listOf(name)))
         val checkResult = check.body()
@@ -72,11 +72,11 @@ open class NavidromeUploadRepository @Inject constructor(
         if (!response.isSuccessful) {
             response.errorBody()?.close()
             val message = when (response.code()) {
-                403 -> "Server quota exceeded"
                 400, 413 -> "File is too large or invalid"
                 else -> "Upload request returned ${response.code()}"
             }
-            if (response.code() in setOf(400, 403, 413)) throw PermanentTransferException(message)
+            if (response.code() == 403) throw UploadQuotaExceededException("Server upload quota is full")
+            if (response.code() in setOf(400, 413)) throw PermanentTransferException(message)
             throw IOException(message)
         }
         return name
@@ -139,6 +139,6 @@ open class NavidromeUploadRepository @Inject constructor(
 
     private companion object {
         val ALLOWED_EXTENSIONS = setOf("flac", "mp3", "m4a", "ogg", "opus")
-        const val MAX_UPLOAD_BYTES = 100L * 1024L * 1024L
+        const val MAX_UPLOAD_BYTES = 1024L * 1024L * 1024L
     }
 }

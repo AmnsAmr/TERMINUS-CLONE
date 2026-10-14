@@ -14,6 +14,7 @@ import com.necroware.terminusplayer.data.repository.DownloadTransferRepository
 import com.necroware.terminusplayer.data.repository.UploadQueueManager
 import com.necroware.terminusplayer.data.repository.DuplicateUploadException
 import com.necroware.terminusplayer.data.repository.PermanentTransferException
+import com.necroware.terminusplayer.data.repository.UploadQuotaExceededException
 import com.necroware.terminusplayer.util.TransferProgress
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -42,24 +43,41 @@ class UploadWorker @AssistedInject constructor(
         val initialAll = uploadQueueDao.getAll()
         
         // 1. Pre-check for duplicate files
-        val pendingItems = initialAll.filter { it.state == "WAITING" || (it.state == "FAILED" && it.attemptCount < 3) }
-        if (pendingItems.isEmpty()) {
-            notificationManager.cancel(NOTIFICATION_ID)
-            notificationManager.cancel(TransferNotifications.QUEUE_NOTIFICATION_ID)
-            return Result.success()
+        var pendingItems = initialAll.filter { it.state == "WAITING" || (it.state == "FAILED" && it.attemptCount < 3) }
+        var quotaReached = false
+        if (pendingItems.isNotEmpty()) {
+            val initialNotification = TransferNotifications.builder(
+                context,
+                "Preparing transfers",
+                "Checking ${pendingItems.size} queued songs…",
+                -1,
+                false
+            ).build()
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                setForeground(ForegroundInfo(NOTIFICATION_ID, initialNotification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
+            } else {
+                setForeground(ForegroundInfo(NOTIFICATION_ID, initialNotification))
+            }
+        }
+        val hasPendingUploads = pendingItems.any { it.transferType == UploadQueueManager.TRANSFER_UPLOAD }
+        if (hasPendingUploads) {
+            val quota = uploadRepository.quota()
+            if (quota != null && quota.total > 0L && quota.used >= quota.total) {
+                val message = "Upload quota is full. Free space on the server, then retry these songs."
+                uploadQueueDao.markPendingUploadsQuotaExceeded(message)
+                quotaReached = true
+                pendingItems = pendingItems.filter { it.transferType != UploadQueueManager.TRANSFER_UPLOAD }
+            }
         }
 
-        val initialNotification = TransferNotifications.builder(
-            context,
-            "Preparing transfers",
-            "Checking ${pendingItems.size} queued songs…",
-            -1,
-            false
-        ).build()
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-            setForeground(ForegroundInfo(NOTIFICATION_ID, initialNotification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC))
-        } else {
-            setForeground(ForegroundInfo(NOTIFICATION_ID, initialNotification))
+        if (pendingItems.isEmpty()) {
+            notificationManager.cancel(NOTIFICATION_ID)
+            if (quotaReached) {
+                TransferNotifications.postFinished(context, "Uploads paused · quota full", "${initialAll.count { it.transferType == UploadQueueManager.TRANSFER_UPLOAD && it.state in setOf("WAITING", "FAILED", "UPLOADING") }} songs are blocked. Free server space, then retry.")
+            } else {
+                notificationManager.cancel(TransferNotifications.QUEUE_NOTIFICATION_ID)
+            }
+            return Result.success()
         }
 
         val pendingUris = pendingItems.filter { it.transferType == UploadQueueManager.TRANSFER_UPLOAD }.map { Uri.parse(it.uriString) }
@@ -147,6 +165,10 @@ class UploadWorker @AssistedInject constructor(
                 uploadQueueDao.markInterrupted(item.songId, "Transfer cancelled; queued to resume")
                 notificationManager.cancel(NOTIFICATION_ID)
                 throw e
+            } catch (e: UploadQuotaExceededException) {
+                val message = "Upload quota is full. Free space on the server, then retry these songs."
+                uploadQueueDao.markPendingUploadsQuotaExceeded(message)
+                quotaReached = true
             } catch (e: Exception) {
                 uploadQueueDao.clearPartialUri(item.songId)
                 val msg = e.message ?: ""
@@ -176,8 +198,13 @@ class UploadWorker @AssistedInject constructor(
             currentItem = uploadQueueDao.getNext()
         }
 
-        val finalTitle = if (failedCount == 0) "Transfers complete" else "Transfers finished with errors"
+        val finalTitle = when {
+            quotaReached -> "Uploads paused · quota full"
+            failedCount == 0 -> "Transfers complete"
+            else -> "Transfers finished with errors"
+        }
         val finalBody = buildString {
+            if (quotaReached) append("Quota reached; remaining uploads are blocked. Free server space, then retry.\n")
             append("$completedCount completed · $failedCount failed")
             failureSummaries.take(2).forEach { append("\n").append(it) }
         }

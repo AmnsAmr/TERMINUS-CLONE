@@ -12,6 +12,7 @@ import com.necroware.terminusplayer.data.database.dao.UploadQueueDao
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
 import com.necroware.terminusplayer.data.repository.toSong
+import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -20,6 +21,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -29,7 +32,8 @@ class UploadViewModel @Inject constructor(
     private val uploadRepository: NavidromeUploadRepository,
     private val songDao: com.necroware.terminusplayer.data.database.dao.SongDao,
     private val uploadQueueDao: UploadQueueDao,
-    private val uploadQueueManager: UploadQueueManager
+    private val uploadQueueManager: UploadQueueManager,
+    userPreferencesRepository: UserPreferencesRepository
 ) : ViewModel() {
     private val _quota = MutableStateFlow<UploadQuotaResponse?>(null)
     val quota = _quota.asStateFlow()
@@ -42,6 +46,8 @@ class UploadViewModel @Inject constructor(
 
     private val _queue = MutableStateFlow<List<UploadQueueEntity>>(emptyList())
     val queue = _queue.asStateFlow()
+    val transfersPaused = userPreferencesRepository.transfersPaused
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     init { 
         fetchQuota() 
@@ -103,6 +109,9 @@ class UploadViewModel @Inject constructor(
     fun retryAllFailed() = viewModelScope.launch { uploadQueueManager.retryAllFailed() }
     fun removeFromQueue(songId: String) = viewModelScope.launch { uploadQueueManager.removeFromQueue(songId) }
     fun cancelAllUploads() = viewModelScope.launch { uploadQueueManager.cancelAllUploads() }
+    fun pauseTransfers() = viewModelScope.launch { uploadQueueManager.pauseTransfers() }
+    fun resumeTransfers() = viewModelScope.launch { uploadQueueManager.resumeTransfers() }
+    fun refreshQuota() = viewModelScope.launch { _quota.value = uploadRepository.quota() }
     
     fun uploadRecommended() {
         val songsToUpload = recommendedSongs.value

@@ -54,14 +54,17 @@ interface UploadQueueDao {
     @Query("UPDATE upload_queue SET state = 'WAITING', phase = 'INTERRUPTED', errorMessage = :errorMessage WHERE songId = :songId")
     suspend fun markInterrupted(songId: String, errorMessage: String)
 
+    @Query("UPDATE upload_queue SET state = 'QUOTA_EXCEEDED', phase = 'BLOCKED_QUOTA', errorMessage = :errorMessage WHERE transferType = 'UPLOAD' AND state IN ('WAITING', 'FAILED', 'UPLOADING')")
+    suspend fun markPendingUploadsQuotaExceeded(errorMessage: String): Int
+
     @Query("UPDATE upload_queue SET state = 'WAITING', phase = 'INTERRUPTED', errorMessage = 'Transfer interrupted; queued to resume' WHERE state IN ('UPLOADING', 'DOWNLOADING', 'CONVERTING')")
     suspend fun resetUploadingToWaiting()
     
     @Query("DELETE FROM upload_queue WHERE state IN ('SUCCESS', 'ALREADY_EXISTS') AND songId NOT IN (SELECT songId FROM upload_queue WHERE state IN ('SUCCESS', 'ALREADY_EXISTS') ORDER BY addedAtEpochMs DESC LIMIT 50)")
     suspend fun trimHistory()
 
-    @Query("DELETE FROM upload_queue")
-    suspend fun clearAll()
+    @Query("DELETE FROM upload_queue WHERE state NOT IN ('SUCCESS', 'ALREADY_EXISTS')")
+    suspend fun clearUnfinished()
 
     @Query("DELETE FROM upload_queue WHERE songId = :songId AND state NOT IN ('UPLOADING', 'DOWNLOADING')")
     suspend fun removeIfNotUploading(songId: String)
