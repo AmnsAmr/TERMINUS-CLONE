@@ -33,6 +33,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.ui.navigation.TerminusNavGraph
 import com.necroware.terminusplayer.ui.theme.TerminusTheme
 import com.necroware.terminusplayer.ui.theme.themePresetById
+import com.necroware.terminusplayer.ui.theme.withOverrides
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -62,10 +63,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val activityViewModel: MainActivityViewModel = hiltViewModel()
-            val themeId by activityViewModel.themeId.collectAsStateWithLifecycle()
+            val themePreferences by activityViewModel.preferences.collectAsStateWithLifecycle()
             val motionPreference by activityViewModel.motionPreference.collectAsStateWithLifecycle()
 
-            TerminusTheme(preset = themePresetById(themeId)) {
+            TerminusTheme(preset = themePresetById(themePreferences.themeId).withOverrides(themePreferences.themeColorOverrides)) {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     var hasEssentialPermission by remember {
                         mutableStateOf(isGranted(essentialAudioPermission))

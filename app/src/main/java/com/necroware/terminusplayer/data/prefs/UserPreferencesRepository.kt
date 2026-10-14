@@ -26,6 +26,7 @@ import javax.inject.Singleton
 
 private object Keys {
     val THEME_ID = stringPreferencesKey("theme_id")
+    val THEME_COLOR_OVERRIDES = stringSetPreferencesKey("theme_color_overrides_v1")
     val SORT_FIELD = stringPreferencesKey("sort_field")
     val SORT_DIRECTION = stringPreferencesKey("sort_direction")
     val EQ_ENABLED = booleanPreferencesKey("eq_enabled")
@@ -96,6 +97,32 @@ class UserPreferencesRepository @Inject constructor(
         dataStore.edit { it[Keys.THEME_ID] = themeId.name }
     }
 
+    suspend fun setThemeColor(role: ThemeColorRole, hex: String) {
+        val normalized = hex.removePrefix("#").uppercase()
+        if (!normalized.matches(Regex("(?:[0-9A-F]{6}|[0-9A-F]{8})"))) return
+        dataStore.edit { prefs ->
+            val overrides = (prefs[Keys.THEME_COLOR_OVERRIDES] ?: emptySet())
+                .filterNot { it.substringBefore('=') == role.name }.toMutableSet()
+            overrides += "${role.name}=#$normalized"
+            prefs[Keys.THEME_COLOR_OVERRIDES] = overrides
+        }
+    }
+
+    suspend fun clearThemeColor(role: ThemeColorRole) {
+        dataStore.edit { prefs ->
+            prefs[Keys.THEME_COLOR_OVERRIDES] = (prefs[Keys.THEME_COLOR_OVERRIDES] ?: emptySet())
+                .filterNot { it.substringBefore('=') == role.name }.toSet()
+        }
+    }
+
+    suspend fun clearThemeColors(roles: Set<ThemeColorRole>? = null) {
+        dataStore.edit { prefs ->
+            if (roles == null) prefs.remove(Keys.THEME_COLOR_OVERRIDES)
+            else prefs[Keys.THEME_COLOR_OVERRIDES] = (prefs[Keys.THEME_COLOR_OVERRIDES] ?: emptySet())
+                .filterNot { entry -> roles.any { it.name == entry.substringBefore('=') } }.toSet()
+        }
+    }
+
     suspend fun setTransfersPaused(paused: Boolean) {
         dataStore.edit { it[Keys.TRANSFERS_PAUSED] = paused }
     }
@@ -154,6 +181,14 @@ class UserPreferencesRepository @Inject constructor(
         val defaults = UserPreferences()
         val themeId = this[Keys.THEME_ID]?.let { runCatching { ThemePresetId.valueOf(it) }.getOrNull() }
             ?: defaults.themeId
+        val themeColorOverrides = (this[Keys.THEME_COLOR_OVERRIDES] ?: emptySet()).mapNotNull { entry ->
+            val roleName = entry.substringBefore('=', "")
+            val value = entry.substringAfter('=', "")
+            val role = runCatching { ThemeColorRole.valueOf(roleName) }.getOrNull()
+            if (role != null && value.removePrefix("#").matches(Regex("(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})"))) {
+                role to "#${value.removePrefix("#").uppercase()}"
+            } else null
+        }.toMap()
         val sortField = this[Keys.SORT_FIELD]?.let { runCatching { SortField.valueOf(it) }.getOrNull() }
             ?: defaults.librarySortOrder.field
         val sortDirection = this[Keys.SORT_DIRECTION]?.let { runCatching { SortDirection.valueOf(it) }.getOrNull() }
@@ -165,6 +200,7 @@ class UserPreferencesRepository @Inject constructor(
 
         return UserPreferences(
             themeId = themeId,
+            themeColorOverrides = themeColorOverrides,
             librarySortOrder = LibrarySortOrder(sortField, sortDirection),
             equalizer = EqualizerSettings(
                 enabled = this[Keys.EQ_ENABLED] ?: defaults.equalizer.enabled,
