@@ -1,5 +1,10 @@
 package com.necroware.terminusplayer.ui.navigation
 
+import android.animation.ValueAnimator
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
@@ -32,7 +37,9 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -65,55 +72,102 @@ import com.necroware.terminusplayer.ui.theme.LocalAppPalette
 /** Index within the bottom-nav tab order, used to pick left/right slide direction. -1 if not a tab route. */
 private fun tabIndex(route: String?): Int = bottomNavItems.indexOfFirst { it.route == route }
 
-private fun MotionPreference.duration(fullDurationMs: Int): Int = when (this) {
-    MotionPreference.FULL -> fullDurationMs
-    MotionPreference.REDUCED -> (fullDurationMs / 2).coerceAtLeast(1)
-    MotionPreference.OFF -> 0
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabSlideEnter(
+    motion: MotionPreference,
+    systemAnimationsEnabled: Boolean
+): EnterTransition = motionTransitionSpec(motion, systemAnimationsEnabled).let { spec ->
+    if (spec.durationMs == 0) EnterTransition.None else {
+        val fromIndex = tabIndex(initialState.destination.route)
+        val toIndex = tabIndex(targetState.destination.route)
+        val movingForward = toIndex >= fromIndex
+        val offset: (Int) -> Int = { width -> (width * spec.slideFraction).toInt() }
+        val slide = if (spec.slideFraction == 0f) EnterTransition.None else slideInHorizontally(
+            initialOffsetX = { width -> if (movingForward) offset(width) else -offset(width) },
+            animationSpec = tween(spec.durationMs)
+        )
+        val fade = if (spec.fade) fadeIn(animationSpec = tween(spec.durationMs)) else EnterTransition.None
+        slide + fade
+    }
 }
 
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabSlideEnter(motion: MotionPreference): EnterTransition =
-    if (motion == MotionPreference.OFF) EnterTransition.None else run {
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabSlideExit(
+    motion: MotionPreference,
+    systemAnimationsEnabled: Boolean
+): ExitTransition = motionTransitionSpec(motion, systemAnimationsEnabled).let { spec ->
+    if (spec.durationMs == 0) ExitTransition.None else {
         val fromIndex = tabIndex(initialState.destination.route)
         val toIndex = tabIndex(targetState.destination.route)
         val movingForward = toIndex >= fromIndex
-        val duration = motion.duration(220)
-        slideInHorizontally(
-            initialOffsetX = { fullWidth -> if (movingForward) fullWidth else -fullWidth },
-            animationSpec = tween(duration)
-        ) + fadeIn(animationSpec = tween(duration))
+        val offset: (Int) -> Int = { width -> (width * spec.slideFraction).toInt() }
+        val slide = if (spec.slideFraction == 0f) ExitTransition.None else slideOutHorizontally(
+            targetOffsetX = { width -> if (movingForward) -offset(width) else offset(width) },
+            animationSpec = tween(spec.durationMs)
+        )
+        val fade = if (spec.fade) fadeOut(animationSpec = tween(spec.durationMs)) else ExitTransition.None
+        slide + fade
     }
+}
 
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabSlideExit(motion: MotionPreference): ExitTransition =
-    if (motion == MotionPreference.OFF) ExitTransition.None else run {
-        val fromIndex = tabIndex(initialState.destination.route)
-        val toIndex = tabIndex(targetState.destination.route)
-        val movingForward = toIndex >= fromIndex
-        val duration = motion.duration(220)
-        slideOutHorizontally(
-            targetOffsetX = { fullWidth -> if (movingForward) -fullWidth else fullWidth },
-            animationSpec = tween(duration)
-        ) + fadeOut(animationSpec = tween(duration))
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailEnter(
+    motion: MotionPreference,
+    systemAnimationsEnabled: Boolean
+): EnterTransition = motionTransitionSpec(motion, systemAnimationsEnabled).let { spec ->
+    if (spec.durationMs == 0) EnterTransition.None else {
+        val slide = if (spec.slideFraction == 0f) EnterTransition.None else slideInHorizontally(
+            initialOffsetX = { (it * spec.slideFraction).toInt() }, animationSpec = tween(spec.durationMs)
+        )
+        slide + if (spec.fade) fadeIn(tween(spec.durationMs)) else EnterTransition.None
     }
+}
 
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailEnter(motion: MotionPreference): EnterTransition =
-    if (motion == MotionPreference.OFF) EnterTransition.None else {
-        val duration = motion.duration(240)
-        slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(duration)) + fadeIn(tween(duration))
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailExit(
+    motion: MotionPreference,
+    systemAnimationsEnabled: Boolean
+): ExitTransition = motionTransitionSpec(motion, systemAnimationsEnabled).let { spec ->
+    if (spec.durationMs == 0 || !spec.fade) ExitTransition.None else fadeOut(tween(spec.durationMs))
+}
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailPopEnter(
+    motion: MotionPreference,
+    systemAnimationsEnabled: Boolean
+): EnterTransition = motionTransitionSpec(motion, systemAnimationsEnabled).let { spec ->
+    if (spec.durationMs == 0 || !spec.fade) EnterTransition.None else fadeIn(tween(spec.durationMs))
+}
+
+private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailPopExit(
+    motion: MotionPreference,
+    systemAnimationsEnabled: Boolean
+): ExitTransition = motionTransitionSpec(motion, systemAnimationsEnabled).let { spec ->
+    if (spec.durationMs == 0) ExitTransition.None else {
+        val slide = if (spec.slideFraction == 0f) ExitTransition.None else slideOutHorizontally(
+            targetOffsetX = { (it * spec.slideFraction).toInt() }, animationSpec = tween(spec.durationMs)
+        )
+        slide + if (spec.fade) fadeOut(tween(spec.durationMs)) else ExitTransition.None
     }
+}
 
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailExit(motion: MotionPreference): ExitTransition =
-    if (motion == MotionPreference.OFF) ExitTransition.None
-    else fadeOut(tween(motion.duration(160)))
-
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailPopEnter(motion: MotionPreference): EnterTransition =
-    if (motion == MotionPreference.OFF) EnterTransition.None
-    else fadeIn(tween(motion.duration(160)))
-
-private fun AnimatedContentTransitionScope<NavBackStackEntry>.detailPopExit(motion: MotionPreference): ExitTransition =
-    if (motion == MotionPreference.OFF) ExitTransition.None else {
-        val duration = motion.duration(240)
-        slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(duration)) + fadeOut(tween(duration))
+@Composable
+private fun rememberSystemAnimationsEnabled(): Boolean {
+    val context = LocalContext.current
+    var enabled by remember(context) { mutableStateOf(readSystemAnimationsEnabled()) }
+    DisposableEffect(context) {
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                enabled = readSystemAnimationsEnabled()
+            }
+        }
+        val uri = Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE)
+        context.contentResolver.registerContentObserver(uri, false, observer)
+        onDispose { context.contentResolver.unregisterContentObserver(observer) }
     }
+    return enabled
+}
+
+private fun readSystemAnimationsEnabled(): Boolean = try {
+    ValueAnimator.areAnimatorsEnabled()
+} catch (_: RuntimeException) {
+    true
+}
 
 @Composable
 fun TerminusNavGraph(
@@ -121,6 +175,7 @@ fun TerminusNavGraph(
     onInitialContentReady: () -> Unit = {}
 ) {
     val navController = rememberNavController()
+    val systemAnimationsEnabled = rememberSystemAnimationsEnabled()
     // Single PlaybackViewModel instance (Hilt, Activity-scoped by default when
     // requested at this top-level composable) shared by the mini bar and the
     // full Now Playing screen so both reflect the same MediaController state.
@@ -223,10 +278,10 @@ fun TerminusNavGraph(
             navController = navController,
             startDestination = Destination.Library.route,
             modifier = Modifier.fillMaxSize(),
-            enterTransition = { tabSlideEnter(motionPreference) },
-            exitTransition = { tabSlideExit(motionPreference) },
-            popEnterTransition = { tabSlideEnter(motionPreference) },
-            popExitTransition = { tabSlideExit(motionPreference) }
+            enterTransition = { tabSlideEnter(motionPreference, systemAnimationsEnabled) },
+            exitTransition = { tabSlideExit(motionPreference, systemAnimationsEnabled) },
+            popEnterTransition = { tabSlideEnter(motionPreference, systemAnimationsEnabled) },
+            popExitTransition = { tabSlideExit(motionPreference, systemAnimationsEnabled) }
         ) {
             composable(Destination.Home.route) {
                 HomeScreen(
@@ -275,86 +330,79 @@ fun TerminusNavGraph(
             composable(
                 route = Destination.NowPlaying.route,
                 enterTransition = {
-                    if (motionPreference == MotionPreference.OFF) EnterTransition.None else {
-                        val duration = motionPreference.duration(280)
-                        slideInVertically(
-                            initialOffsetY = { fullHeight -> fullHeight },
-                            animationSpec = tween(duration)
-                        ) + fadeIn(animationSpec = tween(duration))
+                    val spec = motionTransitionSpec(motionPreference, systemAnimationsEnabled)
+                    if (spec.durationMs == 0) EnterTransition.None else {
+                        val slide = if (spec.slideFraction == 0f) EnterTransition.None else slideInVertically(
+                            initialOffsetY = { fullHeight -> (fullHeight * spec.slideFraction).toInt() },
+                            animationSpec = tween(spec.durationMs)
+                        )
+                        slide + if (spec.fade) fadeIn(animationSpec = tween(spec.durationMs)) else EnterTransition.None
                     }
                 },
                 exitTransition = {
-                    if (motionPreference == MotionPreference.OFF) ExitTransition.None
-                    else fadeOut(animationSpec = tween(motionPreference.duration(180)))
+                    val spec = motionTransitionSpec(motionPreference, systemAnimationsEnabled)
+                    if (spec.durationMs == 0 || !spec.fade) ExitTransition.None
+                    else fadeOut(animationSpec = tween(spec.durationMs))
                 },
                 popEnterTransition = {
-                    if (motionPreference == MotionPreference.OFF) EnterTransition.None
-                    else fadeIn(animationSpec = tween(motionPreference.duration(180)))
+                    val spec = motionTransitionSpec(motionPreference, systemAnimationsEnabled)
+                    if (spec.durationMs == 0 || !spec.fade) EnterTransition.None
+                    else fadeIn(animationSpec = tween(spec.durationMs))
                 },
                 popExitTransition = {
-                    if (motionPreference == MotionPreference.OFF) ExitTransition.None else {
-                        val duration = motionPreference.duration(280)
-                        slideOutVertically(
-                            targetOffsetY = { fullHeight -> fullHeight },
-                            animationSpec = tween(duration)
-                        ) + fadeOut(animationSpec = tween(duration))
+                    val spec = motionTransitionSpec(motionPreference, systemAnimationsEnabled)
+                    if (spec.durationMs == 0) ExitTransition.None else {
+                        val slide = if (spec.slideFraction == 0f) ExitTransition.None else slideOutVertically(
+                            targetOffsetY = { fullHeight -> (fullHeight * spec.slideFraction).toInt() },
+                            animationSpec = tween(spec.durationMs)
+                        )
+                        slide + if (spec.fade) fadeOut(animationSpec = tween(spec.durationMs)) else ExitTransition.None
                     }
                 }
             ) {
                 NowPlayingScreen(
                     viewModel = playbackViewModel,
                     onCollapse = { navController.popBackStack() },
-                    motionPreference = motionPreference
+                    motionPreference = motionPreference,
+                    systemAnimationsEnabled = systemAnimationsEnabled
                 )
             }
             composable(
                 route = Destination.AlbumDetail.route,
                 arguments = listOf(navArgument("albumTitle") { type = NavType.StringType }),
-                enterTransition = { detailEnter(motionPreference) },
-                exitTransition = { detailExit(motionPreference) },
-                popEnterTransition = { detailPopEnter(motionPreference) },
-                popExitTransition = { detailPopExit(motionPreference) }
+                enterTransition = { detailEnter(motionPreference, systemAnimationsEnabled) },
+                exitTransition = { detailExit(motionPreference, systemAnimationsEnabled) },
+                popEnterTransition = { detailPopEnter(motionPreference, systemAnimationsEnabled) },
+                popExitTransition = { detailPopExit(motionPreference, systemAnimationsEnabled) }
             ) {
                 AlbumDetailScreen(onBack = { navController.popBackStack() })
             }
             composable(
                 route = Destination.ArtistDetail.route,
                 arguments = listOf(navArgument("artist") { type = NavType.StringType }),
-                enterTransition = { detailEnter(motionPreference) },
-                exitTransition = { detailExit(motionPreference) },
-                popEnterTransition = { detailPopEnter(motionPreference) },
-                popExitTransition = { detailPopExit(motionPreference) }
+                enterTransition = { detailEnter(motionPreference, systemAnimationsEnabled) },
+                exitTransition = { detailExit(motionPreference, systemAnimationsEnabled) },
+                popEnterTransition = { detailPopEnter(motionPreference, systemAnimationsEnabled) },
+                popExitTransition = { detailPopExit(motionPreference, systemAnimationsEnabled) }
             ) {
                 ArtistDetailScreen(onBack = { navController.popBackStack() })
             }
             composable(
                 route = Destination.PlaylistDetail.route,
                 arguments = listOf(navArgument("kind") { type = NavType.StringType }),
-                enterTransition = { detailEnter(motionPreference) },
-                exitTransition = { detailExit(motionPreference) },
-                popEnterTransition = { detailPopEnter(motionPreference) },
-                popExitTransition = { detailPopExit(motionPreference) }
+                enterTransition = { detailEnter(motionPreference, systemAnimationsEnabled) },
+                exitTransition = { detailExit(motionPreference, systemAnimationsEnabled) },
+                popEnterTransition = { detailPopEnter(motionPreference, systemAnimationsEnabled) },
+                popExitTransition = { detailPopExit(motionPreference, systemAnimationsEnabled) }
             ) {
                 PlaylistDetailScreen(onBack = { navController.popBackStack() })
             }
             composable(
                 route = Destination.Search.route,
-                enterTransition = {
-                    if (motionPreference == MotionPreference.OFF) EnterTransition.None
-                    else fadeIn(tween(motionPreference.duration(160)))
-                },
-                exitTransition = {
-                    if (motionPreference == MotionPreference.OFF) ExitTransition.None
-                    else fadeOut(tween(motionPreference.duration(160)))
-                },
-                popEnterTransition = {
-                    if (motionPreference == MotionPreference.OFF) EnterTransition.None
-                    else fadeIn(tween(motionPreference.duration(160)))
-                },
-                popExitTransition = {
-                    if (motionPreference == MotionPreference.OFF) ExitTransition.None
-                    else fadeOut(tween(motionPreference.duration(160)))
-                }
+                enterTransition = { detailPopEnter(motionPreference, systemAnimationsEnabled) },
+                exitTransition = { detailExit(motionPreference, systemAnimationsEnabled) },
+                popEnterTransition = { detailPopEnter(motionPreference, systemAnimationsEnabled) },
+                popExitTransition = { detailExit(motionPreference, systemAnimationsEnabled) }
             ) {
                 SearchScreen(
                     onSongClick = { song, queue -> playSongAndOpenPlayer(song, queue, playbackViewModel, navController) },
@@ -362,10 +410,11 @@ fun TerminusNavGraph(
                 )
             }
         }
+        val soundMotion = motionTransitionSpec(motionPreference, systemAnimationsEnabled)
         AnimatedVisibility(
             visible = soundControlOpen,
-            enter = if (motionPreference == MotionPreference.OFF) EnterTransition.None else fadeIn(tween(motionPreference.duration(200))),
-            exit = if (motionPreference == MotionPreference.OFF) ExitTransition.None else fadeOut(tween(motionPreference.duration(200)))
+            enter = if (soundMotion.durationMs == 0 || !soundMotion.fade) EnterTransition.None else fadeIn(tween(soundMotion.durationMs)),
+            exit = if (soundMotion.durationMs == 0 || !soundMotion.fade) ExitTransition.None else fadeOut(tween(soundMotion.durationMs))
         ) {
             Box(
                 Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.42f))
@@ -374,16 +423,20 @@ fun TerminusNavGraph(
         }
         AnimatedVisibility(
             visible = soundControlOpen,
-            enter = if (motionPreference == MotionPreference.OFF) EnterTransition.None
-                    else slideInHorizontally(
-                        initialOffsetX = { if (soundControlOnLeft) -it else it },
-                        animationSpec = tween(motionPreference.duration(200))
-                    ) + fadeIn(tween(motionPreference.duration(200))),
-            exit = if (motionPreference == MotionPreference.OFF) ExitTransition.None
-                   else slideOutHorizontally(
-                        targetOffsetX = { if (soundControlOnLeft) -it else it },
-                        animationSpec = tween(motionPreference.duration(200))
-                   ) + fadeOut(tween(motionPreference.duration(200))),
+            enter = if (soundMotion.durationMs == 0) EnterTransition.None else {
+                val slide = if (soundMotion.slideFraction == 0f) EnterTransition.None else slideInHorizontally(
+                    initialOffsetX = { ((if (soundControlOnLeft) -it else it) * soundMotion.slideFraction).toInt() },
+                    animationSpec = tween(soundMotion.durationMs)
+                )
+                slide + if (soundMotion.fade) fadeIn(tween(soundMotion.durationMs)) else EnterTransition.None
+            },
+            exit = if (soundMotion.durationMs == 0) ExitTransition.None else {
+                val slide = if (soundMotion.slideFraction == 0f) ExitTransition.None else slideOutHorizontally(
+                    targetOffsetX = { ((if (soundControlOnLeft) -it else it) * soundMotion.slideFraction).toInt() },
+                    animationSpec = tween(soundMotion.durationMs)
+                )
+                slide + if (soundMotion.fade) fadeOut(tween(soundMotion.durationMs)) else ExitTransition.None
+            },
             modifier = Modifier.align(if (soundControlOnLeft) Alignment.CenterStart else Alignment.CenterEnd)
         ) {
             androidx.compose.material3.Surface(
@@ -413,6 +466,7 @@ private fun playSongAndOpenPlayer(
     navController: androidx.navigation.NavHostController
 ) {
     val index = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-    playbackViewModel.playSongQueue(queue, index)
-    navController.navigate(Destination.NowPlaying.route)
+    playbackViewModel.playSongQueue(queue, index) {
+        navController.navigate(Destination.NowPlaying.route) { launchSingleTop = true }
+    }
 }

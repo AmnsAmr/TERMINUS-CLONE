@@ -1,5 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.settings
 
+import com.necroware.terminusplayer.ui.components.TerminalActionText
+
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -415,10 +417,10 @@ private fun ThemeColorEditor(
                     }
                 }
             }
-            Text("[ RESET $group ]", modifier = Modifier.clickable { onClearRoles(roles.toSet()) },
+            TerminalActionText("[ RESET $group ]", modifier = Modifier.clickable { onClearRoles(roles.toSet()) },
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Text("[ RESTORE SELECTED PRESET ]", modifier = Modifier.clickable { onResetAll() }.padding(vertical = 4.dp),
+        TerminalActionText("[ RESTORE SELECTED PRESET ]", modifier = Modifier.clickable { onResetAll() }.padding(vertical = 4.dp),
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
     }
     editing?.let { role ->
@@ -479,13 +481,13 @@ private fun EqualizerSection(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Row {
-                    Text(
+                    TerminalActionText(
                         text = "[RESET] ",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.clickable { onReset() }
                     )
-                    Text(
+                    TerminalActionText(
                         text = if (enabled) "[ON]" else "[OFF]",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
@@ -543,7 +545,7 @@ private fun CrossfadeSection(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Text(
+                TerminalActionText(
                     text = if (enabled) "[ON]" else "[OFF]",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
@@ -590,7 +592,7 @@ private fun ToggleRow(label: String, sublabel: String, checked: Boolean, onCheck
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Text(
+            TerminalActionText(
                 text = if (checked) "[ON]" else "[OFF]",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary
@@ -622,8 +624,9 @@ private fun MotionPreferenceSection(
                     Text(
                         text = when (preference) {
                             MotionPreference.FULL -> "Playback visuals and full screen transitions"
-                            MotionPreference.REDUCED -> "No looping visuals; shorter screen transitions"
-                            MotionPreference.OFF -> "Apply screen changes without optional motion"
+                            MotionPreference.MEDIUM -> "Short, subtle screen transitions"
+                            MotionPreference.OFF -> "Immediate screen changes with no movement"
+                            MotionPreference.SYSTEM -> "Follow your Android animation setting"
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -689,7 +692,7 @@ private fun SortSection(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
+                TerminalActionText(
                     text = "[ ASCENDING ]",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (direction == SortDirection.ASC) {
@@ -699,7 +702,7 @@ private fun SortSection(
                     },
                     modifier = Modifier.clickable { onDirectionChange(SortDirection.ASC) }
                 )
-                Text(
+                TerminalActionText(
                     text = "[ DESCENDING ]",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (direction == SortDirection.DESC) {
@@ -718,7 +721,7 @@ private fun SortSection(
 private fun ActionRow(label: String, sublabel: String, onClick: () -> Unit) {
     TerminalBorder(modifier = Modifier.fillMaxWidth().clickable { onClick() }) {
         Column {
-            Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+            TerminalActionText(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             Text(
                 sublabel,
                 style = MaterialTheme.typography.labelSmall,
@@ -808,7 +811,7 @@ private fun SettingsDropdown(
             verticalAlignment = Alignment.CenterVertically
         ) {
             SectionLabel(label)
-            Text(
+            TerminalActionText(
                 text = if (expanded) "[ - ]" else "[ + ]",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary

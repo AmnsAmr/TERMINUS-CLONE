@@ -1,5 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.upload
 
+import com.necroware.terminusplayer.ui.components.TerminalActionText
+
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -74,7 +76,7 @@ fun UploadScreen(
                     if (quotaFull) {
                         Text("QUOTA FULL · uploads are paused. Free server space, then retry.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                     }
-                    Text("[ REFRESH QUOTA ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { viewModel.refreshQuota() })
+                    TerminalActionText("[ REFRESH QUOTA ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { viewModel.refreshQuota() })
                 }
             }
             }
@@ -94,7 +96,7 @@ fun UploadScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    Text(
+                    TerminalActionText(
                         text = "[ UPLOAD ALL ]",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
@@ -108,7 +110,7 @@ fun UploadScreen(
         item {
             TerminalBorder(modifier = Modifier.fillMaxWidth().clickable { fileLauncher.launch(arrayOf("audio/*")) }) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("[ SELECT FILE TO UPLOAD ]", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    TerminalActionText("[ SELECT FILE TO UPLOAD ]", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                     Text("Uploads run in the background and can be stopped from the notification.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -133,18 +135,18 @@ fun UploadScreen(
                 }
                 Column(horizontalAlignment = androidx.compose.ui.Alignment.End) {
                     if (queue.any { it.state in setOf("PERMANENT_FAILURE", "CONVERSION_FAILED", "QUOTA_EXCEEDED") }) {
-                        Text("[ RETRY FAILED ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                        TerminalActionText("[ RETRY FAILED ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.clickable { viewModel.retryAllFailed() }.padding(4.dp))
                     }
                     if (transfersPaused && queue.any { it.state in setOf("WAITING", "FAILED", "UPLOADING", "DOWNLOADING", "CONVERTING") }) {
-                        Text("[ RESUME ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                        TerminalActionText("[ RESUME ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.clickable { viewModel.resumeTransfers() }.padding(4.dp))
                     } else if (!transfersPaused && queue.any { it.state in setOf("WAITING", "FAILED", "UPLOADING", "DOWNLOADING", "CONVERTING") }) {
-                        Text("[ PAUSE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                        TerminalActionText("[ PAUSE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.clickable { viewModel.pauseTransfers() }.padding(4.dp))
                     }
                     if (queue.any { it.state in setOf("WAITING", "FAILED", "UPLOADING", "DOWNLOADING", "CONVERTING") }) {
-                        Text("[ CANCEL PENDING ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error,
+                        TerminalActionText("[ CANCEL PENDING ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.clickable { viewModel.cancelAllUploads() }.padding(4.dp))
                     }
                 }
@@ -221,10 +223,10 @@ private fun UploadQueueRow(
             if (isFailure || item.state != "UPLOADING") {
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     if (isFailure) {
-                        Text("[ RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                        TerminalActionText("[ RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.clickable(onClick = onRetry).padding(vertical = 8.dp))
                     }
-                    Text("[ REMOVE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    TerminalActionText("[ REMOVE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.clickable(onClick = onRemove).padding(vertical = 8.dp))
                 }
             }

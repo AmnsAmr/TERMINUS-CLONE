@@ -1,5 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.managesources
 
+import com.necroware.terminusplayer.ui.components.TerminalActionText
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -34,7 +36,7 @@ fun ManageSourcesScreen(
             modifier = Modifier.fillMaxWidth().padding(bottom = 20.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
+            TerminalActionText(
                 text = "[ BACK ] ",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -88,7 +90,7 @@ fun ManageSourcesScreen(
                             color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.weight(1f).padding(end = 16.dp)
                         )
-                        Text(
+                        TerminalActionText(
                             text = if (isIncluded) "[ON]" else "[OFF]",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary

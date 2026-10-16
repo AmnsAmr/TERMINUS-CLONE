@@ -1,5 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.search
 
+import com.necroware.terminusplayer.ui.components.TerminalActionText
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -82,7 +84,7 @@ fun SearchScreen(
                 modifier = Modifier.weight(1f)
             )
             if (query.isNotEmpty()) {
-                Text(
+                TerminalActionText(
                     text = "[X]",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

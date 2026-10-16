@@ -35,6 +35,8 @@ class PlaylistsViewModel @Inject constructor(
 
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage = _actionMessage.asStateFlow()
+    private val _publishingPlaylistIds = MutableStateFlow<Set<String>>(emptySet())
+    val publishingPlaylistIds = _publishingPlaylistIds.asStateFlow()
     private val _downloadDialogState = MutableStateFlow(PlaylistDownloadDialogState())
     val downloadDialogState = _downloadDialogState.asStateFlow()
 
@@ -53,7 +55,7 @@ class PlaylistsViewModel @Inject constructor(
     fun createPlaylist(name: String) = viewModelScope.launch {
         try {
             repository.createPlaylist(name)
-            _actionMessage.value = "Playlist created. Server sync will run when connected."
+            _actionMessage.value = "Local playlist created. Add music from either library."
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -61,14 +63,51 @@ class PlaylistsViewModel @Inject constructor(
         }
     }
 
+    fun createServerPlaylist(name: String) = viewModelScope.launch {
+        try {
+            repository.createServerPlaylist(name)
+            _actionMessage.value = "Navidrome playlist created. Only server-addressable tracks can be added."
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = e.message ?: "Couldn't create Navidrome playlist."
+        }
+    }
+
+    fun publishPlaylistToServer(id: String) = viewModelScope.launch {
+        if (id in _publishingPlaylistIds.value) return@launch
+        _publishingPlaylistIds.value = _publishingPlaylistIds.value + id
+        try {
+            val (publishedCount, localOnlyCount) = repository.publishPlaylistToServer(id)
+            _actionMessage.value = "Published $publishedCount server-ready tracks to Navidrome; $localOnlyCount local-only tracks remain on this device."
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = e.message ?: "Couldn't publish playlist to Navidrome."
+        } finally {
+            _publishingPlaylistIds.value = _publishingPlaylistIds.value - id
+        }
+    }
+
     fun deletePlaylist(id: String) = viewModelScope.launch {
         try {
             repository.deletePlaylist(id)
-            _actionMessage.value = "Playlist deleted. Server sync will run when connected."
+            _actionMessage.value = "Playlist deleted from this device."
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             _actionMessage.value = "Couldn't delete playlist."
+        }
+    }
+
+    fun renamePlaylist(id: String, name: String) = viewModelScope.launch {
+        try {
+            repository.renamePlaylist(id, name)
+            _actionMessage.value = "Playlist renamed${if (customPlaylists.value.find { it.id == id }?.isRemote == true) "; Navidrome sync is queued" else ""}."
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = e.message ?: "Couldn't rename playlist."
         }
     }
 

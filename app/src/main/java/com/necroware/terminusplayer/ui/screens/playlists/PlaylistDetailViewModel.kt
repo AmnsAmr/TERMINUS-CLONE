@@ -7,15 +7,18 @@ import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.model.Playlist
 import com.necroware.terminusplayer.data.model.PlaylistOfflineAvailability
 import com.necroware.terminusplayer.data.model.PlaylistDownloadPlan
+import com.necroware.terminusplayer.data.model.SongTransferStatus
 import com.necroware.terminusplayer.data.model.playlistOfflineAvailabilityFromResult
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.data.repository.UploadQueueManager
 import com.necroware.terminusplayer.playback.PlaybackController
-import com.necroware.terminusplayer.util.toMediaItems
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -30,6 +33,13 @@ data class PlaylistDetailUiState(
     val emptyMessage: String = "",
     val songs: List<Song> = emptyList(),
     val offlineAvailability: PlaylistOfflineAvailability = PlaylistOfflineAvailability.Checking
+)
+
+data class UploadMatchResolutionState(
+    val localSong: Song,
+    val candidates: List<Song> = emptyList(),
+    val isLoading: Boolean = true,
+    val errorMessage: String? = null
 )
 
 @HiltViewModel
@@ -53,9 +63,21 @@ class PlaylistDetailViewModel @Inject constructor(
     val playlists: StateFlow<List<Playlist>> = _playlists.asStateFlow()
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage: StateFlow<String?> = _actionMessage.asStateFlow()
+    private val _uploadMatchResolution = MutableStateFlow<UploadMatchResolutionState?>(null)
+    val uploadMatchResolution: StateFlow<UploadMatchResolutionState?> = _uploadMatchResolution.asStateFlow()
+    private val _transferStatuses = MutableStateFlow<Map<String, SongTransferStatus>>(emptyMap())
+    val transferStatuses: StateFlow<Map<String, SongTransferStatus>> = _transferStatuses.asStateFlow()
+    val currentPlayingSongId: StateFlow<String?> = playbackController.state
+        .map { state -> state.mediaId.takeIf { state.isPlaying } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     private var offlineCheckRequestId = 0L
 
     init {
+        viewModelScope.launch {
+            uploadQueueManager.observeSongTransferStatuses().collect { statuses ->
+                _transferStatuses.value = statuses
+            }
+        }
         viewModelScope.launch {
             repository.observeCustomPlaylists().collect { _playlists.value = it }
         }
@@ -123,8 +145,6 @@ class PlaylistDetailViewModel @Inject constructor(
                     PlaylistKind.RECENT -> repository.getRecentlyPlayed(limit = 100)
                     PlaylistKind.MOST_PLAYED -> repository.getMostPlayed(limit = 100)
                 }
-                val deduplicatedSongs = songs.groupBy { "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}" }
-                    .map { (_, group) -> group.find { it.providerId == "local" } ?: group.first() }
                 _uiState.value = PlaylistDetailUiState(
                     isLoading = false,
                     kind = resolvedKind,
@@ -134,12 +154,12 @@ class PlaylistDetailViewModel @Inject constructor(
                         PlaylistKind.RECENT -> "[ nothing played yet ]"
                         PlaylistKind.MOST_PLAYED -> "[ nothing played yet ]"
                     },
-                    songs = deduplicatedSongs,
-                    offlineAvailability = if (deduplicatedSongs.isEmpty()) {
+                    songs = songs,
+                    offlineAvailability = if (songs.isEmpty()) {
                         PlaylistOfflineAvailability.Ready(emptyPlaylistDownloadPlan())
                     } else PlaylistOfflineAvailability.Checking
                 )
-                checkOfflineAvailability(null, deduplicatedSongs, deduplicatedSongs.size)
+                checkOfflineAvailability(null, songs, songs.size)
             }
         }
     }
@@ -196,7 +216,7 @@ class PlaylistDetailViewModel @Inject constructor(
     )
 
     fun playAll(songs: List<Song> = _uiState.value.songs) {
-        if (songs.isNotEmpty()) playbackController.playSongs(songs.toMediaItems(), 0)
+        if (songs.isNotEmpty()) playbackController.playSongsFromSongs(songs, 0)
     }
 
     fun downloadAll(force: Boolean = false) = viewModelScope.launch {
@@ -276,11 +296,60 @@ class PlaylistDetailViewModel @Inject constructor(
         }
     }
 
+    fun retryTransfer(song: Song) = viewModelScope.launch {
+        try {
+            uploadQueueManager.retrySongTransfer(song.id)
+            _actionMessage.value = "Retry queued for ${song.title}."
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not retry transfer: ${e.message ?: "Unknown error"}"
+        }
+    }
+
+    fun requestUploadMatchResolution(song: Song) = viewModelScope.launch {
+        _uploadMatchResolution.value = UploadMatchResolutionState(song)
+        try {
+            val candidates = repository.getUploadMatchCandidates(song.id)
+            _uploadMatchResolution.value = UploadMatchResolutionState(
+                localSong = song,
+                candidates = candidates,
+                isLoading = false,
+                errorMessage = if (candidates.isEmpty()) "No unlinked matching Navidrome tracks are cached. Refresh the server library and retry." else null
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _uploadMatchResolution.value = UploadMatchResolutionState(song, isLoading = false, errorMessage = e.message ?: "Could not load candidates")
+        }
+    }
+
+    fun confirmUploadMatch(serverSong: Song) = viewModelScope.launch {
+        val resolution = _uploadMatchResolution.value ?: return@launch
+        try {
+            repository.linkUploadedLocalSong(resolution.localSong.id, serverSong.id)
+            _uiState.value = _uiState.value.copy(
+                songs = _uiState.value.songs.map { song ->
+                    if (song.id == resolution.localSong.id) song.copy(navidromeId = serverSong.providerRemoteId) else song
+                }
+            )
+            _uploadMatchResolution.value = null
+            _actionMessage.value = "Linked ${resolution.localSong.title} to ${serverSong.title} on Navidrome."
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _uploadMatchResolution.value = resolution.copy(errorMessage = e.message ?: "Could not save this match")
+        }
+    }
+
+    fun dismissUploadMatchResolution() { _uploadMatchResolution.value = null }
+
     fun dismissActionMessage() { _actionMessage.value = null }
 
-    fun playFrom(song: Song, songs: List<Song> = _uiState.value.songs) {
-        val index = songs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-        playbackController.playSongs(songs.toMediaItems(), index)
+    fun playFrom(song: Song, songs: List<Song> = _uiState.value.songs, clickedIndex: Int? = null) {
+        val index = clickedIndex?.takeIf { it in songs.indices }
+            ?: songs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
+        playbackController.playSongsFromSongs(songs, index)
     }
 
     fun downloadSelected(songs: List<Song>) = viewModelScope.launch {
@@ -316,11 +385,20 @@ class PlaylistDetailViewModel @Inject constructor(
         try {
             val uniqueIds = songIds.distinct()
             var addedCount = 0
-            for (songId in uniqueIds) if (repository.addSongToPlaylist(playlistId, songId)) addedCount++
+            var localOnlyCount = 0
+            var duplicateCount = 0
+            for (songId in uniqueIds) {
+                when (repository.addSongToPlaylist(playlistId, songId)) {
+                    MusicRepository.AddSongResult.ADDED -> addedCount++
+                    MusicRepository.AddSongResult.LOCAL_ONLY_UNSUPPORTED -> localOnlyCount++
+                    MusicRepository.AddSongResult.ALREADY_PRESENT -> duplicateCount++
+                    MusicRepository.AddSongResult.NOT_FOUND -> Unit
+                }
+            }
             _actionMessage.value = when {
-                addedCount == uniqueIds.size -> "Added $addedCount selected tracks."
-                addedCount == 0 -> "Those tracks are already in that playlist."
-                else -> "Added $addedCount tracks; ${uniqueIds.size - addedCount} were already there."
+                localOnlyCount > 0 -> "Added $addedCount tracks; $localOnlyCount local-only tracks cannot be added to a Navidrome playlist${if (duplicateCount > 0) "; $duplicateCount already present" else ""}."
+                duplicateCount == uniqueIds.size -> "Those tracks are already in that playlist."
+                else -> "Added $addedCount selected tracks${if (duplicateCount > 0) "; $duplicateCount already present" else ""}."
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -331,9 +409,9 @@ class PlaylistDetailViewModel @Inject constructor(
 
     fun uploadSelected(songs: List<Song>) = viewModelScope.launch {
         try {
-            val localSongs = songs.filter { it.providerId == "local" }.distinctBy { it.id }
+            val localSongs = songs.filter { it.providerId == "local" && it.navidromeId.isNullOrBlank() }.distinctBy { it.id }
             if (localSongs.isEmpty()) {
-                _actionMessage.value = "No selected local tracks can be uploaded."
+                _actionMessage.value = "No selected local-only tracks need uploading."
             } else {
                 uploadQueueManager.enqueueUploads(localSongs)
                 _actionMessage.value = "Queued ${localSongs.size} selected local tracks for upload. Track progress in Stats."
@@ -360,15 +438,79 @@ class PlaylistDetailViewModel @Inject constructor(
 
     fun addSongToPlaylist(playlistId: String, songId: String) = viewModelScope.launch {
         try {
-            _actionMessage.value = if (repository.addSongToPlaylist(playlistId, songId)) {
-                "Added track to playlist."
-            } else {
-                "Track is already in that playlist."
+            _actionMessage.value = when (repository.addSongToPlaylist(playlistId, songId)) {
+                MusicRepository.AddSongResult.ADDED -> "Added track to playlist."
+                MusicRepository.AddSongResult.ALREADY_PRESENT -> "Track is already in that playlist."
+                MusicRepository.AddSongResult.LOCAL_ONLY_UNSUPPORTED -> "This local-only track cannot be added to a Navidrome playlist."
+                MusicRepository.AddSongResult.NOT_FOUND -> "Track or playlist is no longer available."
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             _actionMessage.value = "Could not add track: ${e.message ?: "Unknown error"}"
+        }
+    }
+
+    fun removeSongsFromCurrentPlaylist(songIds: List<String>) = viewModelScope.launch {
+        val playlistId = _uiState.value.currentPlaylistId ?: return@launch
+        try {
+            val removedCount = repository.removeSongsFromPlaylist(playlistId, songIds)
+            val updatedSongs = _uiState.value.songs.filterNot { it.id in songIds }
+            _uiState.value = _uiState.value.copy(songs = updatedSongs)
+            checkOfflineAvailability(playlistId, updatedSongs, updatedSongs.size)
+            _actionMessage.value = "Removed $removedCount ${if (removedCount == 1) "track" else "tracks"} from playlist."
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not remove tracks: ${e.message ?: "Unknown error"}"
+        }
+    }
+
+    fun movePlaylistEntry(fromIndex: Int, toIndex: Int) = viewModelScope.launch {
+        val playlistId = _uiState.value.currentPlaylistId ?: return@launch
+        try {
+            repository.movePlaylistEntry(playlistId, fromIndex, toIndex)
+            val updatedSongs = repository.getCachedSongsForPlaylist(playlistId)
+            _uiState.value = _uiState.value.copy(songs = updatedSongs)
+            checkOfflineAvailability(playlistId, updatedSongs, updatedSongs.size)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not reorder tracks: ${e.message ?: "Unknown error"}"
+        }
+    }
+
+    fun resolvePlaylistConflict(keepLocalEdits: Boolean) = viewModelScope.launch {
+        val playlistId = _uiState.value.currentPlaylistId ?: return@launch
+        try {
+            repository.resolvePlaylistConflict(playlistId, keepLocalEdits)
+            val songs = repository.getCachedSongsForPlaylist(playlistId)
+            _uiState.value = _uiState.value.copy(
+                songs = songs,
+                errorMessage = null
+            )
+            checkOfflineAvailability(playlistId, songs, songs.size)
+            _actionMessage.value = if (keepLocalEdits) {
+                "Kept device edits. Navidrome sync is queued against the saved server version."
+            } else {
+                "Replaced this playlist with the current Navidrome version."
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not resolve playlist conflict: ${e.message ?: "Server unavailable"}"
+        }
+    }
+
+    fun keepMissingServerPlaylistLocally() = viewModelScope.launch {
+        val playlistId = _uiState.value.currentPlaylistId ?: return@launch
+        try {
+            repository.resolveMissingServerPlaylistAsLocal(playlistId)
+            _actionMessage.value = "Kept this playlist on this device. Navidrome will not recreate it."
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _actionMessage.value = "Could not keep local playlist: ${e.message ?: "Unknown error"}"
         }
     }
 }

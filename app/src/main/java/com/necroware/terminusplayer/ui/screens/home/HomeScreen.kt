@@ -1,5 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.home
 
+import com.necroware.terminusplayer.ui.components.TerminalActionText
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,7 +50,7 @@ fun HomeScreen(
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                Text(
+                TerminalActionText(
                     text = "[ scanning library... ]",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -81,7 +83,7 @@ fun HomeScreen(
 
         if (state.syncError != null) {
             item {
-                Text(
+                TerminalActionText(
                     text = "[ sync warning: ${state.syncError} ]",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.error,
@@ -164,7 +166,7 @@ fun HomeScreen(
                         title = "YOUR LIBRARY IS EMPTY",
                         detail = "Scan your device or connect a music server to get started."
                     )
-                    Text(
+                    TerminalActionText(
                         text = "[ SCAN LIBRARY ]",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
@@ -222,12 +224,12 @@ fun HomeScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
+                        TerminalActionText(
                             text = "[ ${state.songCount} tracks indexed ]",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Text(
+                        TerminalActionText(
                             text = if (state.isSyncing) "[ SCANNING ]" else "[ RESCAN ]",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
@@ -236,7 +238,7 @@ fun HomeScreen(
                     }
                 }
 
-                Text(
+                TerminalActionText(
                     text = if (showDeviceStatus) "[ HIDE DEVICE STATUS ]" else "[ SHOW DEVICE STATUS ]",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -270,7 +272,7 @@ private fun GenreMixCard(mix: GenreMix, onPlay: () -> Unit) {
                     SongArt(uriString = song.uriString, size = 48.dp)
                 }
             }
-            Text(
+            TerminalActionText(
                 text = "[ PLAY MIX ]",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary
@@ -299,7 +301,7 @@ private fun YourMixCard(mix: List<Song>, onPlayMix: () -> Unit) {
                     )
                 }
                 if (mix.isNotEmpty()) {
-                    Text(
+                    TerminalActionText(
                         text = "[ SHUFFLE ]",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,

@@ -36,14 +36,14 @@ fun PlaylistSelectionControls(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 if (selectedCount < totalCount) {
-                    Text(
+                    TerminalActionText(
                         "[ SELECT ALL ]",
                         color = MaterialTheme.colorScheme.primary,
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.clickable(onClick = onSelectAll).padding(vertical = 8.dp)
                     )
                 }
-                Text(
+                TerminalActionText(
                     "[ CLEAR ]",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelSmall,
@@ -51,7 +51,7 @@ fun PlaylistSelectionControls(
                 )
             }
         } else {
-            Text(
+            TerminalActionText(
                 "[ SELECT ALL ]",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
@@ -79,7 +79,7 @@ fun PlaylistSelectionActionBar(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text("$selectedCount SELECTED", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
-        Text("[ ACTIONS ]", color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onActions).padding(8.dp))
-        Text("[ DONE ]", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clickable(onClick = onDone).padding(8.dp))
+        TerminalActionText("[ ACTIONS ]", color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onActions).padding(8.dp))
+        TerminalActionText("[ DONE ]", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clickable(onClick = onDone).padding(8.dp))
     }
 }

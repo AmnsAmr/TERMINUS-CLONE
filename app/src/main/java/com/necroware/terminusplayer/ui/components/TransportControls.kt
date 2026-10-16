@@ -44,14 +44,15 @@ private fun GlyphButton(
     boxWidth: Dp,
     boxHeight: Dp,
     fontSizeSp: Int,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
 ) {
     Box(
         modifier = modifier
             .width(boxWidth)
             .height(boxHeight)
             .border(1.dp, color.copy(alpha = 0.5f))
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -75,7 +76,8 @@ fun FullTransportControls(
     onSkipPrevious: () -> Unit,
     onToggleShuffle: () -> Unit,
     onCycleRepeat: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val dim = MaterialTheme.colorScheme.onSurfaceVariant
@@ -85,17 +87,18 @@ fun FullTransportControls(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        GlyphButton(Glyph.SHUFFLE, onToggleShuffle, if (shuffleEnabled) accent else dim, 56.dp, 40.dp, 11)
-        GlyphButton(Glyph.PREVIOUS, onSkipPrevious, accent, 56.dp, 56.dp, 16)
-        GlyphButton(if (isPlaying) Glyph.PAUSE else Glyph.PLAY, onTogglePlayPause, accent, 68.dp, 68.dp, 19)
-        GlyphButton(Glyph.NEXT, onSkipNext, accent, 56.dp, 56.dp, 16)
+        GlyphButton(Glyph.SHUFFLE, onToggleShuffle, if (shuffleEnabled) accent else dim, 56.dp, 40.dp, 11, enabled = enabled)
+        GlyphButton(Glyph.PREVIOUS, onSkipPrevious, accent, 56.dp, 56.dp, 16, enabled = enabled)
+        GlyphButton(if (isPlaying) Glyph.PAUSE else Glyph.PLAY, onTogglePlayPause, accent, 68.dp, 68.dp, 19, enabled = enabled)
+        GlyphButton(Glyph.NEXT, onSkipNext, accent, 56.dp, 56.dp, 16, enabled = enabled)
         GlyphButton(
             if (repeatMode == Player.REPEAT_MODE_ONE) Glyph.REPEAT_ONE else Glyph.REPEAT_OFF,
             onCycleRepeat,
             if (repeatMode != Player.REPEAT_MODE_OFF) accent else dim,
             56.dp,
             40.dp,
-            10
+            10,
+            enabled = enabled
         )
     }
 }

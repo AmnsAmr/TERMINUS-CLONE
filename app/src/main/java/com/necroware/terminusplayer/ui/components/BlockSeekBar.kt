@@ -31,7 +31,8 @@ fun BlockSeekBar(
     durationMs: Long,
     onSeek: (Long) -> Unit,
     modifier: Modifier = Modifier,
-    segmentCount: Int = 44
+    segmentCount: Int = 44,
+    enabled: Boolean = true
 ) {
     val safeDuration = durationMs.coerceAtLeast(1L)
     val filledSegments = if (durationMs <= 0L) {
@@ -52,12 +53,13 @@ fun BlockSeekBar(
             .fillMaxWidth()
             .height(10.dp)
             .onSizeChanged { barWidthPx = it.width.toFloat().coerceAtLeast(1f) }
-            .pointerInput(safeDuration) {
-                detectTapGestures { offset -> seekToOffsetX(offset.x) }
-            }
-            .pointerInput(safeDuration) {
-                detectDragGestures { change, _ -> seekToOffsetX(change.position.x) }
-            },
+            .then(if (enabled) Modifier
+                .pointerInput(safeDuration) {
+                    detectTapGestures { offset -> seekToOffsetX(offset.x) }
+                }
+                .pointerInput(safeDuration) {
+                    detectDragGestures { change, _ -> seekToOffsetX(change.position.x) }
+                } else Modifier),
         horizontalArrangement = Arrangement.spacedBy(1.5.dp)
     ) {
         repeat(segmentCount) { index ->
