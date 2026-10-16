@@ -28,6 +28,7 @@ import com.necroware.terminusplayer.data.model.Artist
 import com.necroware.terminusplayer.data.model.Playlist
 import com.necroware.terminusplayer.data.model.PlaylistAccountInfo
 import com.necroware.terminusplayer.data.model.GenreMix
+import com.necroware.terminusplayer.data.model.collapseExplicitlyLinkedSongs
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.model.PlaylistDownloadPlan
 import com.necroware.terminusplayer.data.model.planPlaylistSync
@@ -101,6 +102,7 @@ class MusicRepository @Inject constructor(
     enum class AddSongResult { ADDED, ALREADY_PRESENT, LOCAL_ONLY_UNSUPPORTED, NOT_FOUND }
 
     private val syncMutex = Mutex()
+    private val likeSyncMutex = Mutex()
     private val _playlistAccountInfo = MutableStateFlow(PlaylistAccountInfo())
     val playlistAccountInfo = _playlistAccountInfo.asStateFlow()
 
@@ -231,9 +233,7 @@ class MusicRepository @Inject constructor(
     fun observeAllSongs(): Flow<List<Song>> =
         combine(songDao.observeAllSongs(), likedSongDao.observeLikedIds()) { songs, likedIds ->
             val likedSet = likedIds.toHashSet()
-            songs.map { it.toSong(isLiked = it.remoteId in likedSet) }
-                .groupBy { "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}" }
-                .map { (_, group) -> group.find { it.providerId == "local" } ?: group.first() }
+            collapseExplicitlyLinkedSongs(songs).map { it.toSong(isLiked = it.remoteId in likedSet) }
         }.flowOn(Dispatchers.Default)
 
     fun observeSongCount(): Flow<Int> = songDao.observeSongCount()
@@ -277,11 +277,15 @@ class MusicRepository @Inject constructor(
         songDao.searchSongs(query).map { entities -> entities.map { it.toSong() } }
             .flowOn(Dispatchers.Default)
 
-    data class LikeChange(val isLiked: Boolean, val syncQueued: Boolean)
+    data class LikeChange(
+        val isLiked: Boolean,
+        val syncQueued: Boolean,
+        val serverBacked: Boolean
+    )
 
     suspend fun toggleLike(songId: String): LikeChange {
         val song = songDao.getById(songId)
-        if (song == null) return LikeChange(isLiked = false, syncQueued = false)
+        if (song == null) return LikeChange(isLiked = false, syncQueued = false, serverBacked = false)
         val now = System.currentTimeMillis()
         val remoteId = when {
             song.providerId == "navidrome" -> song.providerRemoteId
@@ -316,8 +320,22 @@ class MusicRepository @Inject constructor(
                 newLikedState to true
             }
         }
-        if (shouldQueueSync) enqueueLikeSync(songId)
-        return LikeChange(isLiked = newLikedState, syncQueued = shouldQueueSync)
+        if (!shouldQueueSync) {
+            return LikeChange(isLiked = newLikedState, syncQueued = false, serverBacked = false)
+        }
+
+        // Try the REST operation now so a connected user's like is reflected on
+        // Navidrome immediately. The Room intent is already durable; if this
+        // request fails, WorkManager keeps retrying it in the background.
+        return try {
+            syncPendingLike(songId)
+            LikeChange(isLiked = newLikedState, syncQueued = false, serverBacked = true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            enqueueLikeSync(songId)
+            LikeChange(isLiked = newLikedState, syncQueued = true, serverBacked = true)
+        }
     }
 
     private fun enqueueLikeSync(songId: String) {
@@ -363,7 +381,7 @@ class MusicRepository @Inject constructor(
         provider.toggleLike(providerRemoteId, isLiked)
     }
 
-    suspend fun syncPendingLike(songId: String) {
+    suspend fun syncPendingLike(songId: String) = likeSyncMutex.withLock {
         val pending = likedSongDao.getLike(songId) ?: return
         if (!pending.syncPending) return
         val remoteId = pending.remoteSongId ?: throw IOException("Pending Navidrome favorite has no server song ID")

@@ -295,7 +295,7 @@ fun NowPlayingScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         TerminalActionText(
                             text = "[ + PLAYLIST ]",
-                            style = MaterialTheme.typography.labelSmall,
+                            style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.clickable(enabled = selectedSongId != null) {
                                 viewModel.clearPlaylistActionMessage()
