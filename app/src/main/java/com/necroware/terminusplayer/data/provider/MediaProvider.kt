@@ -19,6 +19,7 @@ interface MediaProvider {
     suspend fun toggleLike(remoteId: String, isLiked: Boolean)
 
     suspend fun getLyrics(remoteId: String): SyncedLyrics?
+    suspend fun ping(): Long? = null
 }
 
 class ProviderSyncException(

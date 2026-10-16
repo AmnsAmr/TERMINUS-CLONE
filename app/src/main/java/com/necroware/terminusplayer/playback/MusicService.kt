@@ -118,6 +118,9 @@ class MusicService : MediaSessionService() {
                 equalizerController.attachToSession(audioSessionId)
                 equalizerController.setEnabled(equalizerSettings.enabled)
                 equalizerController.applyBandGains(equalizerSettings.bandGainsDb)
+                mediaSession?.setSessionExtras(android.os.Bundle().apply {
+                    putInt("audio_session_id", audioSessionId)
+                })
             }
         })
 
@@ -129,14 +132,33 @@ class MusicService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val initialExtras = android.os.Bundle().apply {
+            putInt("audio_session_id", player.audioSessionId)
+        }
         mediaSession = MediaSession.Builder(this, player)
             .setSessionActivity(pendingIntent)
+            .setExtras(initialExtras)
             .build()
 
         serviceScope.launch {
-            var lastExcludedFolders: Set<String>? = null
             var lastMaxBitRate: Int? = null
-            var hasObservedPreferences = false
+            var hasObservedConfig = false
+            preferencesRepository.serverConnectionConfig.collect { config ->
+                if (!config.isLoaded) return@collect
+                if (hasObservedConfig && lastMaxBitRate != config.maxBitRate) {
+                    val selectedBitRate = config.maxBitRate
+                    qualityRefreshJob?.cancel()
+                    qualityRefreshJob = serviceScope.launch {
+                        refreshQueueForStreamQuality(selectedBitRate)
+                    }
+                }
+                lastMaxBitRate = config.maxBitRate
+                hasObservedConfig = true
+            }
+        }
+
+        serviceScope.launch {
+            var lastExcludedFolders: Set<String>? = null
             preferencesRepository.preferences.collect { prefs ->
                 equalizerSettings = prefs.equalizer
                 equalizerController.setEnabled(prefs.equalizer.enabled)
@@ -147,19 +169,6 @@ class MusicService : MediaSessionService() {
                     val excludedFolders = prefs.excludedFolders
                     mainScope.launch { removeExcludedLocalItems(excludedFolders) }
                 }
-
-                if (hasObservedPreferences && lastMaxBitRate != prefs.maxBitRate) {
-                    val selectedBitRate = prefs.maxBitRate
-                    qualityRefreshJob?.cancel()
-                    qualityRefreshJob = serviceScope.launch {
-                        preferencesRepository.serverConnectionConfig.first {
-                            it.isLoaded && it.maxBitRate == selectedBitRate
-                        }
-                        refreshQueueForStreamQuality(selectedBitRate)
-                    }
-                }
-                lastMaxBitRate = prefs.maxBitRate
-                hasObservedPreferences = true
 
                 val crossfadeChanged = crossfadeSettings != prefs.crossfade
                 crossfadeSettings = prefs.crossfade

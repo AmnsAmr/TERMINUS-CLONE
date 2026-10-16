@@ -64,6 +64,8 @@ data class NowPlayingState(
     val isLossless: Boolean = false,
     val bitDepthLabel: String = "—",
     val bitrateKbps: Int = -1,
+    val channelCount: Int = 2,
+    val audioSessionId: Int = -1,
     val sizeBytes: Long = 0L,
     val isConnected: Boolean = false,
     val connectionError: String? = null
@@ -100,6 +102,13 @@ class PlaybackController @Inject constructor(
                     isPlaying = false,
                     connectionError = "Playback service disconnected"
                 )
+            }
+        }
+
+        override fun onExtrasChanged(controller: MediaController, extras: android.os.Bundle) {
+            val sessionId = extras.getInt("audio_session_id", -1)
+            if (sessionId > 0) {
+                _state.value = _state.value.copy(audioSessionId = sessionId)
             }
         }
     }
@@ -147,7 +156,8 @@ class PlaybackController @Inject constructor(
                 sampleRateLabel = format?.toSampleRateLabel() ?: "—",
                 isLossless = format?.isLosslessFormat() ?: false,
                 bitDepthLabel = format?.toBitDepthLabel() ?: "—",
-                bitrateKbps = format?.bitrateKbpsOrNegative() ?: -1
+                bitrateKbps = format?.bitrateKbpsOrNegative() ?: -1,
+                channelCount = format?.channelCount ?: 2
             )
         }
     }
@@ -170,7 +180,12 @@ class PlaybackController @Inject constructor(
                 connectionFuture = null
                 controller = connectedController
                 connectedController.addListener(listener)
-                _state.value = _state.value.copy(isConnected = true, connectionError = null)
+                val initialSessionId = connectedController.sessionExtras.getInt("audio_session_id", -1)
+                _state.value = _state.value.copy(
+                    isConnected = true,
+                    connectionError = null,
+                    audioSessionId = if (initialSessionId > 0) initialSessionId else _state.value.audioSessionId
+                )
                 updateFromController()
                 readyCallbacks.toList().also { readyCallbacks.clear() }.forEach { it() }
             } catch (e: InterruptedException) {
@@ -472,6 +487,7 @@ class PlaybackController @Inject constructor(
         player.currentPosition + (player.currentMediaItem?.mediaMetadata?.streamOffsetMsOrZero() ?: 0L)
     } ?: 0L
     fun durationMs(): Long = controller?.duration?.coerceAtLeast(0L) ?: 0L
+    fun bufferedPositionMs(): Long = controller?.bufferedPosition ?: 0L
 
     @UnstableApi
     private fun updateFromController() {

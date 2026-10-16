@@ -34,6 +34,7 @@ import com.necroware.terminusplayer.data.repository.TopCategoryItem
 import com.necroware.terminusplayer.ui.components.BarDatum
 import com.necroware.terminusplayer.ui.components.BlockyBarChart
 import com.necroware.terminusplayer.ui.components.TerminalBorder
+import com.necroware.terminusplayer.ui.components.TerminalHeader
 import com.necroware.terminusplayer.ui.components.TerminalState
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -59,10 +60,8 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         item {
-            Text(
-                text = "> STATS_",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground,
+            TerminalHeader(
+                title = "STATS",
                 modifier = Modifier.padding(top = 20.dp)
             )
         }

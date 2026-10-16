@@ -40,6 +40,36 @@ enum class PlaybackArtStyle {
 
 enum class MotionPreference { FULL, MEDIUM, OFF, SYSTEM }
 
+enum class PerformanceMode { AUTO, FULL, BALANCED, BATTERY_SAVER }
+
+/** Combines the user's animation choice with the app's current power budget. */
+fun effectiveMotionPreference(
+    motionPreference: MotionPreference,
+    performanceMode: PerformanceMode,
+    systemPowerSaverEnabled: Boolean
+): MotionPreference {
+    val activeMode = when (performanceMode) {
+        PerformanceMode.AUTO -> if (systemPowerSaverEnabled) PerformanceMode.BATTERY_SAVER else PerformanceMode.FULL
+        else -> performanceMode
+    }
+
+    return when (activeMode) {
+        PerformanceMode.AUTO, PerformanceMode.FULL -> motionPreference
+        PerformanceMode.BALANCED -> when (motionPreference) {
+            MotionPreference.FULL -> MotionPreference.MEDIUM
+            else -> motionPreference
+        }
+        PerformanceMode.BATTERY_SAVER -> MotionPreference.OFF
+    }
+}
+
+fun shouldDeferOptionalWork(mode: PerformanceMode, systemPowerSaverEnabled: Boolean): Boolean =
+    when (mode) {
+        PerformanceMode.AUTO -> systemPowerSaverEnabled
+        PerformanceMode.BATTERY_SAVER -> true
+        PerformanceMode.FULL, PerformanceMode.BALANCED -> false
+    }
+
 internal fun parseMotionPreference(value: String?): MotionPreference =
     when (value) {
         // REDUCED was the previous name for the medium motion setting.
@@ -66,6 +96,22 @@ data class CrossfadeSettings(
     val durationMs: Int = 4000
 )
 
+enum class TerminalCursorStyle(val glyph: String) {
+    UNDERSCORE("_"),
+    BLOCK("█"),
+    VERTICAL("|")
+}
+
+enum class TerminalCursorBlink(val intervalMs: Long?) {
+    FAST(500L),
+    SLOW(1000L),
+    SOLID(null)
+}
+
+enum class TerminalHaptics { CLICKY, TACTILE, OFF }
+
+enum class HudTelemetryMode { STANDARD, EXPANDED }
+
 data class UserPreferences(
     val themeId: ThemePresetId = ThemePresetId.TERMINAL,
     val themeColorOverrides: Map<ThemeColorRole, String> = emptyMap(),
@@ -75,6 +121,15 @@ data class UserPreferences(
     val preferHardwareDecoder: Boolean = true,
     val playbackArtStyle: PlaybackArtStyle = PlaybackArtStyle.STANDARD,
     val motionPreference: MotionPreference = MotionPreference.FULL,
+    val performanceMode: PerformanceMode = PerformanceMode.FULL,
+    val scanlineIntensity: Float = 0.0f,
+    val phosphorAfterglow: Boolean = false,
+    val cursorStyle: TerminalCursorStyle = TerminalCursorStyle.UNDERSCORE,
+    val cursorBlinkCadence: TerminalCursorBlink = TerminalCursorBlink.SLOW,
+    val adaptiveArtAccent: Boolean = false,
+    val terminalHaptics: TerminalHaptics = TerminalHaptics.TACTILE,
+    val smartBitrateEnabled: Boolean = false,
+    val hudTelemetryMode: HudTelemetryMode = HudTelemetryMode.STANDARD,
     val lastPlayedSongId: String? = null,
     val lastPlayedPositionMs: Long = 0L,
     val serverUrl: String = "",

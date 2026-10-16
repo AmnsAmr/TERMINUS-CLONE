@@ -1929,6 +1929,8 @@ class MusicRepository @Inject constructor(
         }
         return uri.lastPathSegment
     }
+
+    suspend fun pingServer(): Long? = providers["navidrome"]?.ping()
 }
 
 fun SongEntity.toSong(isLiked: Boolean = false): Song = Song(

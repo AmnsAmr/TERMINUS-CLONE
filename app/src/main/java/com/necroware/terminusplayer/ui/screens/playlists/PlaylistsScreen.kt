@@ -44,6 +44,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.data.model.Playlist
 import com.necroware.terminusplayer.ui.components.TerminalBorder
+import com.necroware.terminusplayer.ui.components.TerminalHeader
 import com.necroware.terminusplayer.ui.components.TerminalState
 import com.necroware.terminusplayer.ui.components.FastScrollRail
 import com.necroware.terminusplayer.ui.components.LibrarySortControls
@@ -108,7 +109,7 @@ fun PlaylistsScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text("> PLAYLISTS_", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
+                    TerminalHeader(title = "PLAYLISTS")
                     Text("YOUR MUSIC, READY TO PLAY", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Text(

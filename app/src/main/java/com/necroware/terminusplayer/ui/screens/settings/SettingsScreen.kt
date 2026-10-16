@@ -51,10 +51,18 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.data.prefs.SortDirection
 import com.necroware.terminusplayer.data.prefs.SortField
 import com.necroware.terminusplayer.data.prefs.MotionPreference
+import com.necroware.terminusplayer.data.prefs.PerformanceMode
+import com.necroware.terminusplayer.data.prefs.TerminalCursorStyle
+import com.necroware.terminusplayer.data.prefs.TerminalCursorBlink
+import com.necroware.terminusplayer.data.prefs.TerminalHaptics
+import com.necroware.terminusplayer.data.prefs.HudTelemetryMode
 import com.necroware.terminusplayer.data.prefs.ThemePresetId
 import com.necroware.terminusplayer.data.prefs.ThemeColorRole
 import com.necroware.terminusplayer.ui.components.TerminalBorder
+import com.necroware.terminusplayer.ui.components.TerminalHeader
 import com.necroware.terminusplayer.ui.components.TerminalSlider
+import com.necroware.terminusplayer.ui.components.rememberTerminalHaptics
+import kotlin.math.roundToInt
 import com.necroware.terminusplayer.ui.theme.ThemePresets
 import com.necroware.terminusplayer.ui.theme.color
 import com.necroware.terminusplayer.ui.theme.themePresetById
@@ -69,11 +77,14 @@ fun SettingsScreen(
     onNavigateToManageSources: () -> Unit = {}
 ) {
     val prefs by viewModel.preferences.collectAsStateWithLifecycle()
+    val effectiveMotionPreference by viewModel.effectiveMotionPreference.collectAsStateWithLifecycle()
     val importStatus by viewModel.importStatus.collectAsStateWithLifecycle()
     val downloadFolderError by viewModel.downloadFolderError.collectAsStateWithLifecycle()
 
+    val haptic = rememberTerminalHaptics(prefs.terminalHaptics)
     var expandedSections by remember { mutableStateOf(setOf<String>()) }
     val toggleSection: (String) -> Unit = { section ->
+        haptic(false)
         expandedSections = if (expandedSections.contains(section)) {
             expandedSections - section
         } else {
@@ -115,11 +126,26 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         item {
-            Text(
-                text = "> SETTINGS_",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground
+            TerminalHeader(
+                title = "SETTINGS",
+                cursorStyle = prefs.cursorStyle,
+                cursorBlink = prefs.cursorBlinkCadence,
+                motionPreference = effectiveMotionPreference
             )
+        }
+
+        item {
+            SettingsDropdown(
+                label = "PERFORMANCE",
+                expanded = expandedSections.contains("PERFORMANCE"),
+                onToggle = { toggleSection("PERFORMANCE") },
+                motionPreference = effectiveMotionPreference
+            ) {
+                PerformanceModeSection(
+                    selected = prefs.performanceMode,
+                    onSelect = viewModel::setPerformanceMode
+                )
+            }
         }
 
         item {
@@ -127,7 +153,7 @@ fun SettingsScreen(
                 label = "THEME",
                 expanded = expandedSections.contains("THEME"),
                 onToggle = { toggleSection("THEME") },
-                motionPreference = prefs.motionPreference
+                motionPreference = effectiveMotionPreference
             ) {
                 ThemeGrid(selected = prefs.themeId, onSelect = viewModel::setTheme)
             }
@@ -138,7 +164,7 @@ fun SettingsScreen(
                 label = "CUSTOM COLORS",
                 expanded = expandedSections.contains("CUSTOM COLORS"),
                 onToggle = { toggleSection("CUSTOM COLORS") },
-                motionPreference = prefs.motionPreference
+                motionPreference = effectiveMotionPreference
             ) {
                 ThemeColorEditor(
                     themeId = prefs.themeId,
@@ -156,7 +182,7 @@ fun SettingsScreen(
                 label = "ANIMATIONS",
                 expanded = expandedSections.contains("ANIMATIONS"),
                 onToggle = { toggleSection("ANIMATIONS") },
-                motionPreference = prefs.motionPreference
+                motionPreference = effectiveMotionPreference
             ) {
                 MotionPreferenceSection(
                     selected = prefs.motionPreference,
@@ -167,10 +193,47 @@ fun SettingsScreen(
 
         item {
             SettingsDropdown(
+                label = "CRT & AESTHETICS",
+                expanded = expandedSections.contains("CRT & AESTHETICS"),
+                onToggle = { toggleSection("CRT & AESTHETICS") },
+                motionPreference = effectiveMotionPreference
+            ) {
+                CrtAestheticsSection(
+                    scanlineIntensity = prefs.scanlineIntensity,
+                    onIntensityChange = viewModel::setScanlineIntensity,
+                    phosphorAfterglow = prefs.phosphorAfterglow,
+                    onAfterglowChange = viewModel::setPhosphorAfterglow,
+                    cursorStyle = prefs.cursorStyle,
+                    onCursorStyleChange = viewModel::setCursorStyle,
+                    cursorBlink = prefs.cursorBlinkCadence,
+                    onCursorBlinkChange = viewModel::setCursorBlinkCadence,
+                    adaptiveArtAccent = prefs.adaptiveArtAccent,
+                    onAdaptiveArtAccentChange = viewModel::setAdaptiveArtAccent,
+                    motionPreference = effectiveMotionPreference
+                )
+            }
+        }
+
+        item {
+            SettingsDropdown(
+                label = "HAPTICS",
+                expanded = expandedSections.contains("HAPTICS"),
+                onToggle = { toggleSection("HAPTICS") },
+                motionPreference = effectiveMotionPreference
+            ) {
+                TerminalHapticsSection(
+                    selected = prefs.terminalHaptics,
+                    onSelect = viewModel::setTerminalHaptics
+                )
+            }
+        }
+
+        item {
+            SettingsDropdown(
                 label = "SERVER SETTINGS",
                 expanded = expandedSections.contains("SERVER SETTINGS"),
                 onToggle = { toggleSection("SERVER SETTINGS") },
-                motionPreference = prefs.motionPreference
+                motionPreference = effectiveMotionPreference
             ) {
                 Column {
                     ServerSettingsSection(
@@ -205,7 +268,7 @@ fun SettingsScreen(
                 label = "EQUALIZER",
                 expanded = expandedSections.contains("EQUALIZER"),
                 onToggle = { toggleSection("EQUALIZER") },
-                motionPreference = prefs.motionPreference
+                motionPreference = effectiveMotionPreference
             ) {
                 EqualizerSection(
                     enabled = prefs.equalizer.enabled,
@@ -222,7 +285,7 @@ fun SettingsScreen(
                 label = "CROSSFADE",
                 expanded = expandedSections.contains("CROSSFADE"),
                 onToggle = { toggleSection("CROSSFADE") },
-                motionPreference = prefs.motionPreference
+                motionPreference = effectiveMotionPreference
             ) {
                 CrossfadeSection(
                     enabled = prefs.crossfade.enabled,
@@ -238,7 +301,7 @@ fun SettingsScreen(
                 label = "CODEC",
                 expanded = expandedSections.contains("CODEC"),
                 onToggle = { toggleSection("CODEC") },
-                motionPreference = prefs.motionPreference
+                motionPreference = effectiveMotionPreference
             ) {
                 ToggleRow(
                     label = "Prefer hardware decoder",
@@ -254,11 +317,33 @@ fun SettingsScreen(
                 label = "STREAMING QUALITY",
                 expanded = expandedSections.contains("STREAMING QUALITY"),
                 onToggle = { toggleSection("STREAMING QUALITY") },
-                motionPreference = prefs.motionPreference
+                motionPreference = effectiveMotionPreference
             ) {
-                QualitySection(
-                    selectedBitRate = prefs.maxBitRate,
-                    onSelect = viewModel::setMaxBitRate
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ToggleRow(
+                        label = "Smart Bitrate",
+                        sublabel = "Auto-throttle to 128k on mobile data; unthrottled on Wi-Fi",
+                        checked = prefs.smartBitrateEnabled,
+                        onCheckedChange = viewModel::setSmartBitrateEnabled
+                    )
+                    QualitySection(
+                        selectedBitRate = prefs.maxBitRate,
+                        onSelect = viewModel::setMaxBitRate
+                    )
+                }
+            }
+        }
+
+        item {
+            SettingsDropdown(
+                label = "HUD TELEMETRY",
+                expanded = expandedSections.contains("HUD TELEMETRY"),
+                onToggle = { toggleSection("HUD TELEMETRY") },
+                motionPreference = effectiveMotionPreference
+            ) {
+                HudTelemetrySection(
+                    selected = prefs.hudTelemetryMode,
+                    onSelect = viewModel::setHudTelemetryMode
                 )
             }
         }
@@ -268,7 +353,7 @@ fun SettingsScreen(
                 label = "LIBRARY SORT",
                 expanded = expandedSections.contains("LIBRARY SORT"),
                 onToggle = { toggleSection("LIBRARY SORT") },
-                motionPreference = prefs.motionPreference
+                motionPreference = effectiveMotionPreference
             ) {
                 SortSection(
                     field = prefs.librarySortOrder.field,
@@ -284,7 +369,7 @@ fun SettingsScreen(
                 label = "IMPORT",
                 expanded = expandedSections.contains("IMPORT"),
                 onToggle = { toggleSection("IMPORT") },
-                motionPreference = prefs.motionPreference
+                motionPreference = effectiveMotionPreference
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     ActionRow(
@@ -638,6 +723,48 @@ private fun MotionPreferenceSection(
 }
 
 @Composable
+private fun PerformanceModeSection(
+    selected: PerformanceMode,
+    onSelect: (PerformanceMode) -> Unit
+) {
+    TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            Text(
+                "PERFORMANCE CAPS OPTIONAL VISUAL MOTION. ANIMATIONS SETTING STILL APPLIES.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            PerformanceMode.entries.forEach { mode ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(mode) }
+                        .padding(vertical = 8.dp)
+                ) {
+                    Text(
+                        text = (if (mode == selected) "> " else "  ") + mode.name.replace('_', ' '),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (mode == selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = when (mode) {
+                            PerformanceMode.AUTO -> "Follow Android Battery Saver; otherwise use your animation setting"
+                            PerformanceMode.FULL -> "Use your animation setting without a performance cap"
+                            PerformanceMode.BALANCED -> "Limit Full animations to the Reduced level"
+                            PerformanceMode.BATTERY_SAVER -> "Turn off optional animations while preserving playback controls"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun QualitySection(
     selectedBitRate: Int?,
     onSelect: (Int?) -> Unit
@@ -827,6 +954,194 @@ private fun SettingsDropdown(
             AnimatedVisibility(visible = expanded) {
                 Box(modifier = Modifier.padding(top = 8.dp)) {
                     content()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CrtAestheticsSection(
+    scanlineIntensity: Float,
+    onIntensityChange: (Float) -> Unit,
+    phosphorAfterglow: Boolean,
+    onAfterglowChange: (Boolean) -> Unit,
+    cursorStyle: TerminalCursorStyle,
+    onCursorStyleChange: (TerminalCursorStyle) -> Unit,
+    cursorBlink: TerminalCursorBlink,
+    onCursorBlinkChange: (TerminalCursorBlink) -> Unit,
+    adaptiveArtAccent: Boolean,
+    onAdaptiveArtAccentChange: (Boolean) -> Unit,
+    motionPreference: MotionPreference
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        "SCANLINE INTENSITY",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "${(scanlineIntensity * 100).roundToInt()}%",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                TerminalSlider(
+                    value = scanlineIntensity,
+                    onValueChange = onIntensityChange,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+        }
+
+        ToggleRow(
+            label = "Phosphor afterglow",
+            sublabel = "Simulate CRT phosphor persistence and ambient glow",
+            checked = phosphorAfterglow,
+            onCheckedChange = onAfterglowChange
+        )
+
+        ToggleRow(
+            label = "Adaptive neon art accent",
+            sublabel = "Extract cyberpunk neon accent from current album art",
+            checked = adaptiveArtAccent,
+            onCheckedChange = onAdaptiveArtAccentChange
+        )
+
+        TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+            Column {
+                Text(
+                    "CURSOR STYLE",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                TerminalCursorStyle.entries.forEach { style ->
+                    val isSelected = style == cursorStyle
+                    Text(
+                        text = (if (isSelected) "> " else "  ") + "${style.name} [ ${style.glyph} ]",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onCursorStyleChange(style) }
+                            .padding(vertical = 6.dp)
+                    )
+                }
+            }
+        }
+
+        TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+            Column {
+                Text(
+                    "CURSOR BLINK CADENCE",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                TerminalCursorBlink.entries.forEach { blink ->
+                    val isSelected = blink == cursorBlink
+                    val desc = when (blink) {
+                        TerminalCursorBlink.FAST -> "FAST (500ms)"
+                        TerminalCursorBlink.SLOW -> "SLOW (1000ms)"
+                        TerminalCursorBlink.SOLID -> "SOLID (no blink)"
+                    }
+                    Text(
+                        text = (if (isSelected) "> " else "  ") + desc,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onCursorBlinkChange(blink) }
+                            .padding(vertical = 6.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TerminalHapticsSection(
+    selected: TerminalHaptics,
+    onSelect: (TerminalHaptics) -> Unit
+) {
+    TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            Text(
+                "MECHANICAL & HAPTIC PROFILES",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            TerminalHaptics.entries.forEach { haptics ->
+                val isSelected = haptics == selected
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(haptics) }
+                        .padding(vertical = 6.dp)
+                ) {
+                    Text(
+                        text = (if (isSelected) "> " else "  ") + haptics.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = when (haptics) {
+                            TerminalHaptics.CLICKY -> "Mechanical Cherry MX Blue click haptic on button press"
+                            TerminalHaptics.TACTILE -> "Subtle bump on slider tick / track skip"
+                            TerminalHaptics.OFF -> "No haptic feedback"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HudTelemetrySection(
+    selected: HudTelemetryMode,
+    onSelect: (HudTelemetryMode) -> Unit
+) {
+    TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            Text(
+                "NOW PLAYING HUD METRIC DENSITY",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 6.dp)
+            )
+            HudTelemetryMode.entries.forEach { mode ->
+                val isSelected = mode == selected
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(mode) }
+                        .padding(vertical = 6.dp)
+                ) {
+                    Text(
+                        text = (if (isSelected) "> " else "  ") + mode.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = when (mode) {
+                            HudTelemetryMode.STANDARD -> "Standard audio format, volume, and CPU readout"
+                            HudTelemetryMode.EXPANDED -> "Live audio decoder, dynamic buffer health, audio session ID, and server ping"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }
