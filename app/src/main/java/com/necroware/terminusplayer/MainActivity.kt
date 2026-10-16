@@ -66,14 +66,18 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val activityViewModel: MainActivityViewModel = hiltViewModel()
-            val themePreferences by activityViewModel.preferences.collectAsStateWithLifecycle()
+            val themeState by activityViewModel.themeState.collectAsStateWithLifecycle()
             val motionPreference by activityViewModel.motionPreference.collectAsStateWithLifecycle()
 
-            TerminusTheme(preset = themePresetById(themePreferences.themeId).withOverrides(themePreferences.themeColorOverrides)) {
-                val cursorConfig = remember(themePreferences.cursorStyle, themePreferences.cursorBlinkCadence, motionPreference) {
+            val themePreset = remember(themeState.themeId, themeState.colorOverrides) {
+                themePresetById(themeState.themeId).withOverrides(themeState.colorOverrides)
+            }
+
+            TerminusTheme(preset = themePreset) {
+                val cursorConfig = remember(themeState.cursorStyle, themeState.cursorBlinkCadence, motionPreference) {
                     TerminalCursorConfig(
-                        style = themePreferences.cursorStyle,
-                        blinkCadence = themePreferences.cursorBlinkCadence,
+                        style = themeState.cursorStyle,
+                        blinkCadence = themeState.cursorBlinkCadence,
                         motionPreference = motionPreference
                     )
                 }

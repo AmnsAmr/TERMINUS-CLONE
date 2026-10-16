@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -123,8 +125,13 @@ class SettingsViewModel @Inject constructor(
         preferencesRepository.setPreferHardwareDecoder(enabled)
     }
 
-    fun setScanlineIntensity(intensity: Float) = viewModelScope.launch {
-        preferencesRepository.setScanlineIntensity(intensity)
+    private var scanlineIntensityJob: Job? = null
+    fun setScanlineIntensity(intensity: Float) {
+        scanlineIntensityJob?.cancel()
+        scanlineIntensityJob = viewModelScope.launch {
+            delay(32L)
+            preferencesRepository.setScanlineIntensity(intensity)
+        }
     }
 
     fun setPhosphorAfterglow(enabled: Boolean) = viewModelScope.launch {

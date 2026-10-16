@@ -9,12 +9,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import coil.ImageLoader
+import coil.imageLoader
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-private val accentCache = LruCache<String, Color>(32)
+private val accentCache = LruCache<String, Color>(64)
 
 /**
  * Extracts a vibrant neon terminal accent from the active album cover art.
@@ -36,8 +36,9 @@ fun rememberAdaptiveAccent(
         val extracted = withContext(Dispatchers.IO) {
             extractNeonAccent(context, artworkUri)
         }
+        val resolved = extracted ?: defaultAccent
+        accentCache.put(artworkUri, resolved)
         if (extracted != null) {
-            accentCache.put(artworkUri, extracted)
             value = extracted
         }
     }
@@ -46,14 +47,13 @@ fun rememberAdaptiveAccent(
 }
 
 private suspend fun extractNeonAccent(context: Context, uri: String): Color? = runCatching {
-    val loader = ImageLoader(context)
     val request = ImageRequest.Builder(context)
         .data(uri)
-        .size(64, 64)
+        .size(32, 32)
         .allowHardware(false)
         .build()
 
-    val result = loader.execute(request).drawable as? BitmapDrawable ?: return null
+    val result = context.imageLoader.execute(request).drawable as? BitmapDrawable ?: return null
     val bitmap = result.bitmap ?: return null
 
     withContext(Dispatchers.Default) {
@@ -75,22 +75,27 @@ private fun findMostSaturatedColor(bitmap: Bitmap): Color? {
         val r = android.graphics.Color.red(pixel)
         val g = android.graphics.Color.green(pixel)
         val b = android.graphics.Color.blue(pixel)
-        android.graphics.Color.RGBToHSV(r, g, b, hsv)
 
+        // Fast reject neutral or low-contrast pixels without expensive RGBToHSV conversion
+        val maxVal = maxOf(r, maxOf(g, b))
+        val minVal = minOf(r, minOf(g, b))
+        if (maxVal - minVal < 36 || maxVal < 60) continue
+
+        android.graphics.Color.RGBToHSV(r, g, b, hsv)
         val saturation = hsv[1]
         val value = hsv[2]
 
-        // Reject almost black, almost white, or very desaturated pixels
+        // Reject dim or washed out colors
         if (value > 0.35f && saturation > 0.40f) {
             if (saturation > maxSaturation) {
                 maxSaturation = saturation
-                // Boost brightness slightly so the neon pop glows cleanly against the pitch black terminal
+                // Boost brightness slightly so neon pop glows cleanly against pitch black terminal
                 hsv[2] = maxOf(value, 0.85f)
-                val neonInt = android.graphics.Color.HSVToColor(hsv)
-                bestColor = Color(neonInt)
+                bestColor = Color(android.graphics.Color.HSVToColor(hsv))
             }
         }
     }
 
     return bestColor
 }
+

@@ -3,6 +3,7 @@ package com.necroware.terminusplayer.ui.theme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
@@ -54,13 +55,16 @@ fun TerminusTheme(
     preset: ThemePreset = themePresetById(ThemePresetId.TERMINAL),
     content: @Composable () -> Unit
 ) {
-    val palette = AppPalette(
-        preset.background, preset.surface, preset.surfaceElevated, preset.accent, preset.secondaryAccent,
-        preset.textPrimary, preset.textSecondary, preset.textMuted, preset.border, preset.homeBackground,
-        preset.playerBackground, preset.navigationBackground, preset.playlistSurface, preset.visualizerPrimary,
-        preset.visualizerSecondary, preset.secondaryAccent, preset.accent, RedAccent
-    )
+    val palette = remember(preset) {
+        AppPalette(
+            preset.background, preset.surface, preset.surfaceElevated, preset.accent, preset.secondaryAccent,
+            preset.textPrimary, preset.textSecondary, preset.textMuted, preset.border, preset.homeBackground,
+            preset.playerBackground, preset.navigationBackground, preset.playlistSurface, preset.visualizerPrimary,
+            preset.visualizerSecondary, preset.secondaryAccent, preset.accent, RedAccent
+        )
+    }
+    val colorScheme = remember(preset) { terminalColorScheme(preset) }
     CompositionLocalProvider(LocalAppPalette provides palette) {
-        MaterialTheme(colorScheme = terminalColorScheme(preset), typography = TerminusTypography, content = content)
+        MaterialTheme(colorScheme = colorScheme, typography = TerminusTypography, content = content)
     }
 }

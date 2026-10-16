@@ -227,10 +227,13 @@ fun TerminusNavGraph(
         bottomBar = {
             if (currentRoute !in hideChromeRoutes) {
                 Column {
-                    val miniColorScheme = MaterialTheme.colorScheme.copy(
-                        primary = miniAccent,
-                        outline = miniAccent.copy(alpha = 0.5f)
-                    )
+                    val currentScheme = MaterialTheme.colorScheme
+                    val miniColorScheme = remember(currentScheme, miniAccent) {
+                        currentScheme.copy(
+                            primary = miniAccent,
+                            outline = miniAccent.copy(alpha = 0.5f)
+                        )
+                    }
                     MaterialTheme(colorScheme = miniColorScheme) {
                         MiniPlayerBar(
                             nowPlaying = nowPlaying,

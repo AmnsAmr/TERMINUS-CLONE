@@ -3,7 +3,7 @@ package com.necroware.terminusplayer.ui.screens.nowplaying
 import com.necroware.terminusplayer.ui.components.TerminalActionText
 import com.necroware.terminusplayer.ui.components.CrtScanlineOverlay
 import com.necroware.terminusplayer.ui.components.CrtCollapseOverlay
-import com.necroware.terminusplayer.ui.components.rememberTerminalCursor
+import com.necroware.terminusplayer.ui.components.TerminalCursorGlyph
 import com.necroware.terminusplayer.ui.components.rememberTerminalHaptics
 import com.necroware.terminusplayer.ui.theme.rememberAdaptiveAccent
 import com.necroware.terminusplayer.ui.theme.LocalAppPalette
@@ -220,7 +220,6 @@ fun NowPlayingScreen(
     val bufferedPositionMs by viewModel.bufferedPositionMs.collectAsStateWithLifecycle()
     val serverPingMs by viewModel.serverPingMs.collectAsStateWithLifecycle()
     val haptic = rememberTerminalHaptics(prefs.terminalHaptics)
-    val cursor = rememberTerminalCursor(prefs.cursorStyle, prefs.cursorBlinkCadence, motionPreference)
 
     val preparingSelection = pendingSong != null
     val displayTitle = pendingSong?.title ?: nowPlaying.title
@@ -287,15 +286,21 @@ fun NowPlayingScreen(
         }
     )
 
-    val themedColorScheme = MaterialTheme.colorScheme.copy(
-        primary = adaptiveAccent,
-        outline = adaptiveAccent.copy(alpha = 0.5f)
-    )
-    val themedPalette = LocalAppPalette.current.copy(
-        accent = adaptiveAccent,
-        border = adaptiveAccent.copy(alpha = 0.5f),
-        visualizerPrimary = adaptiveAccent
-    )
+    val currentScheme = MaterialTheme.colorScheme
+    val themedColorScheme = remember(currentScheme, adaptiveAccent) {
+        currentScheme.copy(
+            primary = adaptiveAccent,
+            outline = adaptiveAccent.copy(alpha = 0.5f)
+        )
+    }
+    val currentPalette = LocalAppPalette.current
+    val themedPalette = remember(adaptiveAccent, currentPalette) {
+        currentPalette.copy(
+            accent = adaptiveAccent,
+            border = adaptiveAccent.copy(alpha = 0.5f),
+            visualizerPrimary = adaptiveAccent
+        )
+    }
 
     Box(
         modifier = Modifier
@@ -329,11 +334,20 @@ fun NowPlayingScreen(
                         )
                         if (sleepTimerRemainingMs != null) {
                             val totalSec = (sleepTimerRemainingMs!! + 999L) / 1000L
-                            Text(
-                                text = "T-MINUS %02d:%02d%s".format(totalSec / 60L, totalSec % 60L, cursor),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "T-MINUS %02d:%02d".format(totalSec / 60L, totalSec % 60L),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                TerminalCursorGlyph(
+                                    style = prefs.cursorStyle,
+                                    cadence = prefs.cursorBlinkCadence,
+                                    motionPreference = motionPreference,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textStyle = MaterialTheme.typography.labelSmall
+                                )
+                            }
                         }
                         if (!selectedSongIsExternal) {
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
