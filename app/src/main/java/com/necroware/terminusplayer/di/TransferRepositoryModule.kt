@@ -2,6 +2,7 @@ package com.necroware.terminusplayer.di
 
 import com.necroware.terminusplayer.data.repository.DownloadTransferRepository
 import com.necroware.terminusplayer.data.repository.MusicRepository
+import com.necroware.terminusplayer.data.repository.UploadedTrackReconciler
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -14,4 +15,8 @@ abstract class TransferRepositoryModule {
     @Binds
     @Singleton
     abstract fun bindDownloadTransferRepository(repository: MusicRepository): DownloadTransferRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindUploadedTrackReconciler(repository: MusicRepository): UploadedTrackReconciler
 }

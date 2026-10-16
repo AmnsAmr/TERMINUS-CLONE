@@ -12,6 +12,7 @@ import com.necroware.terminusplayer.data.repository.NavidromeUploadRepository
 import com.necroware.terminusplayer.data.database.dao.UploadQueueDao
 import com.necroware.terminusplayer.data.repository.DownloadTransferRepository
 import com.necroware.terminusplayer.data.repository.UploadQueueManager
+import com.necroware.terminusplayer.data.repository.UploadedTrackReconciler
 import com.necroware.terminusplayer.data.repository.DuplicateUploadException
 import com.necroware.terminusplayer.data.repository.PermanentTransferException
 import com.necroware.terminusplayer.data.repository.UploadQuotaExceededException
@@ -31,7 +32,8 @@ class UploadWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val uploadRepository: NavidromeUploadRepository,
     private val uploadQueueDao: UploadQueueDao,
-    private val downloadRepository: DownloadTransferRepository
+    private val downloadRepository: DownloadTransferRepository,
+    private val uploadedTrackReconciler: UploadedTrackReconciler
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
@@ -157,6 +159,15 @@ class UploadWorker @AssistedInject constructor(
                         uploadRepository.upload(Uri.parse(item.uriString), reportProgress)
                     }
                 }
+                if (!isDownload && !item.songId.startsWith("upload-file:")) {
+                    try {
+                        uploadedTrackReconciler.reconcileUploadedSong(item.songId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // Upload success is durable; an unavailable or ambiguous library match stays local.
+                    }
+                }
                 uploadQueueDao.clearPartialUri(item.songId)
                 uploadQueueDao.updateState(item.songId, "SUCCESS", item.attemptCount + 1)
                 completedCount++
@@ -173,6 +184,15 @@ class UploadWorker @AssistedInject constructor(
                 uploadQueueDao.clearPartialUri(item.songId)
                 val msg = e.message ?: ""
                 if (!isDownload && e is DuplicateUploadException) {
+                    if (!item.songId.startsWith("upload-file:")) {
+                        try {
+                            uploadedTrackReconciler.reconcileUploadedSong(item.songId)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            // A duplicate filename is not enough to map a recording; retain local identity.
+                        }
+                    }
                     uploadQueueDao.updateStateWithError(item.songId, "ALREADY_EXISTS", item.attemptCount, msg)
                     completedCount++
                 } else if (e is PermanentTransferException) {

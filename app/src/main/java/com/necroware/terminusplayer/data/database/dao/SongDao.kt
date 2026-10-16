@@ -80,6 +80,9 @@ interface SongDao {
     @Query("UPDATE songs SET downloadedUri = :uri WHERE remoteId = :songId")
     suspend fun setDownloadedUri(songId: String, uri: String?)
 
+    @Query("UPDATE songs SET navidromeId = :serverId WHERE remoteId = :localSongId AND providerId = 'local' AND (navidromeId IS NULL OR navidromeId = :serverId) AND NOT EXISTS (SELECT 1 FROM songs other WHERE other.providerId = 'local' AND other.navidromeId = :serverId AND other.remoteId != :localSongId)")
+    suspend fun linkLocalSongToNavidrome(localSongId: String, serverId: String): Int
+
     @Query("SELECT * FROM songs ORDER BY dateAdded DESC LIMIT :limit")
     suspend fun mostRecentlyAdded(limit: Int): List<SongEntity>
 

@@ -20,7 +20,13 @@ data class SubsonicResponseData(
     @Json(name = "lyricsList") val lyricsList: Any? = null,
     @Json(name = "playlist") val playlist: PlaylistResponse? = null,
     @Json(name = "playlists") val playlists: PlaylistsResponse? = null,
+    @Json(name = "starred2") val starred2: Starred2Response? = null,
     @Json(name = "user") val user: UserResponse? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class Starred2Response(
+    @Json(name = "song") val songs: List<SongItem>? = null
 )
 
 @JsonClass(generateAdapter = true)

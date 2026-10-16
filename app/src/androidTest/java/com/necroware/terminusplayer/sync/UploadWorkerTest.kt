@@ -10,6 +10,7 @@ import com.necroware.terminusplayer.data.database.dao.UploadQueueDao
 import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
 import com.necroware.terminusplayer.data.repository.NavidromeUploadRepository
 import com.necroware.terminusplayer.data.repository.DownloadTransferRepository
+import com.necroware.terminusplayer.data.repository.UploadedTrackReconciler
 import com.necroware.terminusplayer.data.repository.DuplicateUploadException
 import com.necroware.terminusplayer.data.repository.UploadQuotaExceededException
 import com.necroware.terminusplayer.data.api.custom.NavidromeNativeApiService
@@ -122,12 +123,21 @@ class UploadWorkerTest {
     private class FakeDownloader : DownloadTransferRepository {
         var downloadedSongId: String? = null
         var cleanedPartialUri: String? = null
+        var failuresRemaining = 0
         override suspend fun downloadSong(songId: String, force: Boolean, onProgress: ((TransferProgress) -> Unit)?): String {
             downloadedSongId = songId
+            if (failuresRemaining > 0) {
+                failuresRemaining--
+                throw IOException("Temporary download failure")
+            }
             onProgress?.invoke(TransferProgress(10, 20))
             return "content://download/$songId"
         }
         override suspend fun cleanupInterruptedDownload(partialUri: String) { cleanedPartialUri = partialUri }
+    }
+
+    private class FakeReconciler : UploadedTrackReconciler {
+        override suspend fun reconcileUploadedSong(songId: String): Boolean = false
     }
 
     private lateinit var context: Context
@@ -146,7 +156,7 @@ class UploadWorkerTest {
         val worker = TestListenableWorkerBuilder<UploadWorker>(context)
             .setWorkerFactory(object : androidx.work.WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: androidx.work.WorkerParameters) =
-                    UploadWorker(appContext, workerParameters, repo, dao, FakeDownloader())
+                    UploadWorker(appContext, workerParameters, repo, dao, FakeDownloader(), FakeReconciler())
             })
             .build()
 
@@ -170,7 +180,7 @@ class UploadWorkerTest {
         val worker = TestListenableWorkerBuilder<UploadWorker>(context)
             .setWorkerFactory(object : androidx.work.WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: androidx.work.WorkerParameters) =
-                    UploadWorker(appContext, workerParameters, repo, dao, FakeDownloader())
+                    UploadWorker(appContext, workerParameters, repo, dao, FakeDownloader(), FakeReconciler())
             })
             .build()
 
@@ -194,7 +204,7 @@ class UploadWorkerTest {
         val worker = TestListenableWorkerBuilder<UploadWorker>(context)
             .setWorkerFactory(object : androidx.work.WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: androidx.work.WorkerParameters) =
-                    UploadWorker(appContext, workerParameters, repo, dao, downloader)
+                    UploadWorker(appContext, workerParameters, repo, dao, downloader, FakeReconciler())
             })
             .build()
 
@@ -216,7 +226,7 @@ class UploadWorkerTest {
         val worker = TestListenableWorkerBuilder<UploadWorker>(context)
             .setWorkerFactory(object : androidx.work.WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: androidx.work.WorkerParameters) =
-                    UploadWorker(appContext, workerParameters, repo, dao, FakeDownloader())
+                    UploadWorker(appContext, workerParameters, repo, dao, FakeDownloader(), FakeReconciler())
             })
             .build()
 
@@ -244,7 +254,7 @@ class UploadWorkerTest {
         val worker = TestListenableWorkerBuilder<UploadWorker>(context)
             .setWorkerFactory(object : androidx.work.WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: androidx.work.WorkerParameters) =
-                    UploadWorker(appContext, workerParameters, FakeRepo(), dao, downloader)
+                    UploadWorker(appContext, workerParameters, FakeRepo(), dao, downloader, FakeReconciler())
             })
             .build()
 
@@ -277,7 +287,7 @@ class UploadWorkerTest {
         val worker = TestListenableWorkerBuilder<UploadWorker>(context)
             .setWorkerFactory(object : androidx.work.WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: androidx.work.WorkerParameters) =
-                    UploadWorker(appContext, workerParameters, repo, dao, FakeDownloader())
+                    UploadWorker(appContext, workerParameters, repo, dao, FakeDownloader(), FakeReconciler())
             })
             .build()
 
@@ -308,7 +318,7 @@ class UploadWorkerTest {
         val worker = TestListenableWorkerBuilder<UploadWorker>(context)
             .setWorkerFactory(object : androidx.work.WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: androidx.work.WorkerParameters) =
-                    UploadWorker(appContext, workerParameters, FakeRepo(), dao, downloader)
+                    UploadWorker(appContext, workerParameters, FakeRepo(), dao, downloader, FakeReconciler())
             })
             .build()
 
@@ -320,6 +330,35 @@ class UploadWorkerTest {
     }
 
     @Test
+    fun transientDownloadFailureRetriesAndRecordsTerminalReason() = runBlocking {
+        val dao = FakeDao()
+        dao.items.add(UploadQueueEntity(
+            songId = "download:navidrome:42",
+            uriString = "",
+            state = "WAITING",
+            attemptCount = 0,
+            addedAtEpochMs = 0,
+            title = "Artist - Track",
+            transferType = "DOWNLOAD",
+            remoteSongId = "navidrome:42"
+        ))
+        val downloader = FakeDownloader().apply { failuresRemaining = 3 }
+        val worker = TestListenableWorkerBuilder<UploadWorker>(context)
+            .setWorkerFactory(object : androidx.work.WorkerFactory() {
+                override fun createWorker(appContext: Context, workerClassName: String, workerParameters: androidx.work.WorkerParameters) =
+                    UploadWorker(appContext, workerParameters, FakeRepo(), dao, downloader, FakeReconciler())
+            })
+            .build()
+
+        worker.doWork()
+
+        assertEquals(0, downloader.failuresRemaining)
+        assertEquals("PERMANENT_FAILURE", dao.items.single().state)
+        assertEquals(3, dao.items.single().attemptCount)
+        assertEquals("Temporary download failure", dao.items.single().errorMessage)
+    }
+
+    @Test
     fun transientUploadFailureRetriesThreeTimesAndRecordsReason() = runBlocking {
         val dao = FakeDao()
         dao.items.add(UploadQueueEntity("1", "content://fake/test.opus", "WAITING", 0, 0, "Test Opus"))
@@ -327,7 +366,7 @@ class UploadWorkerTest {
         val worker = TestListenableWorkerBuilder<UploadWorker>(context)
             .setWorkerFactory(object : androidx.work.WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: androidx.work.WorkerParameters) =
-                    UploadWorker(appContext, workerParameters, repo, dao, FakeDownloader())
+                    UploadWorker(appContext, workerParameters, repo, dao, FakeDownloader(), FakeReconciler())
             })
             .build()
 
@@ -347,7 +386,7 @@ class UploadWorkerTest {
         val worker = TestListenableWorkerBuilder<UploadWorker>(context)
             .setWorkerFactory(object : androidx.work.WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: androidx.work.WorkerParameters) =
-                    UploadWorker(appContext, workerParameters, FakeRepo(), dao, FakeDownloader())
+                    UploadWorker(appContext, workerParameters, FakeRepo(), dao, FakeDownloader(), FakeReconciler())
             })
             .build()
 

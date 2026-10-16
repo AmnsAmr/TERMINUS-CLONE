@@ -3,7 +3,6 @@ package com.necroware.terminusplayer.di
 import android.content.Context
 import androidx.room.Room
 import com.necroware.terminusplayer.data.database.TerminusDatabase
-import com.necroware.terminusplayer.BuildConfig
 import com.necroware.terminusplayer.data.database.dao.LikedSongDao
 import com.necroware.terminusplayer.data.database.dao.PlayEventDao
 import com.necroware.terminusplayer.data.database.dao.PlaylistDao
@@ -41,9 +40,12 @@ object DatabaseModule {
                 TerminusDatabase.MIGRATION_15_16,
                 TerminusDatabase.MIGRATION_16_17,
                 TerminusDatabase.MIGRATION_17_18,
-                TerminusDatabase.MIGRATION_18_19
+                TerminusDatabase.MIGRATION_18_19,
+                TerminusDatabase.MIGRATION_19_20,
+                TerminusDatabase.MIGRATION_20_21,
+                TerminusDatabase.MIGRATION_21_22,
+                TerminusDatabase.MIGRATION_22_23
             )
-        if (BuildConfig.DEBUG) builder.fallbackToDestructiveMigration()
         return builder.build()
     }
 
