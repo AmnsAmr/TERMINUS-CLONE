@@ -55,6 +55,7 @@ import com.necroware.terminusplayer.ui.components.PlaylistSelectionControls
 @Composable
 fun PlaylistDetailScreen(
     onBack: () -> Unit,
+    onOpenPlayer: (() -> Unit)? = null,
     viewModel: PlaylistDetailViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -193,7 +194,10 @@ fun PlaylistDetailScreen(
                     text = "▶ PLAY ALL",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { viewModel.playAll(sortedSongs) }
+                    modifier = Modifier.clickable {
+                        viewModel.playAll(sortedSongs)
+                        onOpenPlayer?.invoke()
+                    }
                 )
                 when (val availability = state.offlineAvailability) {
                     PlaylistOfflineAvailability.Checking -> Text(
@@ -274,6 +278,7 @@ fun PlaylistDetailScreen(
                                 toggleSelection(selectedIds, song.id)
                             } else {
                                 viewModel.playFrom(song, sortedSongs, index)
+                                onOpenPlayer?.invoke()
                                 selectedSongIds
                             }
                         },

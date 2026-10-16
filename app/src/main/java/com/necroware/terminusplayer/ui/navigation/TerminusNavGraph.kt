@@ -185,8 +185,11 @@ fun TerminusNavGraph(
     val currentSongUri by playbackViewModel.currentSongUri.collectAsStateWithLifecycle()
     val prefs by playbackViewModel.preferences.collectAsStateWithLifecycle()
     val defaultAccent = MaterialTheme.colorScheme.primary
+    val targetArtUri = currentSongUri.takeIf { !it.isNullOrBlank() }
+        ?: nowPlaying.mediaId?.let { if (it.startsWith("terminus://")) it else "terminus://$it" }
+        ?: nowPlaying.artworkUri
     val miniAccent = rememberAdaptiveAccent(
-        artworkUri = currentSongUri.takeIf { !it.isNullOrBlank() } ?: nowPlaying.artworkUri,
+        artworkUri = targetArtUri,
         defaultAccent = defaultAccent,
         enabled = prefs.adaptiveArtAccent
     )
@@ -302,12 +305,12 @@ fun TerminusNavGraph(
         ) {
             composable(Destination.Home.route) {
                 HomeScreen(
-                    onSongClick = { song, queue -> playSongAndOpenPlayer(song, queue, playbackViewModel, navController) }
+                    onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, navController, prefs.openPlayerOnLibraryTrackSelect) }
                 )
             }
             composable(Destination.Library.route) {
                 LibraryScreen(
-                    onSongClick = { song, queue -> playSongAndOpenPlayer(song, queue, playbackViewModel, navController) },
+                    onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, navController, prefs.openPlayerOnLibraryTrackSelect) },
                     onAlbumClick = { albumTitle -> navController.navigate(Destination.AlbumDetail.createRoute(albumTitle)) },
                     onArtistClick = { artist -> navController.navigate(Destination.ArtistDetail.createRoute(artist)) },
                     onSearchClick = { navController.navigate(Destination.Search.route) },
@@ -412,7 +415,14 @@ fun TerminusNavGraph(
                 popEnterTransition = { detailPopEnter(motionPreference, systemAnimationsEnabled) },
                 popExitTransition = { detailPopExit(motionPreference, systemAnimationsEnabled) }
             ) {
-                PlaylistDetailScreen(onBack = { navController.popBackStack() })
+                PlaylistDetailScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenPlayer = {
+                        if (prefs.openPlayerOnPlaylistTrackSelect) {
+                            navController.navigate(Destination.NowPlaying.route) { launchSingleTop = true }
+                        }
+                    }
+                )
             }
             composable(
                 route = Destination.Search.route,
@@ -422,7 +432,7 @@ fun TerminusNavGraph(
                 popExitTransition = { detailExit(motionPreference, systemAnimationsEnabled) }
             ) {
                 SearchScreen(
-                    onSongClick = { song, queue -> playSongAndOpenPlayer(song, queue, playbackViewModel, navController) },
+                    onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, navController, prefs.openPlayerOnLibraryTrackSelect) },
                     onBack = { navController.popBackStack() }
                 )
             }
@@ -476,14 +486,17 @@ fun TerminusNavGraph(
     }
 }
 
-private fun playSongAndOpenPlayer(
+private fun handleSongClick(
     song: Song,
     queue: List<Song>,
     playbackViewModel: PlaybackViewModel,
-    navController: androidx.navigation.NavHostController
+    navController: androidx.navigation.NavHostController,
+    shouldOpenPlayer: Boolean
 ) {
     val index = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
     playbackViewModel.playSongQueue(queue, index) {
-        navController.navigate(Destination.NowPlaying.route) { launchSingleTop = true }
+        if (shouldOpenPlayer) {
+            navController.navigate(Destination.NowPlaying.route) { launchSingleTop = true }
+        }
     }
 }

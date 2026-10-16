@@ -9,12 +9,27 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.graphics.drawable.toBitmap
 import coil.imageLoader
 import coil.request.ImageRequest
+import com.necroware.terminusplayer.coil.LocalAudioUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private val accentCache = LruCache<String, Color>(64)
+
+/**
+ * Resolves artwork URI into a format understandable by Terminus Coil fetchers.
+ */
+private fun resolveArtModel(uriString: String): Any? {
+    if (uriString.isBlank()) return null
+    return if (uriString.startsWith("terminus://")) {
+        val songId = uriString.removePrefix("terminus://")
+        "https://terminus.invalid/rest/getCoverArt?id=$songId&v=1.16.1&c=Terminus"
+    } else {
+        LocalAudioUri(uriString)
+    }
+}
 
 /**
  * Extracts a vibrant neon terminal accent from the active album cover art.
@@ -36,9 +51,8 @@ fun rememberAdaptiveAccent(
         val extracted = withContext(Dispatchers.IO) {
             extractNeonAccent(context, artworkUri)
         }
-        val resolved = extracted ?: defaultAccent
-        accentCache.put(artworkUri, resolved)
         if (extracted != null) {
+            accentCache.put(artworkUri, extracted)
             value = extracted
         }
     }
@@ -47,14 +61,15 @@ fun rememberAdaptiveAccent(
 }
 
 private suspend fun extractNeonAccent(context: Context, uri: String): Color? = runCatching {
+    val model = resolveArtModel(uri) ?: return null
     val request = ImageRequest.Builder(context)
-        .data(uri)
-        .size(32, 32)
+        .data(model)
+        .size(64, 64)
         .allowHardware(false)
         .build()
 
-    val result = context.imageLoader.execute(request).drawable as? BitmapDrawable ?: return null
-    val bitmap = result.bitmap ?: return null
+    val drawable = context.imageLoader.execute(request).drawable ?: return null
+    val bitmap = (drawable as? BitmapDrawable)?.bitmap ?: drawable.toBitmap(64, 64)
 
     withContext(Dispatchers.Default) {
         findMostSaturatedColor(bitmap)
@@ -68,7 +83,7 @@ private fun findMostSaturatedColor(bitmap: Bitmap): Color? {
     bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
 
     var bestColor: Color? = null
-    var maxSaturation = -1f
+    var maxScore = -1f
     val hsv = FloatArray(3)
 
     for (pixel in pixels) {
@@ -76,21 +91,22 @@ private fun findMostSaturatedColor(bitmap: Bitmap): Color? {
         val g = android.graphics.Color.green(pixel)
         val b = android.graphics.Color.blue(pixel)
 
-        // Fast reject neutral or low-contrast pixels without expensive RGBToHSV conversion
         val maxVal = maxOf(r, maxOf(g, b))
         val minVal = minOf(r, minOf(g, b))
-        if (maxVal - minVal < 36 || maxVal < 60) continue
+        // Reject completely neutral or dark black pixels
+        if (maxVal - minVal < 14 || maxVal < 36) continue
 
         android.graphics.Color.RGBToHSV(r, g, b, hsv)
         val saturation = hsv[1]
         val value = hsv[2]
 
-        // Reject dim or washed out colors
-        if (value > 0.35f && saturation > 0.40f) {
-            if (saturation > maxSaturation) {
-                maxSaturation = saturation
-                // Boost brightness slightly so neon pop glows cleanly against pitch black terminal
-                hsv[2] = maxOf(value, 0.85f)
+        if (value > 0.15f && saturation > 0.18f) {
+            val score = saturation * 0.75f + value * 0.25f
+            if (score > maxScore) {
+                maxScore = score
+                // Convert to a punchy cyberpunk neon hue
+                hsv[1] = maxOf(saturation, 0.82f)
+                hsv[2] = 0.95f
                 bestColor = Color(android.graphics.Color.HSVToColor(hsv))
             }
         }

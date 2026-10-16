@@ -158,6 +158,26 @@ class SettingsViewModel @Inject constructor(
         preferencesRepository.setSmartBitrateEnabled(enabled)
     }
 
+    fun setCellularMaxBitRate(bitRate: Int?) = viewModelScope.launch {
+        preferencesRepository.setCellularMaxBitRate(bitRate)
+    }
+
+    fun setOpenPlayerOnLibraryTrackSelect(enabled: Boolean) = viewModelScope.launch {
+        preferencesRepository.setOpenPlayerOnLibraryTrackSelect(enabled)
+    }
+
+    fun setOpenPlayerOnPlaylistTrackSelect(enabled: Boolean) = viewModelScope.launch {
+        preferencesRepository.setOpenPlayerOnPlaylistTrackSelect(enabled)
+    }
+
+    fun setReactiveHudFlash(enabled: Boolean) = viewModelScope.launch {
+        preferencesRepository.setReactiveHudFlash(enabled)
+    }
+
+    fun setVisualizerStyle(style: com.necroware.terminusplayer.data.prefs.VisualizerStyle) = viewModelScope.launch {
+        preferencesRepository.setVisualizerStyle(style)
+    }
+
     fun setHudTelemetryMode(mode: com.necroware.terminusplayer.data.prefs.HudTelemetryMode) = viewModelScope.launch {
         preferencesRepository.setHudTelemetryMode(mode)
     }
