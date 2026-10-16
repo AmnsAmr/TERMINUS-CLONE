@@ -1079,7 +1079,7 @@ private fun CrtAestheticsSection(
 
         ToggleRow(
             label = "Adaptive neon art accent",
-            sublabel = "Extract cyberpunk neon accent from current album art",
+            sublabel = "Extract dominant color from album art (active in Full & Balanced performance modes)",
             checked = adaptiveArtAccent,
             onCheckedChange = onAdaptiveArtAccentChange
         )

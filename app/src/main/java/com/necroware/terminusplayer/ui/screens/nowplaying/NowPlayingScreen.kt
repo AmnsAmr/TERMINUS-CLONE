@@ -235,7 +235,8 @@ fun NowPlayingScreen(
     val adaptiveAccent = rememberAdaptiveAccent(
         artworkUri = targetArtUri,
         defaultAccent = defaultAccent,
-        enabled = prefs.adaptiveArtAccent
+        enabled = prefs.adaptiveArtAccent,
+        performanceMode = prefs.performanceMode
     )
     val displayIsPlaying = !preparingSelection && nowPlaying.isPlaying
     var hudAlertColor by remember { mutableStateOf<Color?>(null) }

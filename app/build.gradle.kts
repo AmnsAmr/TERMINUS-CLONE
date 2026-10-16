@@ -95,6 +95,7 @@ dependencies {
     implementation(libs.moshi)
     ksp(libs.moshi.ksp)
     implementation(libs.androidx.work.runtime.ktx)
+    implementation("androidx.palette:palette-ktx:1.0.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("io.mockk:mockk:1.13.5")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")

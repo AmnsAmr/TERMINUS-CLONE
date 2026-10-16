@@ -191,7 +191,8 @@ fun TerminusNavGraph(
     val miniAccent = rememberAdaptiveAccent(
         artworkUri = targetArtUri,
         defaultAccent = defaultAccent,
-        enabled = prefs.adaptiveArtAccent
+        enabled = prefs.adaptiveArtAccent,
+        performanceMode = prefs.performanceMode
     )
     var soundControlOpen by remember { mutableStateOf(false) }
     var soundControlOnLeft by remember { mutableStateOf(true) }
