@@ -336,6 +336,7 @@ fun PlaylistDetailScreen(
                         song = song,
                         isSelected = song.id in selectedIds,
                         isCurrentlyPlaying = song.id == currentPlayingSongId,
+                        searchQuery = searchQuery,
                         onClick = {
                             selectedSongIds = if (selectedIds.isNotEmpty()) {
                                 toggleSelection(selectedIds, song.id)
