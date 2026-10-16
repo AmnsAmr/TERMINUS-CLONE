@@ -38,7 +38,11 @@ fun TerminalSlider(
     var barWidthPx by remember { mutableStateOf(1f) }
 
     fun updateFromOffsetX(x: Float) {
-        onValueChange((x / barWidthPx).coerceIn(0f, 1f))
+        val fraction = (x / barWidthPx).coerceIn(0f, 1f)
+        val stepped = kotlin.math.round(fraction * segmentCount) / segmentCount.toFloat()
+        if (stepped != clamped) {
+            onValueChange(stepped)
+        }
     }
 
     val filledSegments = (clamped * segmentCount).toInt().coerceIn(0, segmentCount)

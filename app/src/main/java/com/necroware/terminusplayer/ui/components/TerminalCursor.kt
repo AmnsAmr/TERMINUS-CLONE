@@ -14,6 +14,9 @@ import com.necroware.terminusplayer.data.prefs.TerminalCursorBlink
 import com.necroware.terminusplayer.data.prefs.TerminalCursorStyle
 import kotlinx.coroutines.delay
 
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.Alignment
+
 data class TerminalCursorConfig(
     val style: TerminalCursorStyle = TerminalCursorStyle.UNDERSCORE,
     val blinkCadence: TerminalCursorBlink = TerminalCursorBlink.SLOW,
@@ -24,7 +27,7 @@ val LocalTerminalCursorConfig = staticCompositionLocalOf { TerminalCursorConfig(
 
 /**
  * Computes a blinking or solid terminal cursor glyph respecting motion policy.
- * When motion is OFF or cadence is SOLID, no clock/delay loop runs.
+ * When motion is OFF, MEDIUM (Balanced), or cadence is SOLID, no clock/delay loop runs.
  */
 @Composable
 fun rememberTerminalCursor(
@@ -33,7 +36,7 @@ fun rememberTerminalCursor(
     motionPreference: MotionPreference = LocalTerminalCursorConfig.current.motionPreference
 ): String {
     val interval = cadence.intervalMs
-    if (interval == null || motionPreference == MotionPreference.OFF) {
+    if (interval == null || motionPreference == MotionPreference.OFF || motionPreference == MotionPreference.MEDIUM) {
         return style.glyph
     }
 
@@ -48,8 +51,30 @@ fun rememberTerminalCursor(
 }
 
 /**
+ * Isolated leaf composable that renders only the blinking cursor.
+ * Recomposition is localized strictly to this single character node.
+ */
+@Composable
+fun TerminalCursorGlyph(
+    style: TerminalCursorStyle = LocalTerminalCursorConfig.current.style,
+    cadence: TerminalCursorBlink = LocalTerminalCursorConfig.current.blinkCadence,
+    motionPreference: MotionPreference = LocalTerminalCursorConfig.current.motionPreference,
+    modifier: Modifier = Modifier,
+    color: Color = Color.Unspecified,
+    textStyle: TextStyle = MaterialTheme.typography.bodyMedium
+) {
+    val glyph = rememberTerminalCursor(style, cadence, motionPreference)
+    Text(
+        text = glyph,
+        style = textStyle,
+        color = color,
+        modifier = modifier
+    )
+}
+
+/**
  * Standardized terminal screen header with dynamic cursor.
- * Example: "> SETTINGS_" or "> SETTINGS█"
+ * Uses TerminalCursorGlyph to ensure blinking never recomposes the header or screen.
  */
 @Composable
 fun TerminalHeader(
@@ -61,12 +86,23 @@ fun TerminalHeader(
     color: Color = MaterialTheme.colorScheme.onBackground,
     textStyle: TextStyle = MaterialTheme.typography.headlineMedium
 ) {
-    val cursor = rememberTerminalCursor(cursorStyle, cursorBlink, motionPreference)
-    Text(
-        text = "> ${title.removePrefix("> ").trimEnd('_', ' ')}$cursor",
-        style = textStyle,
-        color = color,
-        modifier = modifier
-    )
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "> ${title.removePrefix("> ").trimEnd('_', ' ')}",
+            style = textStyle,
+            color = color
+        )
+        TerminalCursorGlyph(
+            style = cursorStyle,
+            cadence = cursorBlink,
+            motionPreference = motionPreference,
+            color = color,
+            textStyle = textStyle
+        )
+    }
 }
+
 

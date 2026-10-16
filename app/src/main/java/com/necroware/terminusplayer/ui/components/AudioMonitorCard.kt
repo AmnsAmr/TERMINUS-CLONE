@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioManager
 import android.os.Process
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
@@ -11,6 +12,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -21,7 +24,7 @@ import com.necroware.terminusplayer.data.prefs.HudTelemetryMode
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 
-private data class AudioDeviceReadout(val audioDevice: String, val cpuPercent: Int)
+private data class AudioMonitorReadout(val volumePercent: Int, val audioDevice: String, val cpuPercent: Int)
 
 @Composable
 fun AudioMonitorCard(
@@ -44,29 +47,32 @@ fun AudioMonitorCard(
 ) {
     val context = LocalContext.current
 
-    val volumePercent by produceState(initialValue = 0, context) {
-        while (true) {
-            value = withContext(Dispatchers.IO) { readVolumePercent(context) }
-            delay(2000)
-        }
-    }
-
-    val deviceReadout by produceState(initialValue = AudioDeviceReadout("—", 0), context) {
+    val isFullMotion = motionPreference == MotionPreference.FULL
+    val readout by produceState(
+        initialValue = AudioMonitorReadout(0, "—", 0),
+        key1 = isFullMotion
+    ) {
         var lastCpuTimeMs = Process.getElapsedCpuTime()
         var lastWallTimeMs = System.currentTimeMillis()
+        val intervalMs = if (isFullMotion) 3000L else 6000L
         while (true) {
-            delay(2000)
-            val (readout, cpuTimeMs, wallTimeMs) = withContext(Dispatchers.IO) {
-                val nextCpuTimeMs = Process.getElapsedCpuTime()
-                val nextWallTimeMs = System.currentTimeMillis()
-                val cpuDelta = (nextCpuTimeMs - lastCpuTimeMs).coerceAtLeast(0L)
-                val wallDelta = (nextWallTimeMs - lastWallTimeMs).coerceAtLeast(1L)
-                val percent = ((cpuDelta.toFloat() / wallDelta) * 100).toInt().coerceIn(0, 100)
-                Triple(AudioDeviceReadout(audioOutputDeviceLabel(context), percent), nextCpuTimeMs, nextWallTimeMs)
+            val volume = withContext(Dispatchers.IO) { readVolumePercent(context) }
+            val (device, cpu) = if (isFullMotion) {
+                withContext(Dispatchers.IO) {
+                    val nextCpuTimeMs = Process.getElapsedCpuTime()
+                    val nextWallTimeMs = System.currentTimeMillis()
+                    val cpuDelta = (nextCpuTimeMs - lastCpuTimeMs).coerceAtLeast(0L)
+                    val wallDelta = (nextWallTimeMs - lastWallTimeMs).coerceAtLeast(1L)
+                    val percent = ((cpuDelta.toFloat() / wallDelta) * 100).toInt().coerceIn(0, 100)
+                    lastCpuTimeMs = nextCpuTimeMs
+                    lastWallTimeMs = nextWallTimeMs
+                    Pair(audioOutputDeviceLabel(context), percent)
+                }
+            } else {
+                Pair(withContext(Dispatchers.IO) { audioOutputDeviceLabel(context) }, 0)
             }
-            lastCpuTimeMs = cpuTimeMs
-            lastWallTimeMs = wallTimeMs
-            value = readout
+            value = AudioMonitorReadout(volume, device, cpu)
+            delay(intervalMs)
         }
     }
 
@@ -101,8 +107,8 @@ fun AudioMonitorCard(
                 MonitorRow("rate", sampleRateLabel, "kbps: $kbpsLabel")
                 MonitorRow("session", if (audioSessionId > 0) "#$audioSessionId" else "—", channelLabel)
                 MonitorRow("buffer", "+${bufferRemainingSec}s", "size: $sizeLabel")
-                MonitorRow("server ping", serverPingMs?.let { "${it}ms" } ?: "OFFLINE / LOCAL", "VOL $volumePercent%")
-                MonitorRow("device", deviceReadout.audioDevice, "CPU: ${deviceReadout.cpuPercent}%")
+                MonitorRow("server ping", serverPingMs?.let { "${it}ms" } ?: "OFFLINE / LOCAL", "VOL ${readout.volumePercent}%")
+                MonitorRow("device", readout.audioDevice, "CPU: ${readout.cpuPercent}%")
             } else {
                 MonitorRow("fmt", codecLabel, "bit: $bitDepthLabel")
                 MonitorRow("kbps", kbpsLabel, "size: $sizeLabel")
@@ -115,8 +121,8 @@ fun AudioMonitorCard(
                         .background(MaterialTheme.colorScheme.outline)
                 )
 
-                MonitorRow("device", deviceReadout.audioDevice, "VOL $volumePercent%")
-                MonitorRow("cpu", "${deviceReadout.cpuPercent}%", "")
+                MonitorRow("device", readout.audioDevice, "VOL ${readout.volumePercent}%")
+                MonitorRow("cpu", "${readout.cpuPercent}%", "")
             }
 
             SimulatedSpectrum(
@@ -144,46 +150,52 @@ fun AudioMonitorCard(
 
 @Composable
 private fun SimulatedSpectrum(isPlaying: Boolean, modifier: Modifier = Modifier) {
-    val barCount = 12
-    val animationSpecs = remember(barCount) {
-        List(barCount) { index ->
-            tween<Float>(
-                durationMillis = (400..800).random(),
-                delayMillis = (0..200).random(),
-                easing = FastOutSlowInEasing
-            )
-        }
-    }
-    val infiniteTransition = rememberInfiniteTransition(label = "spectrum")
-    
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(24.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-        verticalAlignment = Alignment.Bottom
-    ) {
-        repeat(barCount) { index ->
-            val displayHeight = if (isPlaying) {
-                val heightPercent by infiniteTransition.animateFloat(
-                    initialValue = 0.1f,
-                    targetValue = 1f,
-                    animationSpec = infiniteRepeatable(
-                        animation = animationSpecs[index],
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "bar_$index"
+    val barColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+    if (!isPlaying) {
+        Canvas(modifier = modifier.fillMaxWidth().height(24.dp)) {
+            val barCount = 12
+            val spacing = 2.dp.toPx()
+            val totalSpacing = spacing * (barCount - 1)
+            val barWidth = (size.width - totalSpacing) / barCount
+            val barHeight = size.height * 0.12f
+            for (i in 0 until barCount) {
+                val left = i * (barWidth + spacing)
+                drawRect(
+                    color = barColor,
+                    topLeft = Offset(left, size.height - barHeight),
+                    size = Size(barWidth, barHeight)
                 )
-                heightPercent
-            } else {
-                0.1f
             }
-            
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight(displayHeight)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
+        }
+        return
+    }
+
+    val transition = rememberInfiniteTransition(label = "spectrum")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 6.2831855f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1600, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "phase"
+    )
+
+    Canvas(modifier = modifier.fillMaxWidth().height(24.dp)) {
+        val barCount = 12
+        val spacing = 2.dp.toPx()
+        val totalSpacing = spacing * (barCount - 1)
+        val barWidth = (size.width - totalSpacing) / barCount
+        for (i in 0 until barCount) {
+            val left = i * (barWidth + spacing)
+            val wave = (kotlin.math.sin(phase + i * 0.75f) * 0.45f + 0.55f) *
+                       (kotlin.math.cos(phase * 1.25f + i * 1.15f) * 0.35f + 0.65f)
+            val fraction = wave.coerceIn(0.12f, 0.98f)
+            val barHeight = size.height * fraction
+            drawRect(
+                color = barColor,
+                topLeft = Offset(left, size.height - barHeight),
+                size = Size(barWidth, barHeight)
             )
         }
     }

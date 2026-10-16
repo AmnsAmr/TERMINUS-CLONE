@@ -4,6 +4,7 @@ import android.net.Uri
 import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.necroware.terminusplayer.data.prefs.HudTelemetryMode
 import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
 import com.necroware.terminusplayer.data.prefs.UserPreferences
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
@@ -15,6 +16,7 @@ import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.model.Playlist
 import com.necroware.terminusplayer.util.EXTERNAL_AUDIO_MEDIA_ID_PREFIX
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -68,12 +71,23 @@ class PlaybackViewModel @Inject constructor(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
-    val serverPingMs: StateFlow<Long?> = flow {
-        while (true) {
-            emit(repository.pingServer())
-            delay(10_000L)
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val serverPingMs: StateFlow<Long?> = preferencesRepository.preferences
+        .map { it.hudTelemetryMode == HudTelemetryMode.EXPANDED && it.serverUrl.isNotBlank() }
+        .distinctUntilChanged()
+        .flatMapLatest { shouldPing ->
+            flow {
+                if (!shouldPing) {
+                    emit(null)
+                } else {
+                    while (true) {
+                        emit(repository.pingServer())
+                        delay(15_000L)
+                    }
+                }
+            }
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     /**
      * Media3's MediaController doesn't preserve a MediaItem's local content
