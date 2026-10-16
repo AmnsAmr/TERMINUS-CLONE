@@ -1,5 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.gapfinder
 
+import com.necroware.terminusplayer.ui.components.TerminalActionText
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -62,7 +64,7 @@ fun GapFinderScreen(
                     Text("SETTINGS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                     Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth().clickable { viewModel.updateSettings(!s.enabled, s.threshold) }) {
                         Text("Enabled", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                        Text(if (s.enabled) "[ON]" else "[OFF]", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        TerminalActionText(if (s.enabled) "[ON]" else "[OFF]", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                     }
                     OutlinedTextField(
                         value = thresholdStr,

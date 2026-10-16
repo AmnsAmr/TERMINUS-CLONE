@@ -12,7 +12,9 @@ class MotionPreferenceTest {
 
     @Test
     fun parsesStoredMotionLevels() {
-        assertEquals(MotionPreference.REDUCED, parseMotionPreference("REDUCED"))
+        assertEquals(MotionPreference.MEDIUM, parseMotionPreference("MEDIUM"))
+        assertEquals(MotionPreference.MEDIUM, parseMotionPreference("REDUCED"))
         assertEquals(MotionPreference.OFF, parseMotionPreference("OFF"))
+        assertEquals(MotionPreference.SYSTEM, parseMotionPreference("SYSTEM"))
     }
 }

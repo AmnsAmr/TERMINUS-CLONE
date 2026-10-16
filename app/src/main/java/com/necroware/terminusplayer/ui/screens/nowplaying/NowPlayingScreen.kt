@@ -1,5 +1,8 @@
 package com.necroware.terminusplayer.ui.screens.nowplaying
 
+import com.necroware.terminusplayer.ui.components.TerminalActionText
+
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateContentSize
@@ -14,8 +17,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.window.Dialog
@@ -49,6 +54,7 @@ import kotlin.math.roundToInt
 
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -89,6 +95,7 @@ private fun PlaybackProgressSection(
     durationMs: Long,
     isPlaying: Boolean,
     motionPreference: MotionPreference,
+    enabled: Boolean,
     onSeek: (Long) -> Unit
 ) {
     val progressState = rememberSmoothPosition(
@@ -104,7 +111,8 @@ private fun PlaybackProgressSection(
             progressState.value = newPositionMs
             onSeek(newPositionMs)
         },
-        modifier = Modifier.padding(top = 20.dp)
+        modifier = Modifier.padding(top = 20.dp),
+        enabled = enabled
     )
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
@@ -139,7 +147,7 @@ private fun SleepTimerControl(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Text(
+            TerminalActionText(
                 if (remainingMs == null) "[ SET ]" else "[ CANCEL ]",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
@@ -158,7 +166,7 @@ private fun SleepTimerControl(
                     listOf(15, 30, 45, 60, 90, 120).chunked(2).forEach { row ->
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             row.forEach { minutes ->
-                                Text(
+                                TerminalActionText(
                                     "[ $minutes MIN ]",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurface,
@@ -170,7 +178,7 @@ private fun SleepTimerControl(
                             }
                         }
                     }
-                    Text(
+                    TerminalActionText(
                         "[ CANCEL ]",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -186,19 +194,42 @@ private fun SleepTimerControl(
 fun NowPlayingScreen(
     viewModel: PlaybackViewModel,
     onCollapse: () -> Unit,
-    motionPreference: MotionPreference = MotionPreference.FULL
+    motionPreference: MotionPreference = MotionPreference.FULL,
+    systemAnimationsEnabled: Boolean = true
 ) {
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
+    val pendingSong by viewModel.pendingSong.collectAsStateWithLifecycle()
+    val pendingPlaybackError by viewModel.pendingPlaybackError.collectAsStateWithLifecycle()
     val positionMs by viewModel.positionMs.collectAsStateWithLifecycle()
     val isLiked by viewModel.isCurrentLiked.collectAsStateWithLifecycle()
+    val playlists by viewModel.playlists.collectAsStateWithLifecycle()
+    val playlistActionMessage by viewModel.playlistActionMessage.collectAsStateWithLifecycle()
     val currentSongUri by viewModel.currentSongUri.collectAsStateWithLifecycle()
     val artStyle by viewModel.artStyle.collectAsStateWithLifecycle()
     val currentLyrics by viewModel.currentLyrics.collectAsStateWithLifecycle()
     val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsStateWithLifecycle()
+    val preparingSelection = pendingSong != null
+    val displayTitle = pendingSong?.title ?: nowPlaying.title
+    val displayArtist = pendingSong?.artist ?: nowPlaying.artist
+    val displayDurationMs = pendingSong?.duration ?: nowPlaying.durationMs
+    val displaySongUri = pendingSong?.uriString ?: currentSongUri.orEmpty()
+    val displayIsPlaying = !preparingSelection && nowPlaying.isPlaying
+    val displayPositionMs = if (preparingSelection) 0L else positionMs
+    val collapsePlayer = {
+        viewModel.clearPendingPlaybackSelection()
+        onCollapse()
+    }
+
+    BackHandler {
+        collapsePlayer()
+    }
 
     var dragOffsetPx by remember { mutableFloatStateOf(0f) }
     var screenHeightPx by remember { mutableStateOf(1f) }
     var lyricsExpanded by remember { mutableStateOf(false) }
+    var showPlaylistPicker by remember { mutableStateOf(false) }
+    val selectedSongId = pendingSong?.id ?: nowPlaying.mediaId
+    val selectedSongIsExternal = selectedSongId.orEmpty().startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)
     val dismissThresholdFraction = 0.25f
     val scrollState = rememberScrollState()
 
@@ -222,12 +253,15 @@ fun NowPlayingScreen(
         onDragStopped = {
             if (dragOffsetPx > screenHeightPx * dismissThresholdFraction) {
                 dragOffsetPx = 0f
-                onCollapse()
+                collapsePlayer()
             } else {
                 when (motionPreference) {
                     MotionPreference.FULL -> Animatable(dragOffsetPx).animateTo(0f) { dragOffsetPx = value }
-                    MotionPreference.REDUCED -> Animatable(dragOffsetPx).animateTo(0f, tween(120)) { dragOffsetPx = value }
+                    MotionPreference.MEDIUM -> Animatable(dragOffsetPx).animateTo(0f, tween(120)) { dragOffsetPx = value }
                     MotionPreference.OFF -> dragOffsetPx = 0f
+                    MotionPreference.SYSTEM -> if (systemAnimationsEnabled) {
+                        Animatable(dragOffsetPx).animateTo(0f, tween(180)) { dragOffsetPx = value }
+                    } else dragOffsetPx = 0f
                 }
             }
         }
@@ -255,31 +289,42 @@ fun NowPlayingScreen(
                     text = "︿",
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { onCollapse() }
+                    modifier = Modifier.clickable { collapsePlayer() }
                 )
-                if (!nowPlaying.mediaId.orEmpty().startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)) {
-                    Text(
-                        text = if (isLiked) "[LIKED]" else "[LIKE]",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = if (isLiked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.clickable { viewModel.toggleCurrentLike() }
-                    )
+                if (!selectedSongIsExternal) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TerminalActionText(
+                            text = "[ + PLAYLIST ]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.clickable(enabled = selectedSongId != null) {
+                                viewModel.clearPlaylistActionMessage()
+                                showPlaylistPicker = true
+                            }
+                        )
+                        TerminalActionText(
+                            text = if (!preparingSelection && isLiked) "[LIKED]" else "[LIKE]",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = if (!preparingSelection && isLiked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.clickable(enabled = !preparingSelection) { viewModel.toggleCurrentLike() }
+                        )
+                    }
                 }
             }
 
             // Playback Art / Song Art
             if (artStyle == com.necroware.terminusplayer.data.prefs.PlaybackArtStyle.STANDARD) {
                 SongArt(
-                    uriString = currentSongUri.orEmpty(),
+                    uriString = displaySongUri,
                     size = 300.dp,
                     modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(dragModifier)
                 )
             } else {
                 PlaybackArt(
                     style = artStyle,
-                    title = nowPlaying.title,
-                    artist = nowPlaying.artist,
-                    isPlaying = nowPlaying.isPlaying,
+                    title = displayTitle,
+                    artist = displayArtist,
+                    isPlaying = displayIsPlaying,
                     size = 300.dp,
                     motionPreference = motionPreference,
                     modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(dragModifier)
@@ -287,36 +332,49 @@ fun NowPlayingScreen(
             }
 
             Text(
-                text = nowPlaying.title.ifBlank { "—" },
+                text = displayTitle.ifBlank { "—" },
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = nowPlaying.artist,
+                text = displayArtist,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Text(
+                text = if (preparingSelection) {
+                    pendingPlaybackError?.let { "UNABLE TO START · $it" } ?: "PREPARING TRACK…"
+                } else " ",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (pendingPlaybackError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().height(18.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
 
             PlaybackProgressSection(
-                positionMs = positionMs,
-                durationMs = nowPlaying.durationMs,
-                isPlaying = nowPlaying.isPlaying,
+                positionMs = displayPositionMs,
+                durationMs = displayDurationMs,
+                isPlaying = displayIsPlaying,
                 motionPreference = motionPreference,
+                enabled = !preparingSelection,
                 onSeek = viewModel::seekTo
             )
 
             FullTransportControls(
-                isPlaying = nowPlaying.isPlaying,
-                shuffleEnabled = nowPlaying.shuffleEnabled,
-                repeatMode = nowPlaying.repeatMode,
+                isPlaying = displayIsPlaying,
+                shuffleEnabled = !preparingSelection && nowPlaying.shuffleEnabled,
+                repeatMode = if (preparingSelection) androidx.media3.common.Player.REPEAT_MODE_OFF else nowPlaying.repeatMode,
                 onTogglePlayPause = { viewModel.togglePlayPause() },
                 onSkipNext = { viewModel.skipToNext() },
                 onSkipPrevious = { viewModel.skipToPrevious() },
                 onToggleShuffle = { viewModel.toggleShuffle() },
                 onCycleRepeat = { viewModel.cycleRepeatMode() },
-                modifier = Modifier.fillMaxWidth().padding(top = 20.dp)
+                modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
+                enabled = !preparingSelection
             )
 
             SleepTimerControl(
@@ -325,21 +383,22 @@ fun NowPlayingScreen(
                 onCancel = viewModel::cancelSleepTimer
             )
 
-            val kbps = nowPlaying.bitrateKbps.takeIf { it > 0 }
-                ?: estimateKbpsFromSize(nowPlaying.sizeBytes, nowPlaying.durationMs).takeIf { it > 0 }
+            val displaySizeBytes = pendingSong?.sizeBytes ?: nowPlaying.sizeBytes
+            val kbps = if (preparingSelection) null else nowPlaying.bitrateKbps.takeIf { it > 0 }
+                ?: estimateKbpsFromSize(displaySizeBytes, displayDurationMs).takeIf { it > 0 }
             AudioMonitorCard(
-                codecLabel = nowPlaying.codecLabel,
-                bitDepthLabel = nowPlaying.bitDepthLabel,
+                codecLabel = if (preparingSelection) "—" else nowPlaying.codecLabel,
+                bitDepthLabel = if (preparingSelection) "—" else nowPlaying.bitDepthLabel,
                 kbpsLabel = kbps?.toString() ?: "—",
-                sizeLabel = sizeLabelFromBytes(nowPlaying.sizeBytes),
-                isLossless = nowPlaying.isLossless,
-                repeatMode = nowPlaying.repeatMode,
-                isPlaying = nowPlaying.isPlaying,
+                sizeLabel = sizeLabelFromBytes(displaySizeBytes),
+                isLossless = !preparingSelection && nowPlaying.isLossless,
+                repeatMode = if (preparingSelection) androidx.media3.common.Player.REPEAT_MODE_OFF else nowPlaying.repeatMode,
+                isPlaying = displayIsPlaying,
                 motionPreference = motionPreference,
                 modifier = Modifier.padding(top = 24.dp, bottom = 24.dp)
             )
 
-            val lyrics = currentLyrics
+            val lyrics = if (preparingSelection) null else currentLyrics
             if (lyrics != null && lyrics.lines.isNotEmpty()) {
                 val lyricsScrollConnection = remember(lyricsExpanded, lyrics) {
                     object : NestedScrollConnection {
@@ -429,6 +488,43 @@ fun NowPlayingScreen(
                     }
                 }
             }
+            }
+        }
+    }
+
+    if (showPlaylistPicker) {
+        Dialog(onDismissRequest = { showPlaylistPicker = false }) {
+            Box(Modifier.widthIn(max = 380.dp).background(MaterialTheme.colorScheme.background)) {
+                TerminalBorder(Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()).padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("ADD TO PLAYLIST", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                        if (playlists.isEmpty()) {
+                            Text("Create a playlist first.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else {
+                            playlists.forEach { playlist ->
+                                TerminalActionText(
+                                    text = "[ ${playlist.name} · ${if (playlist.isRemote) "NAVIDROME" else "LOCAL"} ]",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.fillMaxWidth().clickable {
+                                        selectedSongId?.let { viewModel.addSongToPlaylist(it, playlist.id) }
+                                    }.padding(vertical = 8.dp)
+                                )
+                            }
+                        }
+                        playlistActionMessage?.let { message ->
+                            Text(message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        }
+                        TerminalActionText(
+                            "[ DONE ]",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.align(Alignment.End).clickable { showPlaylistPicker = false }.padding(8.dp)
+                        )
+                    }
+                }
             }
         }
     }

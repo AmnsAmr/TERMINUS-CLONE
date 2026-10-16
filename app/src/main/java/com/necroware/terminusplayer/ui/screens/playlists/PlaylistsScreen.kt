@@ -1,5 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.playlists
 
+import com.necroware.terminusplayer.ui.components.TerminalActionText
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.PaddingValues
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -34,6 +37,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -55,11 +59,14 @@ fun PlaylistsScreen(
 ) {
     val customPlaylists by viewModel.customPlaylists.collectAsStateWithLifecycle()
     val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
+    val publishingPlaylistIds by viewModel.publishingPlaylistIds.collectAsStateWithLifecycle()
     val downloadDialogState by viewModel.downloadDialogState.collectAsStateWithLifecycle()
     val account by viewModel.accountInfo.collectAsStateWithLifecycle()
     var showCreateDialog by remember { mutableStateOf(false) }
     var showOtherUsers by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
+    var playlistToRename by remember { mutableStateOf<Playlist?>(null) }
+    var renamePlaylistName by remember { mutableStateOf("") }
     var playlistSortField by rememberSaveable { mutableStateOf("NAME") }
     var playlistSortAscending by rememberSaveable { mutableStateOf(true) }
     var playlistToDelete by remember { androidx.compose.runtime.mutableStateOf<com.necroware.terminusplayer.data.model.Playlist?>(null) }
@@ -199,10 +206,13 @@ fun PlaylistsScreen(
                             Text(
                                 text = buildString {
                                     append("${playlist.songCount} tracks")
+                                    append(if (playlist.isRemote) "  ·  Navidrome" else "  ·  On device")
                                     if (belongsToOtherUser) append("  ·  by ${playlist.ownerUsername}")
+                                    if (playlist.serverPlaylistMissing) append("  ·  SERVER DELETED · KEEP LOCAL")
+                                    else if (playlist.hasSyncConflict) append("  ·  SYNC CONFLICT · RESOLVE")
                                 },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (playlist.hasSyncConflict) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1
                             )
                         }
@@ -217,6 +227,20 @@ fun PlaylistsScreen(
                                     expanded = false
                                 })
                                 if (!belongsToOtherUser) {
+                                    if (!playlist.isRemote) {
+                                        DropdownMenuItem(
+                                            text = { Text(if (playlist.id in publishingPlaylistIds) "Publishing…" else "Publish to Navidrome") },
+                                            enabled = playlist.id !in publishingPlaylistIds,
+                                            onClick = {
+                                            viewModel.publishPlaylistToServer(playlist.id)
+                                            expanded = false
+                                        })
+                                    }
+                                    DropdownMenuItem(text = { Text("Rename") }, onClick = {
+                                        playlistToRename = playlist
+                                        renamePlaylistName = playlist.name
+                                        expanded = false
+                                    })
                                     DropdownMenuItem(text = { Text("Delete", color = MaterialTheme.colorScheme.error) }, onClick = {
                                         playlistToDelete = playlist
                                         expanded = false
@@ -244,11 +268,11 @@ fun PlaylistsScreen(
 
     if (showCreateDialog) {
         Dialog(onDismissRequest = { showCreateDialog = false }) {
-            Box(Modifier.background(MaterialTheme.colorScheme.background)) {
+            Box(Modifier.widthIn(max = 380.dp).background(MaterialTheme.colorScheme.background)) {
                 TerminalBorder(Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text("NEW PLAYLIST", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                         OutlinedTextField(
@@ -258,24 +282,61 @@ fun PlaylistsScreen(
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
-                        Row(
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                "[ CANCEL ]",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.clickable { showCreateDialog = false }.padding(8.dp)
-                            )
-                            Text(
-                                "[ CREATE ]",
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+                            TerminalActionText(
+                                "[ CREATE LOCAL ]",
                                 color = if (newPlaylistName.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.clickable(enabled = newPlaylistName.isNotBlank()) {
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth().clickable(enabled = newPlaylistName.isNotBlank()) {
                                     viewModel.createPlaylist(newPlaylistName)
                                     newPlaylistName = ""
                                     showCreateDialog = false
-                                }.padding(8.dp)
+                                }.padding(vertical = 10.dp)
                             )
+                            TerminalActionText(
+                                "[ CREATE ON NAVIDROME ]",
+                                color = if (newPlaylistName.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth().clickable(enabled = newPlaylistName.isNotBlank()) {
+                                    viewModel.createServerPlaylist(newPlaylistName)
+                                    newPlaylistName = ""
+                                    showCreateDialog = false
+                                }.padding(vertical = 10.dp)
+                            )
+                            TerminalActionText(
+                                "[ CANCEL ]",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth().clickable { showCreateDialog = false }.padding(vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    playlistToRename?.let { playlist ->
+        Dialog(onDismissRequest = { playlistToRename = null }) {
+            Box(Modifier.background(MaterialTheme.colorScheme.background)) {
+                TerminalBorder(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Text("RENAME PLAYLIST", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                        OutlinedTextField(
+                            value = renamePlaylistName,
+                            onValueChange = { renamePlaylistName = it },
+                            label = { Text("Name") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                            TerminalActionText("[ CANCEL ]", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.clickable { playlistToRename = null }.padding(8.dp))
+                            TerminalActionText("[ SAVE ]", color = if (renamePlaylistName.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.clickable(enabled = renamePlaylistName.isNotBlank()) {
+                                    viewModel.renamePlaylist(playlist.id, renamePlaylistName)
+                                    playlistToRename = null
+                                }.padding(8.dp))
                         }
                     }
                 }
@@ -292,17 +353,21 @@ fun PlaylistsScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         Text("DELETE PLAYLIST?", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                        Text("${playlist.name} will be removed from this device and the server when connected.")
+                        Text(if (playlist.isRemote) {
+                            "${playlist.name} will be deleted from Navidrome when connected."
+                        } else {
+                            "${playlist.name} will be deleted from this device."
+                        })
                         Row(
                             horizontalArrangement = Arrangement.SpaceEvenly,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
+                            TerminalActionText(
                                 "[ CANCEL ]",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.clickable { playlistToDelete = null }.padding(8.dp)
                             )
-                            Text(
+                            TerminalActionText(
                                 "[ CONFIRM DELETE ]",
                                 color = MaterialTheme.colorScheme.error,
                                 modifier = Modifier.clickable {
@@ -334,7 +399,7 @@ fun PlaylistsScreen(
                             }
                             dialogState.error != null -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(dialogState.error, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-                                Text(
+                                TerminalActionText(
                                     "[ RETRY CHECK ]",
                                     color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.clickable {
@@ -352,7 +417,7 @@ fun PlaylistsScreen(
                                         },
                                         style = MaterialTheme.typography.bodyMedium
                                     )
-                                    Text(
+                                    TerminalActionText(
                                         "[ DOWNLOAD MISSING (${plan.downloadableSongs.size}) ]",
                                         color = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.fillMaxWidth().clickable {
@@ -369,7 +434,7 @@ fun PlaylistsScreen(
                                     Text("All available tracks in this playlist are already offline.", style = MaterialTheme.typography.bodyMedium)
                                 }
                                 if (plan.serverSongs.isNotEmpty()) {
-                                    Text(
+                                    TerminalActionText(
                                         "[ FORCE RE-DOWNLOAD (${plan.serverSongs.size}) ]",
                                         color = MaterialTheme.colorScheme.tertiary,
                                         modifier = Modifier.fillMaxWidth().clickable {
@@ -382,7 +447,7 @@ fun PlaylistsScreen(
                             }
                         }
                         Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                            Text(
+                            TerminalActionText(
                                 "[ CANCEL ]",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.clickable {

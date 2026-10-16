@@ -1,5 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.stats
 
+import com.necroware.terminusplayer.ui.components.TerminalActionText
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -289,17 +291,17 @@ private fun TransferQueueActions(
     onCancel: () -> Unit,
     onRetryFailed: () -> Unit
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
         if (queue.any { it.state == "PERMANENT_FAILURE" || it.state == "CONVERSION_FAILED" || it.state == "QUOTA_EXCEEDED" }) {
-            Text("[ RETRY FAILED ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onRetryFailed))
+            TerminalActionText("[ RETRY FAILED ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onRetryFailed))
         }
         if (paused && queue.any { it.state in setOf("WAITING", "FAILED", "UPLOADING", "DOWNLOADING", "CONVERTING") }) {
-            Text("[ RESUME ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onResume))
+            TerminalActionText("[ RESUME ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onResume))
         } else if (!paused && queue.any { it.state in setOf("WAITING", "FAILED", "UPLOADING", "DOWNLOADING", "CONVERTING") }) {
-            Text("[ PAUSE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onPause))
+            TerminalActionText("[ PAUSE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onPause))
         }
         if (queue.any { it.state in setOf("WAITING", "UPLOADING", "DOWNLOADING", "FAILED", "CONVERTING") }) {
-            Text("[ CANCEL TRANSFERS ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.clickable(onClick = onCancel))
+            TerminalActionText("[ CANCEL TRANSFERS ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.clickable(onClick = onCancel))
         }
     }
 }
@@ -334,7 +336,7 @@ private fun TransferQueueRow(
                     modifier = Modifier.weight(1f)
                 )
                 if (isFailure) {
-                    Text("[ RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onRetry))
+                    TerminalActionText("[ RETRY ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable(onClick = onRetry))
                 }
             }
             Text(
@@ -379,7 +381,7 @@ private fun TransferQueueRow(
             }
             item.errorMessage?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (isFailure) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
             if (!active) {
-                Text("[ REMOVE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clickable(onClick = onRemove).padding(vertical = 4.dp))
+                TerminalActionText("[ REMOVE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.clickable(onClick = onRemove).padding(vertical = 4.dp))
             }
         }
     }
@@ -433,7 +435,7 @@ private fun dayFormat(): SimpleDateFormat = SimpleDateFormat("EEE", Locale.getDe
 
 @Composable
 private fun EmptyChartMessage() {
-    Text(
+    TerminalActionText(
         text = "[ no plays recorded in this range yet ]",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -11,6 +11,7 @@ import com.necroware.terminusplayer.playback.NowPlayingState
 import com.necroware.terminusplayer.playback.PlaybackController
 import com.necroware.terminusplayer.data.model.SyncedLyrics
 import com.necroware.terminusplayer.data.model.Song
+import com.necroware.terminusplayer.data.model.Playlist
 import com.necroware.terminusplayer.util.EXTERNAL_AUDIO_MEDIA_ID_PREFIX
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.delay
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
@@ -36,6 +38,12 @@ class PlaybackViewModel @Inject constructor(
 
     private val _sleepTimerRemainingMs = MutableStateFlow<Long?>(null)
     val sleepTimerRemainingMs: StateFlow<Long?> = _sleepTimerRemainingMs.asStateFlow()
+    private val _pendingSong = MutableStateFlow<Song?>(null)
+    val pendingSong: StateFlow<Song?> = _pendingSong.asStateFlow()
+    private val _pendingPlaybackError = MutableStateFlow<String?>(null)
+    val pendingPlaybackError: StateFlow<String?> = _pendingPlaybackError.asStateFlow()
+    private var queueAppliedForPendingSong = false
+    private var latestPlayRequest = 0L
     private var sleepTimerJob: Job? = null
 
     val nowPlaying: StateFlow<NowPlayingState> = controller.state
@@ -87,8 +95,25 @@ class PlaybackViewModel @Inject constructor(
             currentId != null && currentId in likedIds
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
+    val playlists: StateFlow<List<Playlist>> = repository.observeCustomPlaylists()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val _playlistActionMessage = MutableStateFlow<String?>(null)
+    val playlistActionMessage: StateFlow<String?> = _playlistActionMessage.asStateFlow()
+
     init {
         controller.connect()
+        viewModelScope.launch {
+            controller.state.collect { state ->
+                val selected = _pendingSong.value ?: return@collect
+                if (queueAppliedForPendingSong && state.mediaId == selected.id) {
+                    _pendingSong.value = null
+                    _pendingPlaybackError.value = null
+                    queueAppliedForPendingSong = false
+                } else if (state.connectionError != null) {
+                    _pendingPlaybackError.value = state.connectionError
+                }
+            }
+        }
     }
 
     fun togglePlayPause() = controller.togglePlayPause()
@@ -127,12 +152,56 @@ class PlaybackViewModel @Inject constructor(
         viewModelScope.launch { repository.toggleLike(currentId) }
     }
 
+    fun addSongToPlaylist(songId: String, playlistId: String) {
+        viewModelScope.launch {
+            try {
+                _playlistActionMessage.value = when (repository.addSongToPlaylist(playlistId, songId)) {
+                    MusicRepository.AddSongResult.ADDED -> "Added to playlist."
+                    MusicRepository.AddSongResult.ALREADY_PRESENT -> "This track is already in that playlist."
+                    MusicRepository.AddSongResult.LOCAL_ONLY_UNSUPPORTED -> "This track cannot be added to that server playlist."
+                    MusicRepository.AddSongResult.NOT_FOUND -> "Track or playlist is no longer available."
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _playlistActionMessage.value = "Could not add track: ${e.message ?: "Unknown error"}"
+            }
+        }
+    }
+
+    fun clearPlaylistActionMessage() {
+        _playlistActionMessage.value = null
+    }
+
     fun playQueue(items: List<androidx.media3.common.MediaItem>, startIndex: Int) {
         controller.playSongs(items, startIndex)
     }
 
-    fun playSongQueue(songs: List<Song>, startIndex: Int) {
-        controller.playSongsFromSongs(songs, startIndex)
+    fun playSongQueue(songs: List<Song>, startIndex: Int, onPlayerPresented: () -> Unit = {}) {
+        val request = ++latestPlayRequest
+        val selected = songs.getOrNull(startIndex)
+        _pendingSong.value = songs.getOrNull(startIndex)
+        _pendingPlaybackError.value = null
+        queueAppliedForPendingSong = false
+        // Publish the selected song and present the player before asynchronous
+        // URI resolution. Playback still starts only after the controller has
+        // atomically installed the newest requested queue.
+        onPlayerPresented()
+        controller.playSongsFromSongs(songs, startIndex) {
+            if (request != latestPlayRequest) return@playSongsFromSongs
+            queueAppliedForPendingSong = true
+            if (selected != null && controller.state.value.mediaId == selected.id) {
+                _pendingSong.value = null
+                _pendingPlaybackError.value = null
+                queueAppliedForPendingSong = false
+            }
+        }
+    }
+
+    fun clearPendingPlaybackSelection() {
+        _pendingSong.value = null
+        _pendingPlaybackError.value = null
+        queueAppliedForPendingSong = false
     }
 
     fun playExternalAudio(uri: Uri) = controller.playExternalAudio(uri)

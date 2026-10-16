@@ -1,5 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.library
 
+import com.necroware.terminusplayer.ui.components.TerminalActionText
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
@@ -67,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.data.model.Song
+import com.necroware.terminusplayer.data.model.SongTransferStatus
 import com.necroware.terminusplayer.data.model.Album
 import com.necroware.terminusplayer.data.model.Artist
 import com.necroware.terminusplayer.data.prefs.LibrarySortOrder
@@ -104,6 +107,7 @@ fun LibraryScreen(
     val albums by viewModel.albums.collectAsStateWithLifecycle()
     val artists by viewModel.artists.collectAsStateWithLifecycle()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
+    val currentPlayingSongId by viewModel.currentPlayingSongId.collectAsStateWithLifecycle()
     val sortOrder by viewModel.sortOrder.collectAsStateWithLifecycle()
     val actionMessage by viewModel.actionMessage.collectAsStateWithLifecycle()
     val isLibraryLoaded by viewModel.isLibraryLoaded.collectAsStateWithLifecycle()
@@ -161,7 +165,7 @@ fun LibraryScreen(
                     color = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier.weight(1f)
                 )
-                Text(
+                TerminalActionText(
                     text = "[ SEARCH ]",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
@@ -196,7 +200,7 @@ fun LibraryScreen(
             ) {
                 items(LibraryTab.entries, key = { it.name }) { tab ->
                     val selected = tab == selectedTab
-                    Text(
+                    TerminalActionText(
                         text = "[ ${tab.label} ]",
                         style = MaterialTheme.typography.labelSmall,
                         color = if (selected) {
@@ -259,6 +263,7 @@ fun LibraryScreen(
                         onPlayNext = viewModel::playNext,
                         getCachedPreparedSongList = viewModel::cachedPreparedSongList,
                         rememberPreparedSongList = viewModel::rememberPreparedSongList,
+                        currentlyPlayingSongId = currentPlayingSongId,
                         onListPrepared = { initialSongListPrepared = true }
                     )
                 }
@@ -275,7 +280,8 @@ fun LibraryScreen(
                             onAddToPlaylist = { playlistSong = it },
                             onPlayNext = viewModel::playNext,
                             getCachedPreparedSongList = viewModel::cachedPreparedSongList,
-                            rememberPreparedSongList = viewModel::rememberPreparedSongList
+                            rememberPreparedSongList = viewModel::rememberPreparedSongList,
+                            currentlyPlayingSongId = currentPlayingSongId
                         )
                     }
                 }
@@ -378,12 +384,12 @@ fun LibraryScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
+                            TerminalActionText(
                                 "[ CANCEL ]",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.clickable { selectedSongs = emptySet() }.padding(vertical = 10.dp, horizontal = 4.dp)
                             )
-                            Text(
+                            TerminalActionText(
                                 "[ ACTIONS ]",
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.clickable { showBulkActionDialog = true }.padding(vertical = 10.dp, horizontal = 4.dp)
@@ -408,7 +414,7 @@ fun LibraryScreen(
                         val localSelectedCount = selectedSongs.count { it.providerId == "local" }
                         val serverSelectedCount = selectedSongs.count { it.providerId != "local" && it.downloadedUri == null }
                         if (serverSelectedCount > 0) {
-                            Text(
+                            TerminalActionText(
                                 "[ ↓ DOWNLOAD ($serverSelectedCount) ]",
                                 color = MaterialTheme.colorScheme.primary,
                                 maxLines = 1,
@@ -423,7 +429,7 @@ fun LibraryScreen(
                         }
 
                         if (localSelectedCount > 0) {
-                            Text(
+                            TerminalActionText(
                                 "[ ↑ UPLOAD ($localSelectedCount) ]",
                                 color = MaterialTheme.colorScheme.primary,
                                 maxLines = 1,
@@ -438,7 +444,7 @@ fun LibraryScreen(
                         }
 
                         if (playlists.isNotEmpty()) {
-                            Text(
+                            TerminalActionText(
                                 "[ + ADD TO PLAYLIST ]",
                                 color = MaterialTheme.colorScheme.primary,
                                 maxLines = 1,
@@ -461,7 +467,7 @@ fun LibraryScreen(
                             horizontalArrangement = Arrangement.End,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
+                            TerminalActionText(
                                 "[ CANCEL ]",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.clickable { showBulkActionDialog = false }.padding(8.dp)
@@ -485,7 +491,7 @@ fun LibraryScreen(
                         
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.height(200.dp)) {
                             items(playlists, key = { it.id }) { playlist ->
-                                Text(
+                                TerminalActionText(
                                     "[ ${playlist.name} ]",
                                     color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.fillMaxWidth().clickable {
@@ -501,7 +507,7 @@ fun LibraryScreen(
                             horizontalArrangement = Arrangement.End,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
+                            TerminalActionText(
                                 "[ CANCEL ]",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.clickable { showBulkPlaylistDialog = false }.padding(8.dp)
@@ -540,7 +546,7 @@ fun LibraryScreen(
                                 modifier = Modifier.height(240.dp)
                             ) {
                                 items(playlists, key = { it.id }) { playlist ->
-                                    Text(
+                                    TerminalActionText(
                                         text = "[ ${playlist.name} ]",
                                         color = MaterialTheme.colorScheme.primary,
                                         maxLines = 1,
@@ -553,7 +559,7 @@ fun LibraryScreen(
                                 }
                             }
                         }
-                        Text(
+                        TerminalActionText(
                             text = "[ CANCEL ]",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.align(Alignment.End).clickable { playlistSong = null }.padding(8.dp)
@@ -578,6 +584,7 @@ private fun SongList(
     onPlayNext: (Song) -> Unit,
     getCachedPreparedSongList: (List<Song>, SortField) -> PreparedSongList?,
     rememberPreparedSongList: (PreparedSongList) -> Unit,
+    currentlyPlayingSongId: String? = null,
     onListPrepared: () -> Unit = {}
 ) {
     val listState = rememberLazyListState()
@@ -666,6 +673,7 @@ private fun SongList(
                         LibrarySongRow(
                             song = song,
                             isSelected = selectedSongs.contains(song),
+                            isCurrentlyPlaying = song.id == currentlyPlayingSongId,
                             onClick = { onSongClick(song, songs) },
                             onLongClick = { onLongPress(song) },
                             onLike = { onLike(song) },
@@ -710,17 +718,35 @@ internal data class PreparedSongList(
 fun LibrarySongRow(
     song: Song,
     isSelected: Boolean,
+    isCurrentlyPlaying: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onLike: () -> Unit,
     onAddToPlaylist: () -> Unit,
-    onPlayNext: () -> Unit
+    onPlayNext: () -> Unit,
+    transferStatus: SongTransferStatus? = null,
+    onUpload: (() -> Unit)? = null,
+    onDownload: (() -> Unit)? = null,
+    onRetryTransfer: (() -> Unit)? = null,
+    onResolveUploadMatch: (() -> Unit)? = null
 ) {
     val local = song.providerId == "local"
-    val accent = if (isSelected) MaterialTheme.colorScheme.inversePrimary else if (local) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
+    val sourceStatus = when {
+        local && !song.navidromeId.isNullOrBlank() -> "AVAILABLE ON SERVER"
+        local -> "LOCAL ONLY"
+        !song.downloadedUri.isNullOrBlank() -> "DOWNLOADED"
+        else -> "NOT DOWNLOADED"
+    }
+    val accent = when {
+        isSelected -> MaterialTheme.colorScheme.inversePrimary
+        isCurrentlyPlaying -> MaterialTheme.colorScheme.primary
+        local -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.primary
+    }
     val surfaceColor = MaterialTheme.colorScheme.surface
     val bgColor = when {
         isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f).compositeOver(surfaceColor)
+        isCurrentlyPlaying -> MaterialTheme.colorScheme.primary.copy(alpha = 0.12f).compositeOver(surfaceColor)
         local -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.08f).compositeOver(surfaceColor)
         else -> surfaceColor
     }
@@ -844,11 +870,37 @@ fun LibrarySongRow(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "${if (local) "LOCAL" else "SERVER"} · ${song.artist} · ${song.duration.toMinutesSeconds()}${if (song.isLiked) "  [L]" else ""}",
+                            text = "${if (local) "LOCAL" else "SERVER"} · $sourceStatus${transferStatus?.let { " · ${it.label}" }.orEmpty()} · ${song.artist} · ${song.duration.toMinutesSeconds()}${if (song.isLiked) "  [L]" else ""}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    when {
+                        onRetryTransfer != null && transferStatus?.canRetry == true -> TerminalActionText(
+                            "[ RETRY ]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.clickable(onClick = onRetryTransfer).padding(horizontal = 6.dp)
+                        )
+                        onResolveUploadMatch != null && transferStatus?.state in setOf("SUCCESS", "ALREADY_EXISTS") -> TerminalActionText(
+                            "[ MATCH ]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.clickable(onClick = onResolveUploadMatch).padding(horizontal = 6.dp)
+                        )
+                        onUpload != null -> TerminalActionText(
+                            "[ UPLOAD ]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable(onClick = onUpload).padding(horizontal = 6.dp)
+                        )
+                        onDownload != null -> TerminalActionText(
+                            "[ DOWNLOAD ]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable(onClick = onDownload).padding(horizontal = 6.dp)
                         )
                     }
                 }

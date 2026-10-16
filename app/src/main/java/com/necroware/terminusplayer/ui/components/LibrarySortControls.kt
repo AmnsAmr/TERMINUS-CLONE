@@ -40,7 +40,7 @@ fun LibrarySortControls(
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.clickable { showDialog.value = true }.padding(vertical = 6.dp)
         )
-        Text(
+        TerminalActionText(
             text = "[ CHANGE ]",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -70,13 +70,13 @@ fun LibrarySortControls(
                         if (showDirectionControl) {
                             Text("DIRECTION", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween) {
-                                Text(
+                                TerminalActionText(
                                     "[ ASCENDING ]",
                                     color = if (ascending) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
                                     modifier = Modifier.clickable { onDirectionSelected(true) }.padding(vertical = 8.dp)
                                 )
-                                Text(
+                                TerminalActionText(
                                     "[ DESCENDING ]",
                                     color = if (!ascending) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.labelSmall,
@@ -84,7 +84,7 @@ fun LibrarySortControls(
                                 )
                             }
                         }
-                        Text(
+                        TerminalActionText(
                             "[ DONE ]",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.labelSmall,

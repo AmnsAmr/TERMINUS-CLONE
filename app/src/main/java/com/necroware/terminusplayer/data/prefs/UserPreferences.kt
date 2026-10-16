@@ -38,11 +38,15 @@ enum class PlaybackArtStyle {
     VHS
 }
 
-enum class MotionPreference { FULL, REDUCED, OFF }
+enum class MotionPreference { FULL, MEDIUM, OFF, SYSTEM }
 
 internal fun parseMotionPreference(value: String?): MotionPreference =
-    value?.let { candidate -> MotionPreference.entries.firstOrNull { it.name == candidate } }
-        ?: MotionPreference.FULL
+    when (value) {
+        // REDUCED was the previous name for the medium motion setting.
+        "REDUCED" -> MotionPreference.MEDIUM
+        else -> value?.let { candidate -> MotionPreference.entries.firstOrNull { it.name == candidate } }
+            ?: MotionPreference.FULL
+    }
 
 data class LibrarySortOrder(
     val field: SortField = SortField.TITLE,

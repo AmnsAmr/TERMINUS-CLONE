@@ -8,7 +8,6 @@ import com.necroware.terminusplayer.data.repository.GroupListenStats
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.data.repository.StatsRepository
 import com.necroware.terminusplayer.playback.PlaybackController
-import com.necroware.terminusplayer.util.toMediaItems
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -75,12 +74,12 @@ class AlbumDetailViewModel @Inject constructor(
 
     fun playAll() {
         val songs = _uiState.value.songs
-        if (songs.isNotEmpty()) playbackController.playSongs(songs.toMediaItems(), 0)
+        if (songs.isNotEmpty()) playbackController.playSongsFromSongs(songs, 0)
     }
 
     fun playFrom(song: Song) {
         val songs = _uiState.value.songs
         val index = songs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
-        playbackController.playSongs(songs.toMediaItems(), index)
+        playbackController.playSongsFromSongs(songs, index)
     }
 }

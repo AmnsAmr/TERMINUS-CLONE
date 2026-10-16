@@ -1,5 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.albumdetail
 
+import com.necroware.terminusplayer.ui.components.TerminalActionText
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -69,7 +71,7 @@ fun AlbumDetailScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Text(
+                    TerminalActionText(
                         text = "[ ${state.songs.size} tracks ]",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -65,6 +65,10 @@ class LibraryViewModel @Inject constructor(
     val playlists: StateFlow<List<Playlist>> = repository.observeCustomPlaylists()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val currentPlayingSongId: StateFlow<String?> = playbackController.state
+        .map { state -> state.mediaId.takeIf { state.isPlaying } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage = _actionMessage.asStateFlow()
 
@@ -109,15 +113,29 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun addSongToPlaylist(playlistId: String, songId: String) = viewModelScope.launch {
-        repository.addSongToPlaylist(playlistId, songId)
-        _actionMessage.value = "Added to playlist. Server sync will run when connected."
+        _actionMessage.value = when (repository.addSongToPlaylist(playlistId, songId)) {
+            MusicRepository.AddSongResult.ADDED -> "Added to playlist. Server sync will run when connected."
+            MusicRepository.AddSongResult.ALREADY_PRESENT -> "Track is already in that playlist."
+            MusicRepository.AddSongResult.LOCAL_ONLY_UNSUPPORTED -> "This local-only track cannot be added to a Navidrome playlist."
+            MusicRepository.AddSongResult.NOT_FOUND -> "Track or playlist is no longer available."
+        }
     }
 
     fun addSongsToPlaylist(playlistId: String, songIds: List<String>) = viewModelScope.launch {
-        songIds.forEach { songId ->
-            repository.addSongToPlaylist(playlistId, songId)
+        var added = 0
+        var localOnly = 0
+        var duplicates = 0
+        songIds.distinct().forEach { songId ->
+            when (repository.addSongToPlaylist(playlistId, songId)) {
+                MusicRepository.AddSongResult.ADDED -> added++
+                MusicRepository.AddSongResult.LOCAL_ONLY_UNSUPPORTED -> localOnly++
+                MusicRepository.AddSongResult.ALREADY_PRESENT -> duplicates++
+                MusicRepository.AddSongResult.NOT_FOUND -> Unit
+            }
         }
-        _actionMessage.value = "Added ${songIds.size} songs to playlist."
+        _actionMessage.value = if (localOnly > 0) {
+            "Added $added songs; $localOnly local-only tracks cannot be added to a Navidrome playlist${if (duplicates > 0) "; $duplicates already present" else ""}."
+        } else "Added $added songs${if (duplicates > 0) "; $duplicates already present" else ""}."
     }
 
     fun uploadSong(song: Song) = viewModelScope.launch {
@@ -126,8 +144,13 @@ class LibraryViewModel @Inject constructor(
 
     fun uploadSongs(songs: List<Song>) = viewModelScope.launch {
         try {
-            uploadQueueManager.enqueueUploads(songs)
-            _actionMessage.value = "Queued ${songs.size} ${if (songs.size == 1) "song" else "songs"} for upload."
+            val localOnly = songs.filter { it.providerId == "local" && it.navidromeId.isNullOrBlank() }.distinctBy { it.id }
+            if (localOnly.isEmpty()) {
+                _actionMessage.value = "No selected local-only tracks need uploading."
+            } else {
+                uploadQueueManager.enqueueUploads(localOnly)
+                _actionMessage.value = "Queued ${localOnly.size} local-only ${if (localOnly.size == 1) "song" else "songs"} for upload."
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
