@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
@@ -24,15 +25,17 @@ fun SongArt(
     modifier: Modifier = Modifier,
     size: Dp = 56.dp
 ) {
-    val model = if (uriString.isBlank()) {
-        null
-    } else if (uriString.startsWith("terminus://")) {
-        val songId = uriString.removePrefix("terminus://")
-        // NetworkModule replaces this sentinel with the configured server URL.
-        // It must never point at device localhost when configuration is absent.
-        "https://terminus.invalid/rest/getCoverArt?id=$songId&v=1.16.1&c=Terminus"
-    } else {
-        com.necroware.terminusplayer.coil.LocalAudioUri(uriString)
+    val model = remember(uriString) {
+        if (uriString.isBlank()) {
+            null
+        } else if (uriString.startsWith("terminus://")) {
+            val songId = uriString.removePrefix("terminus://")
+            // NetworkModule replaces this sentinel with the configured server URL.
+            // It must never point at device localhost when configuration is absent.
+            "https://terminus.invalid/rest/getCoverArt?id=$songId&v=1.16.1&c=Terminus"
+        } else {
+            com.necroware.terminusplayer.coil.LocalAudioUri(uriString)
+        }
     }
 
     SubcomposeAsyncImage(

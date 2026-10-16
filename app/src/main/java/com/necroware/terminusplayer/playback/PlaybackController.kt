@@ -8,6 +8,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
@@ -43,6 +44,7 @@ import kotlinx.coroutines.flow.first
 import androidx.media3.common.C
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.util.concurrent.atomic.AtomicLong
 
 data class NowPlayingState(
     val mediaId: String? = null,
@@ -85,6 +87,7 @@ class PlaybackController @Inject constructor(
     private val readyCallbacks = mutableListOf<() -> Unit>()
     private val playbackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var queueResolutionJob: Job? = null
+    private val queueRequestGeneration = AtomicLong(0L)
     private var seekResolutionJob: Job? = null
 
     private val controllerListener = object : MediaController.Listener {
@@ -201,20 +204,33 @@ class PlaybackController @Inject constructor(
     }
 
     fun playSongs(items: List<MediaItem>, startIndex: Int) {
-        playSongsWithItems({ items }, startIndex)
+        val generation = queueRequestGeneration.incrementAndGet()
+        _state.value = _state.value.copy(connectionError = null)
+        playSongsWithItems({ items }, startIndex, generation = generation)
     }
 
-    fun playSongsFromSongs(songs: List<Song>, startIndex: Int) {
-        playSongsWithItems({ withContext(Dispatchers.Default) { songs.map { it.toMediaItem() } } }, startIndex)
+    fun playSongsFromSongs(songs: List<Song>, startIndex: Int, onQueueStarted: () -> Unit = {}) {
+        val generation = queueRequestGeneration.incrementAndGet()
+        _state.value = _state.value.copy(connectionError = null)
+        playSongsWithItems(
+            itemsProvider = { withContext(Dispatchers.Default) { songs.map { it.toMediaItem() } } },
+            startIndex = startIndex,
+            songsForResolution = songs,
+            generation = generation,
+            onQueueStarted = onQueueStarted
+        )
     }
 
     fun playExternalAudio(uri: Uri) {
+        val generation = queueRequestGeneration.incrementAndGet()
         connect {
             queueResolutionJob?.cancel()
             queueResolutionJob = playbackScope.launch {
                 try {
                     val item = createExternalAudioItem(uri)
+                    if (generation != queueRequestGeneration.get()) return@launch
                     withContext(Dispatchers.Main.immediate) {
+                        if (generation != queueRequestGeneration.get()) return@withContext
                         _state.value = _state.value.copy(connectionError = null)
                         controller?.apply {
                             setMediaItem(item)
@@ -302,26 +318,43 @@ class PlaybackController @Inject constructor(
         }
     }
 
-    private fun playSongsWithItems(itemsProvider: suspend () -> List<MediaItem>, startIndex: Int) {
-        queueResolutionJob?.cancel()
-        queueResolutionJob = playbackScope.launch {
-            try {
-                val items = itemsProvider()
-                val resolvedUris = musicRepository.getSongUris(items.map { it.mediaId })
-                val resolvedItems = items.map { item ->
-                    resolvedUris[item.mediaId]?.let { item.buildUpon().setUri(Uri.parse(it)).build() } ?: item
-                }
-                withContext(Dispatchers.Main.immediate) {
-                    controller?.apply {
-                        setMediaItems(resolvedItems, startIndex, 0L)
-                        prepare()
-                        play()
+    private fun playSongsWithItems(
+        itemsProvider: suspend () -> List<MediaItem>,
+        startIndex: Int,
+        songsForResolution: List<Song>? = null,
+        generation: Long,
+        onQueueStarted: () -> Unit = {}
+    ) {
+        connect {
+            queueResolutionJob?.cancel()
+            queueResolutionJob = playbackScope.launch {
+                try {
+                    val items = itemsProvider()
+                    if (items.isEmpty()) return@launch
+                    val safeStartIndex = startIndex.coerceIn(0, items.lastIndex)
+                    val resolvedUris = if (songsForResolution != null) {
+                        musicRepository.resolvePlaybackUris(songsForResolution)
+                    } else {
+                        musicRepository.getSongUris(items.map { it.mediaId })
                     }
+                    val resolvedItems = items.map { item ->
+                        resolvedUris[item.mediaId]?.let { item.buildUpon().setUri(Uri.parse(it)).build() } ?: item
+                    }
+                    if (generation != queueRequestGeneration.get()) return@launch
+                    withContext(Dispatchers.Main.immediate) {
+                        if (generation != queueRequestGeneration.get()) return@withContext
+                        val activeController = controller ?: return@withContext
+                        _state.value = _state.value.copy(connectionError = null)
+                        activeController.setMediaItems(resolvedItems, safeStartIndex, 0L)
+                        activeController.prepare()
+                        activeController.play()
+                        onQueueStarted()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    _state.value = _state.value.copy(connectionError = e.message ?: "Unable to prepare playback")
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                _state.value = _state.value.copy(connectionError = e.message ?: "Unable to prepare playback")
             }
         }
     }
@@ -440,6 +473,7 @@ class PlaybackController @Inject constructor(
     } ?: 0L
     fun durationMs(): Long = controller?.duration?.coerceAtLeast(0L) ?: 0L
 
+    @UnstableApi
     private fun updateFromController() {
         val c = controller ?: return
         val metadata = c.mediaMetadata
