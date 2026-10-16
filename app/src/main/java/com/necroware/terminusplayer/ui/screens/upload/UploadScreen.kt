@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.ui.components.TerminalBorder
+import com.necroware.terminusplayer.ui.components.TerminalHeader
 import com.necroware.terminusplayer.ui.components.TerminalState
 import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
 
@@ -48,12 +49,10 @@ fun UploadScreen(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         item {
-        Text(
-            text = "> UPLOAD_",
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.padding(top = 20.dp)
-        )
+            TerminalHeader(
+                title = "UPLOAD",
+                modifier = Modifier.padding(top = 20.dp)
+            )
         }
         item {
         Text(
@@ -123,7 +122,10 @@ fun UploadScreen(
         item {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Column {
-                    Text("> QUEUE_", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onBackground)
+                    TerminalHeader(
+                        title = "QUEUE",
+                        textStyle = MaterialTheme.typography.titleMedium
+                    )
                     Text(
                         "${queue.count { it.state == "UPLOADING" || it.state == "DOWNLOADING" }} active · " +
                             "${queue.count { it.state == "WAITING" || it.state == "FAILED" }} pending · " +

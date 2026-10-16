@@ -77,6 +77,7 @@ import com.necroware.terminusplayer.data.prefs.SortDirection
 import com.necroware.terminusplayer.data.prefs.SortField
 import com.necroware.terminusplayer.ui.components.SongArt
 import com.necroware.terminusplayer.ui.components.TerminalBorder
+import com.necroware.terminusplayer.ui.components.TerminalHeader
 import com.necroware.terminusplayer.ui.components.TerminalState
 import com.necroware.terminusplayer.ui.components.FastScrollRail
 import com.necroware.terminusplayer.ui.components.LibrarySortControls
@@ -159,10 +160,8 @@ fun LibraryScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "> LIBRARY_",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
+                TerminalHeader(
+                    title = "LIBRARY",
                     modifier = Modifier.weight(1f)
                 )
                 TerminalActionText(

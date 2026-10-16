@@ -68,6 +68,7 @@ import com.necroware.terminusplayer.ui.screens.search.SearchScreen
 import com.necroware.terminusplayer.ui.screens.settings.SettingsScreen
 import com.necroware.terminusplayer.ui.screens.stats.StatsScreen
 import com.necroware.terminusplayer.ui.theme.LocalAppPalette
+import com.necroware.terminusplayer.ui.theme.rememberAdaptiveAccent
 
 /** Index within the bottom-nav tab order, used to pick left/right slide direction. -1 if not a tab route. */
 private fun tabIndex(route: String?): Int = bottomNavItems.indexOfFirst { it.route == route }
@@ -182,6 +183,13 @@ fun TerminusNavGraph(
     val playbackViewModel: PlaybackViewModel = hiltViewModel()
     val nowPlaying by playbackViewModel.nowPlaying.collectAsStateWithLifecycle()
     val currentSongUri by playbackViewModel.currentSongUri.collectAsStateWithLifecycle()
+    val prefs by playbackViewModel.preferences.collectAsStateWithLifecycle()
+    val defaultAccent = MaterialTheme.colorScheme.primary
+    val miniAccent = rememberAdaptiveAccent(
+        artworkUri = currentSongUri.takeIf { !it.isNullOrBlank() } ?: nowPlaying.artworkUri,
+        defaultAccent = defaultAccent,
+        enabled = prefs.adaptiveArtAccent
+    )
     var soundControlOpen by remember { mutableStateOf(false) }
     var soundControlOnLeft by remember { mutableStateOf(true) }
     var soundVolume by remember { mutableFloatStateOf(playbackViewModel.currentVolume()) }
@@ -219,14 +227,20 @@ fun TerminusNavGraph(
         bottomBar = {
             if (currentRoute !in hideChromeRoutes) {
                 Column {
-                    MiniPlayerBar(
-                        nowPlaying = nowPlaying,
-                        currentSongUri = currentSongUri,
-                        onTogglePlayPause = { playbackViewModel.togglePlayPause() },
-                        onSkipNext = { playbackViewModel.skipToNext() },
-                        onSkipPrevious = { playbackViewModel.skipToPrevious() },
-                        onClick = { navController.navigate(Destination.NowPlaying.route) }
+                    val miniColorScheme = MaterialTheme.colorScheme.copy(
+                        primary = miniAccent,
+                        outline = miniAccent.copy(alpha = 0.5f)
                     )
+                    MaterialTheme(colorScheme = miniColorScheme) {
+                        MiniPlayerBar(
+                            nowPlaying = nowPlaying,
+                            currentSongUri = currentSongUri,
+                            onTogglePlayPause = { playbackViewModel.togglePlayPause() },
+                            onSkipNext = { playbackViewModel.skipToNext() },
+                            onSkipPrevious = { playbackViewModel.skipToPrevious() },
+                            onClick = { navController.navigate(Destination.NowPlaying.route) }
+                        )
+                    }
                     NavigationBar(containerColor = appPalette.navigationBackground) {
                         bottomNavItems.forEach { destination ->
                             NavigationBarItem(

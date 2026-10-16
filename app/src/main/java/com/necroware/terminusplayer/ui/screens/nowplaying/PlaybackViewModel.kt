@@ -5,6 +5,7 @@ import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
+import com.necroware.terminusplayer.data.prefs.UserPreferences
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.playback.NowPlayingState
@@ -38,6 +39,13 @@ class PlaybackViewModel @Inject constructor(
 
     private val _sleepTimerRemainingMs = MutableStateFlow<Long?>(null)
     val sleepTimerRemainingMs: StateFlow<Long?> = _sleepTimerRemainingMs.asStateFlow()
+    private val _isSleepCollapsing = MutableStateFlow(false)
+    val isSleepCollapsing: StateFlow<Boolean> = _isSleepCollapsing.asStateFlow()
+    private var initialVolumeForFade: Float? = null
+
+    val preferences: StateFlow<UserPreferences> = preferencesRepository.preferences
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UserPreferences())
+
     private val _pendingSong = MutableStateFlow<Song?>(null)
     val pendingSong: StateFlow<Song?> = _pendingSong.asStateFlow()
     private val _pendingPlaybackError = MutableStateFlow<String?>(null)
@@ -52,6 +60,20 @@ class PlaybackViewModel @Inject constructor(
     val artStyle: StateFlow<PlaybackArtStyle> = preferencesRepository.preferences
         .map { it.playbackArtStyle }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), PlaybackArtStyle.STANDARD)
+
+    val bufferedPositionMs: StateFlow<Long> = flow {
+        while (true) {
+            emit(controller.bufferedPositionMs())
+            delay(if (nowPlaying.value.isPlaying) 1000L else 3000L)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
+
+    val serverPingMs: StateFlow<Long?> = flow {
+        while (true) {
+            emit(repository.pingServer())
+            delay(10_000L)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     /**
      * Media3's MediaController doesn't preserve a MediaItem's local content
@@ -128,23 +150,45 @@ class PlaybackViewModel @Inject constructor(
     fun startSleepTimer(minutes: Int) {
         if (minutes <= 0) return
         sleepTimerJob?.cancel()
+        initialVolumeForFade?.let { controller.setVolume(it) }
+        val initialVolume = controller.currentVolume().coerceAtLeast(0.05f)
+        initialVolumeForFade = initialVolume
+
         sleepTimerJob = viewModelScope.launch {
             val deadline = SystemClock.elapsedRealtime() + minutes * 60_000L
             while (true) {
                 val remaining = deadline - SystemClock.elapsedRealtime()
                 if (remaining <= 0L) break
                 _sleepTimerRemainingMs.value = remaining
+                if (remaining <= 60_000L) {
+                    val volumeFraction = (remaining.toFloat() / 60_000f).coerceIn(0f, 1f)
+                    controller.setVolume(initialVolume * volumeFraction)
+                }
                 delay(minOf(remaining, 1_000L))
             }
-            _sleepTimerRemainingMs.value = null
+            _sleepTimerRemainingMs.value = 0L
+            _isSleepCollapsing.value = true
+            delay(380L)
             controller.stopPlayback()
+            controller.setVolume(initialVolume)
+            _isSleepCollapsing.value = false
+            _sleepTimerRemainingMs.value = null
+            initialVolumeForFade = null
         }
     }
 
     fun cancelSleepTimer() {
         sleepTimerJob?.cancel()
         sleepTimerJob = null
+        initialVolumeForFade?.let { controller.setVolume(it) }
+        initialVolumeForFade = null
+        _isSleepCollapsing.value = false
         _sleepTimerRemainingMs.value = null
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        initialVolumeForFade?.let { controller.setVolume(it) }
     }
 
     fun toggleCurrentLike() {

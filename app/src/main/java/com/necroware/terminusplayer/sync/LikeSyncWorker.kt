@@ -5,6 +5,7 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.necroware.terminusplayer.data.repository.MusicRepository
+import com.necroware.terminusplayer.data.prefs.OptionalWorkGate
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
@@ -13,12 +14,14 @@ import kotlinx.coroutines.CancellationException
 class LikeSyncWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
-    private val musicRepository: MusicRepository
+    private val musicRepository: MusicRepository,
+    private val optionalWorkGate: OptionalWorkGate
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
         val songId = inputData.getString(KEY_SONG_ID) ?: return Result.failure()
         return try {
+            if (optionalWorkGate.shouldDefer()) return Result.retry()
             musicRepository.syncPendingLike(songId)
             Result.success()
         } catch (e: CancellationException) {

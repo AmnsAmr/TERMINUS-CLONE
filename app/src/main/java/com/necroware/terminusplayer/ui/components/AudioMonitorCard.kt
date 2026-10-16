@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
 import com.necroware.terminusplayer.data.prefs.MotionPreference
 import kotlinx.coroutines.Dispatchers
+import com.necroware.terminusplayer.data.prefs.HudTelemetryMode
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 
@@ -32,7 +33,14 @@ fun AudioMonitorCard(
     repeatMode: Int,
     modifier: Modifier = Modifier,
     isPlaying: Boolean = false,
-    motionPreference: MotionPreference = MotionPreference.FULL
+    motionPreference: MotionPreference = MotionPreference.FULL,
+    telemetryMode: HudTelemetryMode = HudTelemetryMode.STANDARD,
+    sampleRateLabel: String = "—",
+    audioSessionId: Int = -1,
+    channelCount: Int = 2,
+    bufferRemainingSec: Long = 0L,
+    serverPingMs: Long? = null,
+    preferHardwareDecoder: Boolean = true
 ) {
     val context = LocalContext.current
 
@@ -69,7 +77,7 @@ fun AudioMonitorCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "AUDIO MONITOR",
+                    text = if (telemetryMode == HudTelemetryMode.EXPANDED) "HUD TELEMETRY [DEV/HACKER]" else "AUDIO MONITOR",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -80,19 +88,36 @@ fun AudioMonitorCard(
                 )
             }
 
-            MonitorRow("fmt", codecLabel, "bit: $bitDepthLabel")
-            MonitorRow("kbps", kbpsLabel, "size: $sizeLabel")
+            if (telemetryMode == HudTelemetryMode.EXPANDED) {
+                val decoderName = if (preferHardwareDecoder) "HW.DSP ($codecLabel)" else "c2.android.${codecLabel.lowercase()}.decoder"
+                val channelLabel = when (channelCount) {
+                    1 -> "1ch (MONO)"
+                    2 -> "2ch (STEREO)"
+                    6 -> "5.1 SURROUND"
+                    else -> if (channelCount > 0) "${channelCount}ch" else "—"
+                }
+                MonitorRow("decoder", decoderName, "")
+                MonitorRow("fmt", codecLabel, "bit: $bitDepthLabel-bit")
+                MonitorRow("rate", sampleRateLabel, "kbps: $kbpsLabel")
+                MonitorRow("session", if (audioSessionId > 0) "#$audioSessionId" else "—", channelLabel)
+                MonitorRow("buffer", "+${bufferRemainingSec}s", "size: $sizeLabel")
+                MonitorRow("server ping", serverPingMs?.let { "${it}ms" } ?: "OFFLINE / LOCAL", "VOL $volumePercent%")
+                MonitorRow("device", deviceReadout.audioDevice, "CPU: ${deviceReadout.cpuPercent}%")
+            } else {
+                MonitorRow("fmt", codecLabel, "bit: $bitDepthLabel")
+                MonitorRow("kbps", kbpsLabel, "size: $sizeLabel")
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp)
-                    .height(1.dp)
-                    .background(MaterialTheme.colorScheme.outline)
-            )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp)
+                        .height(1.dp)
+                        .background(MaterialTheme.colorScheme.outline)
+                )
 
-            MonitorRow("device", deviceReadout.audioDevice, "VOL $volumePercent%")
-            MonitorRow("cpu", "${deviceReadout.cpuPercent}%", "")
+                MonitorRow("device", deviceReadout.audioDevice, "VOL $volumePercent%")
+                MonitorRow("cpu", "${deviceReadout.cpuPercent}%", "")
+            }
 
             SimulatedSpectrum(
                 isPlaying = isPlaying && motionPreference == MotionPreference.FULL,

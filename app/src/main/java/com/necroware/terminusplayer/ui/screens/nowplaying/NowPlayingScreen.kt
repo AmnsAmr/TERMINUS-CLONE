@@ -1,6 +1,13 @@
 package com.necroware.terminusplayer.ui.screens.nowplaying
 
 import com.necroware.terminusplayer.ui.components.TerminalActionText
+import com.necroware.terminusplayer.ui.components.CrtScanlineOverlay
+import com.necroware.terminusplayer.ui.components.CrtCollapseOverlay
+import com.necroware.terminusplayer.ui.components.rememberTerminalCursor
+import com.necroware.terminusplayer.ui.components.rememberTerminalHaptics
+import com.necroware.terminusplayer.ui.theme.rememberAdaptiveAccent
+import com.necroware.terminusplayer.ui.theme.LocalAppPalette
+import androidx.compose.runtime.CompositionLocalProvider
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
@@ -208,11 +215,24 @@ fun NowPlayingScreen(
     val artStyle by viewModel.artStyle.collectAsStateWithLifecycle()
     val currentLyrics by viewModel.currentLyrics.collectAsStateWithLifecycle()
     val sleepTimerRemainingMs by viewModel.sleepTimerRemainingMs.collectAsStateWithLifecycle()
+    val prefs by viewModel.preferences.collectAsStateWithLifecycle()
+    val isSleepCollapsing by viewModel.isSleepCollapsing.collectAsStateWithLifecycle()
+    val bufferedPositionMs by viewModel.bufferedPositionMs.collectAsStateWithLifecycle()
+    val serverPingMs by viewModel.serverPingMs.collectAsStateWithLifecycle()
+    val haptic = rememberTerminalHaptics(prefs.terminalHaptics)
+    val cursor = rememberTerminalCursor(prefs.cursorStyle, prefs.cursorBlinkCadence, motionPreference)
+
     val preparingSelection = pendingSong != null
     val displayTitle = pendingSong?.title ?: nowPlaying.title
     val displayArtist = pendingSong?.artist ?: nowPlaying.artist
     val displayDurationMs = pendingSong?.duration ?: nowPlaying.durationMs
     val displaySongUri = pendingSong?.uriString ?: currentSongUri.orEmpty()
+    val defaultAccent = MaterialTheme.colorScheme.primary
+    val adaptiveAccent = rememberAdaptiveAccent(
+        artworkUri = displaySongUri.takeIf { it.isNotBlank() } ?: nowPlaying.artworkUri,
+        defaultAccent = defaultAccent,
+        enabled = prefs.adaptiveArtAccent
+    )
     val displayIsPlaying = !preparingSelection && nowPlaying.isPlaying
     val displayPositionMs = if (preparingSelection) 0L else positionMs
     val collapsePlayer = {
@@ -267,50 +287,78 @@ fun NowPlayingScreen(
         }
     )
 
+    val themedColorScheme = MaterialTheme.colorScheme.copy(
+        primary = adaptiveAccent,
+        outline = adaptiveAccent.copy(alpha = 0.5f)
+    )
+    val themedPalette = LocalAppPalette.current.copy(
+        accent = adaptiveAccent,
+        border = adaptiveAccent.copy(alpha = 0.5f),
+        visualizerPrimary = adaptiveAccent
+    )
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .onSizeChanged { screenHeightPx = it.height.toFloat().coerceAtLeast(1f) }
             .offset { IntOffset(0, dragOffsetPx.roundToInt()) }
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 24.dp)
-                .verticalScroll(scrollState),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Top
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "︿",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { collapsePlayer() }
-                )
-                if (!selectedSongIsExternal) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        TerminalActionText(
-                            text = "[ + PLAYLIST ]",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.clickable(enabled = selectedSongId != null) {
-                                viewModel.clearPlaylistActionMessage()
-                                showPlaylistPicker = true
+        CompositionLocalProvider(LocalAppPalette provides themedPalette) {
+            MaterialTheme(colorScheme = themedColorScheme) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 24.dp)
+                        .verticalScroll(scrollState),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Top
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "︿",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable {
+                                haptic(false)
+                                collapsePlayer()
                             }
                         )
-                        TerminalActionText(
-                            text = if (!preparingSelection && isLiked) "[LIKED]" else "[LIKE]",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = if (!preparingSelection && isLiked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.clickable(enabled = !preparingSelection) { viewModel.toggleCurrentLike() }
-                        )
+                        if (sleepTimerRemainingMs != null) {
+                            val totalSec = (sleepTimerRemainingMs!! + 999L) / 1000L
+                            Text(
+                                text = "T-MINUS %02d:%02d%s".format(totalSec / 60L, totalSec % 60L, cursor),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        if (!selectedSongIsExternal) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                TerminalActionText(
+                                    text = "[ + PLAYLIST ]",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.clickable(enabled = selectedSongId != null) {
+                                        haptic(false)
+                                        viewModel.clearPlaylistActionMessage()
+                                        showPlaylistPicker = true
+                                    }
+                                )
+                                TerminalActionText(
+                                    text = if (!preparingSelection && isLiked) "[LIKED]" else "[LIKE]",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = if (!preparingSelection && isLiked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.clickable(enabled = !preparingSelection) {
+                                        haptic(false)
+                                        viewModel.toggleCurrentLike()
+                                    }
+                                )
+                            }
+                        }
                     }
-                }
-            }
 
             // Playback Art / Song Art
             if (artStyle == com.necroware.terminusplayer.data.prefs.PlaybackArtStyle.STANDARD) {
@@ -361,18 +409,36 @@ fun NowPlayingScreen(
                 isPlaying = displayIsPlaying,
                 motionPreference = motionPreference,
                 enabled = !preparingSelection,
-                onSeek = viewModel::seekTo
+                onSeek = {
+                    haptic(true)
+                    viewModel.seekTo(it)
+                }
             )
 
             FullTransportControls(
                 isPlaying = displayIsPlaying,
                 shuffleEnabled = !preparingSelection && nowPlaying.shuffleEnabled,
                 repeatMode = if (preparingSelection) androidx.media3.common.Player.REPEAT_MODE_OFF else nowPlaying.repeatMode,
-                onTogglePlayPause = { viewModel.togglePlayPause() },
-                onSkipNext = { viewModel.skipToNext() },
-                onSkipPrevious = { viewModel.skipToPrevious() },
-                onToggleShuffle = { viewModel.toggleShuffle() },
-                onCycleRepeat = { viewModel.cycleRepeatMode() },
+                onTogglePlayPause = {
+                    haptic(false)
+                    viewModel.togglePlayPause()
+                },
+                onSkipNext = {
+                    haptic(true)
+                    viewModel.skipToNext()
+                },
+                onSkipPrevious = {
+                    haptic(true)
+                    viewModel.skipToPrevious()
+                },
+                onToggleShuffle = {
+                    haptic(false)
+                    viewModel.toggleShuffle()
+                },
+                onCycleRepeat = {
+                    haptic(false)
+                    viewModel.cycleRepeatMode()
+                },
                 modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
                 enabled = !preparingSelection
             )
@@ -386,6 +452,7 @@ fun NowPlayingScreen(
             val displaySizeBytes = pendingSong?.sizeBytes ?: nowPlaying.sizeBytes
             val kbps = if (preparingSelection) null else nowPlaying.bitrateKbps.takeIf { it > 0 }
                 ?: estimateKbpsFromSize(displaySizeBytes, displayDurationMs).takeIf { it > 0 }
+            val bufferAheadSec = if (preparingSelection) 0L else ((bufferedPositionMs - displayPositionMs) / 1000L).coerceAtLeast(0L)
             AudioMonitorCard(
                 codecLabel = if (preparingSelection) "—" else nowPlaying.codecLabel,
                 bitDepthLabel = if (preparingSelection) "—" else nowPlaying.bitDepthLabel,
@@ -395,6 +462,13 @@ fun NowPlayingScreen(
                 repeatMode = if (preparingSelection) androidx.media3.common.Player.REPEAT_MODE_OFF else nowPlaying.repeatMode,
                 isPlaying = displayIsPlaying,
                 motionPreference = motionPreference,
+                telemetryMode = prefs.hudTelemetryMode,
+                sampleRateLabel = if (preparingSelection) "—" else nowPlaying.sampleRateLabel,
+                audioSessionId = if (preparingSelection) -1 else nowPlaying.audioSessionId,
+                channelCount = if (preparingSelection) 2 else nowPlaying.channelCount,
+                bufferRemainingSec = bufferAheadSec,
+                serverPingMs = if (preparingSelection) null else serverPingMs,
+                preferHardwareDecoder = prefs.preferHardwareDecoder,
                 modifier = Modifier.padding(top = 24.dp, bottom = 24.dp)
             )
 
@@ -490,6 +564,15 @@ fun NowPlayingScreen(
             }
             }
         }
+        }
+        }
+        CrtScanlineOverlay(
+            intensity = prefs.scanlineIntensity,
+            phosphorAfterglow = prefs.phosphorAfterglow
+        )
+        CrtCollapseOverlay(
+            isCollapsing = isSleepCollapsing
+        )
     }
 
     if (showPlaylistPicker) {

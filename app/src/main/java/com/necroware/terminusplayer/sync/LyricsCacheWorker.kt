@@ -6,6 +6,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.necroware.terminusplayer.data.repository.MusicRepository
+import com.necroware.terminusplayer.data.prefs.OptionalWorkGate
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CancellationException
@@ -15,13 +16,15 @@ import kotlinx.coroutines.CancellationException
 class LyricsCacheWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
-    private val repository: MusicRepository
+    private val repository: MusicRepository,
+    private val optionalWorkGate: OptionalWorkGate
 ) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val songId = inputData.getString(KEY_SONG_ID) ?: return Result.failure(
             workDataOf(KEY_ERROR to "Missing song identity")
         )
         return try {
+            if (optionalWorkGate.shouldDefer()) return Result.retry()
             repository.warmLyricsCache(songId)
             Result.success()
         } catch (e: CancellationException) {

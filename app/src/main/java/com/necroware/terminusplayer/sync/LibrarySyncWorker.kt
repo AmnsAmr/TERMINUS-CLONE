@@ -5,6 +5,7 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.necroware.terminusplayer.data.repository.MusicRepository
+import com.necroware.terminusplayer.data.prefs.OptionalWorkGate
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
@@ -15,11 +16,13 @@ import kotlinx.coroutines.withContext
 class LibrarySyncWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
-    private val musicRepository: MusicRepository
+    private val musicRepository: MusicRepository,
+    private val optionalWorkGate: OptionalWorkGate
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
+            if (optionalWorkGate.shouldDefer()) return@withContext Result.retry()
             val result = musicRepository.syncLibrary()
             when {
                 result.retryableFailures.isNotEmpty() -> Result.retry()

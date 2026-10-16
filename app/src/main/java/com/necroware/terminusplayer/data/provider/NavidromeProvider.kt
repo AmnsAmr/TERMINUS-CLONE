@@ -13,6 +13,7 @@ import kotlinx.coroutines.CancellationException
 import javax.inject.Inject
 import javax.inject.Singleton
 import java.io.IOException
+import android.os.SystemClock
 
 @Singleton
 class NavidromeProvider @Inject constructor(
@@ -219,6 +220,26 @@ class NavidromeProvider @Inject constructor(
             }
 
             return null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    override suspend fun ping(): Long? {
+        val prefs = prefsRepo.preferences.first()
+        val username = prefs.username
+        val password = prefs.password
+        if (prefs.serverUrl.isBlank() || username.isBlank() || password.isBlank()) return null
+        val salt = newSubsonicSalt()
+        val token = buildSubsonicToken(password, salt)
+        val start = SystemClock.elapsedRealtime()
+        return try {
+            val resp = apiService.ping(user = username, token = token, salt = salt)
+            if (resp.response.status == "ok") {
+                SystemClock.elapsedRealtime() - start
+            } else null
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

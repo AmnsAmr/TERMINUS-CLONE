@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.necroware.terminusplayer.data.prefs.LibrarySortOrder
 import com.necroware.terminusplayer.data.prefs.MotionPreference
+import com.necroware.terminusplayer.data.prefs.PerformanceMode
 import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
 import com.necroware.terminusplayer.data.prefs.SortDirection
 import com.necroware.terminusplayer.data.prefs.SortField
@@ -14,6 +15,8 @@ import com.necroware.terminusplayer.data.prefs.ThemePresetId
 import com.necroware.terminusplayer.data.prefs.ThemeColorRole
 import com.necroware.terminusplayer.data.prefs.UserPreferences
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
+import com.necroware.terminusplayer.data.prefs.SystemPowerSaverState
+import com.necroware.terminusplayer.data.prefs.effectiveMotionPreference as resolveMotionPreference
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -21,6 +24,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
@@ -40,11 +44,23 @@ sealed interface ImportStatus {
 class SettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val repository: MusicRepository,
-    private val preferencesRepository: UserPreferencesRepository
+    private val preferencesRepository: UserPreferencesRepository,
+    powerSaverState: SystemPowerSaverState
 ) : ViewModel() {
 
     val preferences: StateFlow<UserPreferences> = preferencesRepository.preferences
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UserPreferences())
+
+    val effectiveMotionPreference: StateFlow<MotionPreference> = combine(
+        preferencesRepository.preferences,
+        powerSaverState.enabled
+    ) { preferences, powerSaverEnabled ->
+        resolveMotionPreference(
+            preferences.motionPreference,
+            preferences.performanceMode,
+            powerSaverEnabled
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MotionPreference.FULL)
 
     private val _importStatus = MutableStateFlow<ImportStatus>(ImportStatus.Idle)
     val importStatus: StateFlow<ImportStatus> = _importStatus.asStateFlow()
@@ -79,6 +95,10 @@ class SettingsViewModel @Inject constructor(
         preferencesRepository.setMotionPreference(preference)
     }
 
+    fun setPerformanceMode(mode: PerformanceMode) = viewModelScope.launch {
+        preferencesRepository.setPerformanceMode(mode)
+    }
+
     fun setEqualizerEnabled(enabled: Boolean) = viewModelScope.launch {
         preferencesRepository.setEqualizerEnabled(enabled)
     }
@@ -101,6 +121,38 @@ class SettingsViewModel @Inject constructor(
 
     fun setPreferHardwareDecoder(enabled: Boolean) = viewModelScope.launch {
         preferencesRepository.setPreferHardwareDecoder(enabled)
+    }
+
+    fun setScanlineIntensity(intensity: Float) = viewModelScope.launch {
+        preferencesRepository.setScanlineIntensity(intensity)
+    }
+
+    fun setPhosphorAfterglow(enabled: Boolean) = viewModelScope.launch {
+        preferencesRepository.setPhosphorAfterglow(enabled)
+    }
+
+    fun setCursorStyle(style: com.necroware.terminusplayer.data.prefs.TerminalCursorStyle) = viewModelScope.launch {
+        preferencesRepository.setCursorStyle(style)
+    }
+
+    fun setCursorBlinkCadence(cadence: com.necroware.terminusplayer.data.prefs.TerminalCursorBlink) = viewModelScope.launch {
+        preferencesRepository.setCursorBlinkCadence(cadence)
+    }
+
+    fun setAdaptiveArtAccent(enabled: Boolean) = viewModelScope.launch {
+        preferencesRepository.setAdaptiveArtAccent(enabled)
+    }
+
+    fun setTerminalHaptics(haptics: com.necroware.terminusplayer.data.prefs.TerminalHaptics) = viewModelScope.launch {
+        preferencesRepository.setTerminalHaptics(haptics)
+    }
+
+    fun setSmartBitrateEnabled(enabled: Boolean) = viewModelScope.launch {
+        preferencesRepository.setSmartBitrateEnabled(enabled)
+    }
+
+    fun setHudTelemetryMode(mode: com.necroware.terminusplayer.data.prefs.HudTelemetryMode) = viewModelScope.launch {
+        preferencesRepository.setHudTelemetryMode(mode)
     }
 
     fun setMaxBitRate(bitRate: Int?) = viewModelScope.launch {

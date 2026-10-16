@@ -30,6 +30,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.CompositionLocalProvider
+import com.necroware.terminusplayer.ui.components.LocalTerminalCursorConfig
+import com.necroware.terminusplayer.ui.components.TerminalCursorConfig
 import com.necroware.terminusplayer.ui.navigation.TerminusNavGraph
 import com.necroware.terminusplayer.ui.theme.TerminusTheme
 import com.necroware.terminusplayer.ui.theme.themePresetById
@@ -67,52 +70,61 @@ class MainActivity : ComponentActivity() {
             val motionPreference by activityViewModel.motionPreference.collectAsStateWithLifecycle()
 
             TerminusTheme(preset = themePresetById(themePreferences.themeId).withOverrides(themePreferences.themeColorOverrides)) {
-                Surface(color = MaterialTheme.colorScheme.background) {
-                    var hasEssentialPermission by remember {
-                        mutableStateOf(isGranted(essentialAudioPermission))
-                    }
-                    var hasNotificationPermission by remember {
-                        mutableStateOf(
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                isGranted(Manifest.permission.POST_NOTIFICATIONS)
-                            } else {
-                                true
-                            }
-                        )
-                    }
-                    var continueWithoutNotifications by remember { mutableStateOf(false) }
-
-                    val permissionLauncher = rememberLauncherForActivityResult(
-                        ActivityResultContracts.RequestMultiplePermissions()
-                    ) { permissions ->
-                        hasEssentialPermission = permissions[essentialAudioPermission] ?: isGranted(essentialAudioPermission)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            hasNotificationPermission = permissions[Manifest.permission.POST_NOTIFICATIONS] ?: isGranted(Manifest.permission.POST_NOTIFICATIONS)
+                val cursorConfig = remember(themePreferences.cursorStyle, themePreferences.cursorBlinkCadence, motionPreference) {
+                    TerminalCursorConfig(
+                        style = themePreferences.cursorStyle,
+                        blinkCadence = themePreferences.cursorBlinkCadence,
+                        motionPreference = motionPreference
+                    )
+                }
+                CompositionLocalProvider(LocalTerminalCursorConfig provides cursorConfig) {
+                    Surface(color = MaterialTheme.colorScheme.background) {
+                        var hasEssentialPermission by remember {
+                            mutableStateOf(isGranted(essentialAudioPermission))
                         }
-                    }
-                    val notificationPermissionLauncher = rememberLauncherForActivityResult(
-                        ActivityResultContracts.RequestPermission()
-                    ) { granted ->
-                        hasNotificationPermission = granted
-                        if (!granted) continueWithoutNotifications = true
-                    }
+                        var hasNotificationPermission by remember {
+                            mutableStateOf(
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    isGranted(Manifest.permission.POST_NOTIFICATIONS)
+                                } else {
+                                    true
+                                }
+                            )
+                        }
+                        var continueWithoutNotifications by remember { mutableStateOf(false) }
 
-                    if (hasEssentialPermission && (hasNotificationPermission || continueWithoutNotifications)) {
-                        TerminusNavGraph(
-                            motionPreference = motionPreference,
-                            onInitialContentReady = { initialContentReady.set(true) }
-                        )
-                    } else if (!hasEssentialPermission) {
-                        SideEffect { initialContentReady.set(true) }
-                        PermissionGate(onRequestPermission = {
-                            permissionLauncher.launch(arrayOf(essentialAudioPermission))
-                        })
-                    } else {
-                        SideEffect { initialContentReady.set(true) }
-                        NotificationPermissionGate(
-                            onGrant = { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
-                            onContinue = { continueWithoutNotifications = true }
-                        )
+                        val permissionLauncher = rememberLauncherForActivityResult(
+                            ActivityResultContracts.RequestMultiplePermissions()
+                        ) { permissions ->
+                            hasEssentialPermission = permissions[essentialAudioPermission] ?: isGranted(essentialAudioPermission)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                hasNotificationPermission = permissions[Manifest.permission.POST_NOTIFICATIONS] ?: isGranted(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                        }
+                        val notificationPermissionLauncher = rememberLauncherForActivityResult(
+                            ActivityResultContracts.RequestPermission()
+                        ) { granted ->
+                            hasNotificationPermission = granted
+                            if (!granted) continueWithoutNotifications = true
+                        }
+
+                        if (hasEssentialPermission && (hasNotificationPermission || continueWithoutNotifications)) {
+                            TerminusNavGraph(
+                                motionPreference = motionPreference,
+                                onInitialContentReady = { initialContentReady.set(true) }
+                            )
+                        } else if (!hasEssentialPermission) {
+                            SideEffect { initialContentReady.set(true) }
+                            PermissionGate(onRequestPermission = {
+                                permissionLauncher.launch(arrayOf(essentialAudioPermission))
+                            })
+                        } else {
+                            SideEffect { initialContentReady.set(true) }
+                            NotificationPermissionGate(
+                                onGrant = { notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
+                                onContinue = { continueWithoutNotifications = true }
+                            )
+                        }
                     }
                 }
             }

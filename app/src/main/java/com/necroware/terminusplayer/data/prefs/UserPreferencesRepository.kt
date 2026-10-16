@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.catch
@@ -21,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import com.necroware.terminusplayer.data.network.SystemNetworkState
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -36,6 +38,15 @@ private object Keys {
     val PREFER_HW_DECODER = booleanPreferencesKey("prefer_hw_decoder")
     val PLAYBACK_ART_STYLE = stringPreferencesKey("playback_art_style")
     val MOTION_PREFERENCE = stringPreferencesKey("motion_preference")
+    val PERFORMANCE_MODE = stringPreferencesKey("performance_mode")
+    val SCANLINE_INTENSITY = androidx.datastore.preferences.core.floatPreferencesKey("scanline_intensity")
+    val PHOSPHOR_AFTERGLOW = booleanPreferencesKey("phosphor_afterglow")
+    val CURSOR_STYLE = stringPreferencesKey("cursor_style")
+    val CURSOR_BLINK_CADENCE = stringPreferencesKey("cursor_blink_cadence")
+    val ADAPTIVE_ART_ACCENT = booleanPreferencesKey("adaptive_art_accent")
+    val TERMINAL_HAPTICS = stringPreferencesKey("terminal_haptics")
+    val SMART_BITRATE_ENABLED = booleanPreferencesKey("smart_bitrate_enabled")
+    val HUD_TELEMETRY_MODE = stringPreferencesKey("hud_telemetry_mode")
     val LAST_PLAYED_SONG_ID = stringPreferencesKey("last_played_song_id_v2")
     val LAST_PLAYED_POSITION_MS = longPreferencesKey("last_played_position_ms")
     val SERVER_URL = stringPreferencesKey("server_url")
@@ -58,9 +69,23 @@ data class ServerConnectionConfig(
     val isLoaded: Boolean = false
 )
 
+fun resolveEffectiveMaxBitRate(
+    configuredBitRate: Int?,
+    smartBitrateEnabled: Boolean,
+    isCellular: Boolean
+): Int? {
+    if (!smartBitrateEnabled) return configuredBitRate
+    return if (isCellular) {
+        if (configuredBitRate != null) minOf(configuredBitRate, 128) else 128
+    } else {
+        configuredBitRate
+    }
+}
+
 @Singleton
 class UserPreferencesRepository @Inject constructor(
-    private val dataStore: DataStore<Preferences>
+    private val dataStore: DataStore<Preferences>,
+    private val networkState: SystemNetworkState? = null
 ) {
     val transfersPaused: Flow<Boolean> = dataStore.data
         .catch { error ->
@@ -78,14 +103,22 @@ class UserPreferencesRepository @Inject constructor(
 
     init {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            preferences.collect { prefs ->
-                _serverConnectionConfig.value = ServerConnectionConfig(
+            val cellularFlow = networkState?.isCellular ?: kotlinx.coroutines.flow.flowOf(false)
+            combine(preferences, cellularFlow) { prefs, isCellular ->
+                val effectiveBitRate = resolveEffectiveMaxBitRate(
+                    configuredBitRate = prefs.maxBitRate,
+                    smartBitrateEnabled = prefs.smartBitrateEnabled,
+                    isCellular = isCellular
+                )
+                ServerConnectionConfig(
                     serverUrl = prefs.serverUrl,
                     username = prefs.username,
                     password = prefs.password,
-                    maxBitRate = prefs.maxBitRate,
+                    maxBitRate = effectiveBitRate,
                     isLoaded = true
                 )
+            }.collect { config ->
+                _serverConnectionConfig.value = config
             }
         }
     }
@@ -142,6 +175,10 @@ class UserPreferencesRepository @Inject constructor(
         dataStore.edit { it[Keys.MOTION_PREFERENCE] = preference.name }
     }
 
+    suspend fun setPerformanceMode(mode: PerformanceMode) {
+        dataStore.edit { it[Keys.PERFORMANCE_MODE] = mode.name }
+    }
+
     suspend fun setEqualizerEnabled(enabled: Boolean) {
         dataStore.edit { it[Keys.EQ_ENABLED] = enabled }
     }
@@ -164,6 +201,38 @@ class UserPreferencesRepository @Inject constructor(
 
     suspend fun setPreferHardwareDecoder(enabled: Boolean) {
         dataStore.edit { it[Keys.PREFER_HW_DECODER] = enabled }
+    }
+
+    suspend fun setScanlineIntensity(intensity: Float) {
+        dataStore.edit { it[Keys.SCANLINE_INTENSITY] = intensity.coerceIn(0f, 1f) }
+    }
+
+    suspend fun setPhosphorAfterglow(enabled: Boolean) {
+        dataStore.edit { it[Keys.PHOSPHOR_AFTERGLOW] = enabled }
+    }
+
+    suspend fun setCursorStyle(style: TerminalCursorStyle) {
+        dataStore.edit { it[Keys.CURSOR_STYLE] = style.name }
+    }
+
+    suspend fun setCursorBlinkCadence(cadence: TerminalCursorBlink) {
+        dataStore.edit { it[Keys.CURSOR_BLINK_CADENCE] = cadence.name }
+    }
+
+    suspend fun setAdaptiveArtAccent(enabled: Boolean) {
+        dataStore.edit { it[Keys.ADAPTIVE_ART_ACCENT] = enabled }
+    }
+
+    suspend fun setTerminalHaptics(haptics: TerminalHaptics) {
+        dataStore.edit { it[Keys.TERMINAL_HAPTICS] = haptics.name }
+    }
+
+    suspend fun setSmartBitrateEnabled(enabled: Boolean) {
+        dataStore.edit { it[Keys.SMART_BITRATE_ENABLED] = enabled }
+    }
+
+    suspend fun setHudTelemetryMode(mode: HudTelemetryMode) {
+        dataStore.edit { it[Keys.HUD_TELEMETRY_MODE] = mode.name }
     }
 
     suspend fun setLastPlayed(songId: String?, positionMs: Long) {
@@ -195,6 +264,16 @@ class UserPreferencesRepository @Inject constructor(
             ?: defaults.librarySortOrder.direction
         val playbackArtStyle = this[Keys.PLAYBACK_ART_STYLE]?.let { runCatching { PlaybackArtStyle.valueOf(it) }.getOrNull() }
             ?: defaults.playbackArtStyle
+        val performanceMode = this[Keys.PERFORMANCE_MODE]?.let { runCatching { PerformanceMode.valueOf(it) }.getOrNull() }
+            ?: defaults.performanceMode
+        val cursorStyle = this[Keys.CURSOR_STYLE]?.let { runCatching { TerminalCursorStyle.valueOf(it) }.getOrNull() }
+            ?: defaults.cursorStyle
+        val cursorBlinkCadence = this[Keys.CURSOR_BLINK_CADENCE]?.let { runCatching { TerminalCursorBlink.valueOf(it) }.getOrNull() }
+            ?: defaults.cursorBlinkCadence
+        val terminalHaptics = this[Keys.TERMINAL_HAPTICS]?.let { runCatching { TerminalHaptics.valueOf(it) }.getOrNull() }
+            ?: defaults.terminalHaptics
+        val hudTelemetryMode = this[Keys.HUD_TELEMETRY_MODE]?.let { runCatching { HudTelemetryMode.valueOf(it) }.getOrNull() }
+            ?: defaults.hudTelemetryMode
         val eqBands = List(5) { index -> this[eqBandKey(index)] ?: 0 }
         val maxBitRate = this[Keys.MAX_BIT_RATE]
 
@@ -213,6 +292,15 @@ class UserPreferencesRepository @Inject constructor(
             preferHardwareDecoder = this[Keys.PREFER_HW_DECODER] ?: defaults.preferHardwareDecoder,
             playbackArtStyle = playbackArtStyle,
             motionPreference = parseMotionPreference(this[Keys.MOTION_PREFERENCE]),
+            performanceMode = performanceMode,
+            scanlineIntensity = this[Keys.SCANLINE_INTENSITY] ?: defaults.scanlineIntensity,
+            phosphorAfterglow = this[Keys.PHOSPHOR_AFTERGLOW] ?: defaults.phosphorAfterglow,
+            cursorStyle = cursorStyle,
+            cursorBlinkCadence = cursorBlinkCadence,
+            adaptiveArtAccent = this[Keys.ADAPTIVE_ART_ACCENT] ?: defaults.adaptiveArtAccent,
+            terminalHaptics = terminalHaptics,
+            smartBitrateEnabled = this[Keys.SMART_BITRATE_ENABLED] ?: defaults.smartBitrateEnabled,
+            hudTelemetryMode = hudTelemetryMode,
             lastPlayedSongId = this[Keys.LAST_PLAYED_SONG_ID],
             lastPlayedPositionMs = this[Keys.LAST_PLAYED_POSITION_MS] ?: 0L,
             serverUrl = this[Keys.SERVER_URL] ?: "",

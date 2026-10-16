@@ -36,6 +36,7 @@ import com.necroware.terminusplayer.ui.components.SongArt
 import com.necroware.terminusplayer.ui.components.DeviceStatusCard
 import com.necroware.terminusplayer.ui.components.SystemInfoCard
 import com.necroware.terminusplayer.ui.components.TerminalBorder
+import com.necroware.terminusplayer.ui.components.TerminalHeader
 import com.necroware.terminusplayer.ui.components.TerminalState
 
 @Composable
@@ -68,11 +69,7 @@ fun HomeScreen(
     ) {
         item {
             Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-                Text(
-                    text = "> TERMINUS_",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+                TerminalHeader(title = "TERMINUS")
                 Text(
                     text = "YOUR MUSIC, READY WHEN YOU ARE",
                     style = MaterialTheme.typography.labelSmall,

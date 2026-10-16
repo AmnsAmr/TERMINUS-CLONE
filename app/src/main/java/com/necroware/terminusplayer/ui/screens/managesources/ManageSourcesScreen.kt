@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.ui.components.TerminalBorder
+import com.necroware.terminusplayer.ui.components.TerminalHeader
 
 @Composable
 fun ManageSourcesScreen(
@@ -42,11 +43,7 @@ fun ManageSourcesScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.clickable { onBack() }
             )
-            Text(
-                text = "> MANAGE SOURCES_",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
+            TerminalHeader(title = "MANAGE SOURCES")
         }
 
         Text(
