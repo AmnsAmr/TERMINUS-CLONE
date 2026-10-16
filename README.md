@@ -604,6 +604,15 @@ The application separates major responsibilities between:
 
 This allows the visual layer to evolve without requiring the playback system to be rewritten.
 
+### Technical Documentation & Architecture Diagrams
+
+For in-depth architectural guides and diagrams:
+
+* [System Architecture & Component Diagram](docs/ARCHITECTURE.md)
+* [Playback Lifecycle & Audio Focus State Machine](docs/PLAYBACK_LIFECYCLE.md)
+* [Sync, Transfers & Offline Engine](docs/SYNC_AND_TRANSFERS.md)
+* [Room Database Schema & ER Diagram](docs/DATABASE_SCHEMA.md)
+
 ---
 
 # Technology Stack
