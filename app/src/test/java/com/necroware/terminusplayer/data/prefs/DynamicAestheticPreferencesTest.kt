@@ -21,18 +21,19 @@ class DynamicAestheticPreferencesTest {
     @Test
     fun resolveEffectiveMaxBitRateHonorsNetworkTransportAndPolicy() {
         // Disabled: returns configured rate without modification
-        assertEquals(320, resolveEffectiveMaxBitRate(320, smartBitrateEnabled = false, isCellular = true))
-        assertNull(resolveEffectiveMaxBitRate(null, smartBitrateEnabled = false, isCellular = true))
-        assertEquals(64, resolveEffectiveMaxBitRate(64, smartBitrateEnabled = false, isCellular = false))
+        assertEquals(320, resolveEffectiveMaxBitRate(320, smartBitrateEnabled = false, cellularBitRate = 128, isCellular = true))
+        assertNull(resolveEffectiveMaxBitRate(null, smartBitrateEnabled = false, cellularBitRate = 128, isCellular = true))
+        assertEquals(64, resolveEffectiveMaxBitRate(64, smartBitrateEnabled = false, cellularBitRate = 128, isCellular = false))
 
         // Enabled on Wi-Fi: unthrottled, keeps configured rate
-        assertEquals(320, resolveEffectiveMaxBitRate(320, smartBitrateEnabled = true, isCellular = false))
-        assertNull(resolveEffectiveMaxBitRate(null, smartBitrateEnabled = true, isCellular = false))
+        assertEquals(320, resolveEffectiveMaxBitRate(320, smartBitrateEnabled = true, cellularBitRate = 128, isCellular = false))
+        assertNull(resolveEffectiveMaxBitRate(null, smartBitrateEnabled = true, cellularBitRate = 128, isCellular = false))
 
-        // Enabled on Cellular: throttles to at most 128kbps
-        assertEquals(128, resolveEffectiveMaxBitRate(320, smartBitrateEnabled = true, isCellular = true))
-        assertEquals(128, resolveEffectiveMaxBitRate(null, smartBitrateEnabled = true, isCellular = true))
-        assertEquals(64, resolveEffectiveMaxBitRate(64, smartBitrateEnabled = true, isCellular = true))
+        // Enabled on Cellular: uses cellularBitRate (custom or default 128)
+        assertEquals(128, resolveEffectiveMaxBitRate(320, smartBitrateEnabled = true, cellularBitRate = 128, isCellular = true))
+        assertEquals(128, resolveEffectiveMaxBitRate(null, smartBitrateEnabled = true, cellularBitRate = 128, isCellular = true))
+        assertEquals(64, resolveEffectiveMaxBitRate(320, smartBitrateEnabled = true, cellularBitRate = 64, isCellular = true))
+        assertEquals(256, resolveEffectiveMaxBitRate(320, smartBitrateEnabled = true, cellularBitRate = 256, isCellular = true))
     }
 
     @Test
@@ -52,6 +53,11 @@ class DynamicAestheticPreferencesTest {
             assertFalse(defaults.adaptiveArtAccent)
             assertEquals(TerminalHaptics.TACTILE, defaults.terminalHaptics)
             assertFalse(defaults.smartBitrateEnabled)
+            assertEquals(128, defaults.cellularMaxBitRate)
+            assertFalse(defaults.openPlayerOnLibraryTrackSelect)
+            assertFalse(defaults.openPlayerOnPlaylistTrackSelect)
+            assertTrue(defaults.reactiveHudFlash)
+            assertEquals(VisualizerStyle.BARS, defaults.visualizerStyle)
             assertEquals(HudTelemetryMode.STANDARD, defaults.hudTelemetryMode)
 
             repository.setScanlineIntensity(0.75f)
@@ -61,6 +67,11 @@ class DynamicAestheticPreferencesTest {
             repository.setAdaptiveArtAccent(true)
             repository.setTerminalHaptics(TerminalHaptics.CLICKY)
             repository.setSmartBitrateEnabled(true)
+            repository.setCellularMaxBitRate(192)
+            repository.setOpenPlayerOnLibraryTrackSelect(true)
+            repository.setOpenPlayerOnPlaylistTrackSelect(true)
+            repository.setReactiveHudFlash(false)
+            repository.setVisualizerStyle(VisualizerStyle.OSCILLOSCOPE)
             repository.setHudTelemetryMode(HudTelemetryMode.EXPANDED)
 
             val updated = repository.preferences.first()
@@ -73,6 +84,11 @@ class DynamicAestheticPreferencesTest {
             assertTrue(updated.adaptiveArtAccent)
             assertEquals(TerminalHaptics.CLICKY, updated.terminalHaptics)
             assertTrue(updated.smartBitrateEnabled)
+            assertEquals(192, updated.cellularMaxBitRate)
+            assertTrue(updated.openPlayerOnLibraryTrackSelect)
+            assertTrue(updated.openPlayerOnPlaylistTrackSelect)
+            assertFalse(updated.reactiveHudFlash)
+            assertEquals(VisualizerStyle.OSCILLOSCOPE, updated.visualizerStyle)
             assertEquals(HudTelemetryMode.EXPANDED, updated.hudTelemetryMode)
         } finally {
             scope.cancel()

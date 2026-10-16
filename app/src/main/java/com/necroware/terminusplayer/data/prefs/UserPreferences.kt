@@ -112,6 +112,12 @@ enum class TerminalHaptics { CLICKY, TACTILE, OFF }
 
 enum class HudTelemetryMode { STANDARD, EXPANDED }
 
+enum class VisualizerStyle(val label: String) {
+    BARS("SPECTRUM BARS"),
+    OSCILLOSCOPE("OSCILLOSCOPE BEAM"),
+    VU_METER("DOT-MATRIX VU")
+}
+
 data class UserPreferences(
     val themeId: ThemePresetId = ThemePresetId.TERMINAL,
     val themeColorOverrides: Map<ThemeColorRole, String> = emptyMap(),
@@ -129,6 +135,11 @@ data class UserPreferences(
     val adaptiveArtAccent: Boolean = false,
     val terminalHaptics: TerminalHaptics = TerminalHaptics.TACTILE,
     val smartBitrateEnabled: Boolean = false,
+    val cellularMaxBitRate: Int? = 128,
+    val openPlayerOnLibraryTrackSelect: Boolean = false,
+    val openPlayerOnPlaylistTrackSelect: Boolean = false,
+    val reactiveHudFlash: Boolean = true,
+    val visualizerStyle: VisualizerStyle = VisualizerStyle.BARS,
     val hudTelemetryMode: HudTelemetryMode = HudTelemetryMode.STANDARD,
     val lastPlayedSongId: String? = null,
     val lastPlayedPositionMs: Long = 0L,

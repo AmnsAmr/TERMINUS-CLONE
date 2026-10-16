@@ -9,6 +9,8 @@ import com.necroware.terminusplayer.ui.theme.rememberAdaptiveAccent
 import com.necroware.terminusplayer.ui.theme.LocalAppPalette
 import androidx.compose.runtime.CompositionLocalProvider
 
+import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.delay
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -226,13 +228,35 @@ fun NowPlayingScreen(
     val displayArtist = pendingSong?.artist ?: nowPlaying.artist
     val displayDurationMs = pendingSong?.duration ?: nowPlaying.durationMs
     val displaySongUri = pendingSong?.uriString ?: currentSongUri.orEmpty()
+    val targetArtUri = displaySongUri.takeIf { it.isNotBlank() }
+        ?: nowPlaying.mediaId?.let { if (it.startsWith("terminus://")) it else "terminus://$it" }
+        ?: nowPlaying.artworkUri
     val defaultAccent = MaterialTheme.colorScheme.primary
     val adaptiveAccent = rememberAdaptiveAccent(
-        artworkUri = displaySongUri.takeIf { it.isNotBlank() } ?: nowPlaying.artworkUri,
+        artworkUri = targetArtUri,
         defaultAccent = defaultAccent,
         enabled = prefs.adaptiveArtAccent
     )
     val displayIsPlaying = !preparingSelection && nowPlaying.isPlaying
+    var hudAlertColor by remember { mutableStateOf<Color?>(null) }
+    var previousPlayingState by remember { mutableStateOf<Boolean?>(null) }
+
+    LaunchedEffect(displayIsPlaying, prefs.reactiveHudFlash) {
+        if (prefs.reactiveHudFlash && previousPlayingState != null && previousPlayingState != displayIsPlaying) {
+            if (!displayIsPlaying) {
+                hudAlertColor = Color(0xFFFF3B30)
+                delay(350)
+                hudAlertColor = null
+            } else {
+                hudAlertColor = Color(0xFF00E5FF)
+                delay(200)
+                hudAlertColor = null
+            }
+        }
+        previousPlayingState = displayIsPlaying
+    }
+
+    val activeAccent = hudAlertColor ?: adaptiveAccent
     val displayPositionMs = if (preparingSelection) 0L else positionMs
     val collapsePlayer = {
         viewModel.clearPendingPlaybackSelection()
@@ -287,18 +311,18 @@ fun NowPlayingScreen(
     )
 
     val currentScheme = MaterialTheme.colorScheme
-    val themedColorScheme = remember(currentScheme, adaptiveAccent) {
+    val themedColorScheme = remember(currentScheme, activeAccent) {
         currentScheme.copy(
-            primary = adaptiveAccent,
-            outline = adaptiveAccent.copy(alpha = 0.5f)
+            primary = activeAccent,
+            outline = activeAccent.copy(alpha = 0.5f)
         )
     }
     val currentPalette = LocalAppPalette.current
-    val themedPalette = remember(adaptiveAccent, currentPalette) {
+    val themedPalette = remember(activeAccent, currentPalette) {
         currentPalette.copy(
-            accent = adaptiveAccent,
-            border = adaptiveAccent.copy(alpha = 0.5f),
-            visualizerPrimary = adaptiveAccent
+            accent = activeAccent,
+            border = activeAccent.copy(alpha = 0.5f),
+            visualizerPrimary = activeAccent
         )
     }
 
@@ -483,6 +507,7 @@ fun NowPlayingScreen(
                 bufferRemainingSec = bufferAheadSec,
                 serverPingMs = if (preparingSelection) null else serverPingMs,
                 preferHardwareDecoder = prefs.preferHardwareDecoder,
+                visualizerStyle = prefs.visualizerStyle,
                 modifier = Modifier.padding(top = 24.dp, bottom = 24.dp)
             )
 

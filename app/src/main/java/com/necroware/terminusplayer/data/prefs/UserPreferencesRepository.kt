@@ -47,6 +47,11 @@ private object Keys {
     val ADAPTIVE_ART_ACCENT = booleanPreferencesKey("adaptive_art_accent")
     val TERMINAL_HAPTICS = stringPreferencesKey("terminal_haptics")
     val SMART_BITRATE_ENABLED = booleanPreferencesKey("smart_bitrate_enabled")
+    val CELLULAR_MAX_BIT_RATE = intPreferencesKey("cellular_max_bit_rate")
+    val OPEN_PLAYER_ON_LIBRARY_TRACK_SELECT = booleanPreferencesKey("open_player_on_library_track_select")
+    val OPEN_PLAYER_ON_PLAYLIST_TRACK_SELECT = booleanPreferencesKey("open_player_on_playlist_track_select")
+    val REACTIVE_HUD_FLASH = booleanPreferencesKey("reactive_hud_flash")
+    val VISUALIZER_STYLE = stringPreferencesKey("visualizer_style")
     val HUD_TELEMETRY_MODE = stringPreferencesKey("hud_telemetry_mode")
     val LAST_PLAYED_SONG_ID = stringPreferencesKey("last_played_song_id_v2")
     val LAST_PLAYED_POSITION_MS = longPreferencesKey("last_played_position_ms")
@@ -73,11 +78,12 @@ data class ServerConnectionConfig(
 fun resolveEffectiveMaxBitRate(
     configuredBitRate: Int?,
     smartBitrateEnabled: Boolean,
+    cellularBitRate: Int? = 128,
     isCellular: Boolean
 ): Int? {
     if (!smartBitrateEnabled) return configuredBitRate
     return if (isCellular) {
-        if (configuredBitRate != null) minOf(configuredBitRate, 128) else 128
+        cellularBitRate ?: 128
     } else {
         configuredBitRate
     }
@@ -109,6 +115,7 @@ class UserPreferencesRepository @Inject constructor(
                 val effectiveBitRate = resolveEffectiveMaxBitRate(
                     configuredBitRate = prefs.maxBitRate,
                     smartBitrateEnabled = prefs.smartBitrateEnabled,
+                    cellularBitRate = prefs.cellularMaxBitRate,
                     isCellular = isCellular
                 )
                 ServerConnectionConfig(
@@ -232,6 +239,32 @@ class UserPreferencesRepository @Inject constructor(
         dataStore.edit { it[Keys.SMART_BITRATE_ENABLED] = enabled }
     }
 
+    suspend fun setCellularMaxBitRate(bitRate: Int?) {
+        dataStore.edit { prefs ->
+            if (bitRate != null) {
+                prefs[Keys.CELLULAR_MAX_BIT_RATE] = bitRate
+            } else {
+                prefs.remove(Keys.CELLULAR_MAX_BIT_RATE)
+            }
+        }
+    }
+
+    suspend fun setOpenPlayerOnLibraryTrackSelect(enabled: Boolean) {
+        dataStore.edit { it[Keys.OPEN_PLAYER_ON_LIBRARY_TRACK_SELECT] = enabled }
+    }
+
+    suspend fun setOpenPlayerOnPlaylistTrackSelect(enabled: Boolean) {
+        dataStore.edit { it[Keys.OPEN_PLAYER_ON_PLAYLIST_TRACK_SELECT] = enabled }
+    }
+
+    suspend fun setReactiveHudFlash(enabled: Boolean) {
+        dataStore.edit { it[Keys.REACTIVE_HUD_FLASH] = enabled }
+    }
+
+    suspend fun setVisualizerStyle(style: VisualizerStyle) {
+        dataStore.edit { it[Keys.VISUALIZER_STYLE] = style.name }
+    }
+
     suspend fun setHudTelemetryMode(mode: HudTelemetryMode) {
         dataStore.edit { it[Keys.HUD_TELEMETRY_MODE] = mode.name }
     }
@@ -275,6 +308,12 @@ class UserPreferencesRepository @Inject constructor(
             ?: defaults.terminalHaptics
         val hudTelemetryMode = this[Keys.HUD_TELEMETRY_MODE]?.let { runCatching { HudTelemetryMode.valueOf(it) }.getOrNull() }
             ?: defaults.hudTelemetryMode
+        val cellularMaxBitRate = this[Keys.CELLULAR_MAX_BIT_RATE] ?: defaults.cellularMaxBitRate
+        val openPlayerOnLibraryTrackSelect = this[Keys.OPEN_PLAYER_ON_LIBRARY_TRACK_SELECT] ?: defaults.openPlayerOnLibraryTrackSelect
+        val openPlayerOnPlaylistTrackSelect = this[Keys.OPEN_PLAYER_ON_PLAYLIST_TRACK_SELECT] ?: defaults.openPlayerOnPlaylistTrackSelect
+        val reactiveHudFlash = this[Keys.REACTIVE_HUD_FLASH] ?: defaults.reactiveHudFlash
+        val visualizerStyle = this[Keys.VISUALIZER_STYLE]?.let { runCatching { VisualizerStyle.valueOf(it) }.getOrNull() }
+            ?: defaults.visualizerStyle
         val eqBands = List(5) { index -> this[eqBandKey(index)] ?: 0 }
         val maxBitRate = this[Keys.MAX_BIT_RATE]
 
@@ -301,6 +340,11 @@ class UserPreferencesRepository @Inject constructor(
             adaptiveArtAccent = this[Keys.ADAPTIVE_ART_ACCENT] ?: defaults.adaptiveArtAccent,
             terminalHaptics = terminalHaptics,
             smartBitrateEnabled = this[Keys.SMART_BITRATE_ENABLED] ?: defaults.smartBitrateEnabled,
+            cellularMaxBitRate = cellularMaxBitRate,
+            openPlayerOnLibraryTrackSelect = openPlayerOnLibraryTrackSelect,
+            openPlayerOnPlaylistTrackSelect = openPlayerOnPlaylistTrackSelect,
+            reactiveHudFlash = reactiveHudFlash,
+            visualizerStyle = visualizerStyle,
             hudTelemetryMode = hudTelemetryMode,
             lastPlayedSongId = this[Keys.LAST_PLAYED_SONG_ID],
             lastPlayedPositionMs = this[Keys.LAST_PLAYED_POSITION_MS] ?: 0L,

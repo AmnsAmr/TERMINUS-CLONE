@@ -56,6 +56,7 @@ import com.necroware.terminusplayer.data.prefs.TerminalCursorStyle
 import com.necroware.terminusplayer.data.prefs.TerminalCursorBlink
 import com.necroware.terminusplayer.data.prefs.TerminalHaptics
 import com.necroware.terminusplayer.data.prefs.HudTelemetryMode
+import com.necroware.terminusplayer.data.prefs.VisualizerStyle
 import com.necroware.terminusplayer.data.prefs.ThemePresetId
 import com.necroware.terminusplayer.data.prefs.ThemeColorRole
 import com.necroware.terminusplayer.ui.components.TerminalBorder
@@ -209,6 +210,10 @@ fun SettingsScreen(
                     onCursorBlinkChange = viewModel::setCursorBlinkCadence,
                     adaptiveArtAccent = prefs.adaptiveArtAccent,
                     onAdaptiveArtAccentChange = viewModel::setAdaptiveArtAccent,
+                    reactiveHudFlash = prefs.reactiveHudFlash,
+                    onReactiveHudFlashChange = viewModel::setReactiveHudFlash,
+                    visualizerStyle = prefs.visualizerStyle,
+                    onVisualizerStyleChange = viewModel::setVisualizerStyle,
                     motionPreference = effectiveMotionPreference
                 )
             }
@@ -298,22 +303,6 @@ fun SettingsScreen(
 
         item {
             SettingsDropdown(
-                label = "CODEC",
-                expanded = expandedSections.contains("CODEC"),
-                onToggle = { toggleSection("CODEC") },
-                motionPreference = effectiveMotionPreference
-            ) {
-                ToggleRow(
-                    label = "Prefer hardware decoder",
-                    sublabel = "Falls back to software automatically if unsupported",
-                    checked = prefs.preferHardwareDecoder,
-                    onCheckedChange = viewModel::setPreferHardwareDecoder
-                )
-            }
-        }
-
-        item {
-            SettingsDropdown(
                 label = "STREAMING QUALITY",
                 expanded = expandedSections.contains("STREAMING QUALITY"),
                 onToggle = { toggleSection("STREAMING QUALITY") },
@@ -322,13 +311,58 @@ fun SettingsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     ToggleRow(
                         label = "Smart Bitrate",
-                        sublabel = "Auto-throttle to 128k on mobile data; unthrottled on Wi-Fi",
+                        sublabel = "Use independent bitrate ceilings on Wi-Fi vs mobile cellular data",
                         checked = prefs.smartBitrateEnabled,
                         onCheckedChange = viewModel::setSmartBitrateEnabled
                     )
-                    QualitySection(
-                        selectedBitRate = prefs.maxBitRate,
-                        onSelect = viewModel::setMaxBitRate
+                    if (prefs.smartBitrateEnabled) {
+                        Text(
+                            text = "WI-FI STREAMING QUALITY",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        QualitySection(
+                            selectedBitRate = prefs.maxBitRate,
+                            onSelect = viewModel::setMaxBitRate
+                        )
+                        Text(
+                            text = "CELLULAR DATA QUALITY CEILING",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        QualitySection(
+                            selectedBitRate = prefs.cellularMaxBitRate,
+                            onSelect = viewModel::setCellularMaxBitRate
+                        )
+                    } else {
+                        QualitySection(
+                            selectedBitRate = prefs.maxBitRate,
+                            onSelect = viewModel::setMaxBitRate
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            SettingsDropdown(
+                label = "PLAYBACK BEHAVIOR",
+                expanded = expandedSections.contains("PLAYBACK BEHAVIOR"),
+                onToggle = { toggleSection("PLAYBACK BEHAVIOR") },
+                motionPreference = effectiveMotionPreference
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ToggleRow(
+                        label = "Pull up Now Playing from Library",
+                        sublabel = "Automatically expand full player when tapping a song in Library",
+                        checked = prefs.openPlayerOnLibraryTrackSelect,
+                        onCheckedChange = viewModel::setOpenPlayerOnLibraryTrackSelect
+                    )
+                    ToggleRow(
+                        label = "Pull up Now Playing from Playlists",
+                        sublabel = "Automatically expand full player when tapping a song in Playlists",
+                        checked = prefs.openPlayerOnPlaylistTrackSelect,
+                        onCheckedChange = viewModel::setOpenPlayerOnPlaylistTrackSelect
                     )
                 }
             }
@@ -771,7 +805,15 @@ private fun QualitySection(
 ) {
     TerminalBorder(modifier = Modifier.fillMaxWidth()) {
         Column {
-            val options = listOf(null to "Original", 320 to "320 kbps", 128 to "128 kbps", 64 to "64 kbps")
+            val options = listOf(
+                null to "Original",
+                320 to "320 kbps",
+                256 to "256 kbps",
+                192 to "192 kbps",
+                128 to "128 kbps",
+                96 to "96 kbps",
+                64 to "64 kbps"
+            )
             options.forEach { (bitRate, label) ->
                 Text(
                     text = (if (bitRate == selectedBitRate) "> " else "  ") + label,
@@ -972,6 +1014,10 @@ private fun CrtAestheticsSection(
     onCursorBlinkChange: (TerminalCursorBlink) -> Unit,
     adaptiveArtAccent: Boolean,
     onAdaptiveArtAccentChange: (Boolean) -> Unit,
+    reactiveHudFlash: Boolean,
+    onReactiveHudFlashChange: (Boolean) -> Unit,
+    visualizerStyle: VisualizerStyle,
+    onVisualizerStyleChange: (VisualizerStyle) -> Unit,
     motionPreference: MotionPreference
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1013,6 +1059,49 @@ private fun CrtAestheticsSection(
             checked = adaptiveArtAccent,
             onCheckedChange = onAdaptiveArtAccentChange
         )
+
+        ToggleRow(
+            label = "Reactive HUD state flash",
+            sublabel = "Brief terminal alert flash when playback state changes (play/pause/stop)",
+            checked = reactiveHudFlash,
+            onCheckedChange = onReactiveHudFlashChange
+        )
+
+        TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+            Column {
+                Text(
+                    "AUDIO VISUALIZER STYLE",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                VisualizerStyle.entries.forEach { style ->
+                    val isSelected = style == visualizerStyle
+                    val (label, desc) = when (style) {
+                        VisualizerStyle.BARS -> "SPECTRUM BARS" to "Multi-band spectrum analyzer with peak holds"
+                        VisualizerStyle.OSCILLOSCOPE -> "CRT OSCILLOSCOPE" to "Continuous analog vector phosphor waveform"
+                        VisualizerStyle.VU_METER -> "STEREO VU METER" to "Dual-channel calibrated LED peak monitor"
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onVisualizerStyleChange(style) }
+                            .padding(vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = (if (isSelected) "> " else "  ") + label,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = desc,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
 
         TerminalBorder(modifier = Modifier.fillMaxWidth()) {
             Column {
