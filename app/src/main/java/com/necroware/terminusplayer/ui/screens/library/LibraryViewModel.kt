@@ -104,10 +104,10 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             val change = repository.toggleLike(songId)
             val action = if (change.isLiked) "Liked" else "Unliked"
-            _actionMessage.value = if (change.syncQueued) {
-                "$action locally; server sync queued."
-            } else {
-                "$action on this device."
+            _actionMessage.value = when {
+                !change.serverBacked -> "$action on this device."
+                change.syncQueued -> "$action locally; server sync queued."
+                else -> "$action synced with Navidrome."
             }
         }
     }
