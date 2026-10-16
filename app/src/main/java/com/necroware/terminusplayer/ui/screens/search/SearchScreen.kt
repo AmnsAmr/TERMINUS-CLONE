@@ -2,6 +2,7 @@ package com.necroware.terminusplayer.ui.screens.search
 
 import com.necroware.terminusplayer.ui.components.TerminalActionText
 import com.necroware.terminusplayer.ui.components.TerminalSearchBar
+import com.necroware.terminusplayer.ui.components.highlightedText
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -117,27 +118,5 @@ private fun SearchResultRow(song: Song, query: String, onClick: () -> Unit) {
                 )
             }
         }
-    }
-}
-
-@androidx.compose.runtime.Composable
-private fun highlightedText(value: String, query: String) = buildAnnotatedString {
-    val needle = query.trim()
-    if (needle.isEmpty()) {
-        append(value)
-        return@buildAnnotatedString
-    }
-    var cursor = 0
-    while (cursor < value.length) {
-        val matchStart = value.indexOf(needle, cursor, ignoreCase = true)
-        if (matchStart < 0) {
-            append(value.substring(cursor))
-            break
-        }
-        append(value.substring(cursor, matchStart))
-        withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary)) {
-            append(value.substring(matchStart, matchStart + needle.length))
-        }
-        cursor = matchStart + needle.length
     }
 }

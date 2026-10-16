@@ -15,6 +15,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 
@@ -73,5 +76,34 @@ fun TerminalSearchBar(
                     .padding(start = 8.dp)
             )
         }
+    }
+}
+
+/**
+ * Builds an AnnotatedString highlighting matching query substrings with highlightColor.
+ */
+@Composable
+fun highlightedText(
+    value: String,
+    query: String,
+    highlightColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary
+): androidx.compose.ui.text.AnnotatedString = buildAnnotatedString {
+    val needle = query.trim()
+    if (needle.isEmpty()) {
+        append(value)
+        return@buildAnnotatedString
+    }
+    var cursor = 0
+    while (cursor < value.length) {
+        val matchStart = value.indexOf(needle, cursor, ignoreCase = true)
+        if (matchStart < 0) {
+            append(value.substring(cursor))
+            break
+        }
+        append(value.substring(cursor, matchStart))
+        withStyle(SpanStyle(color = highlightColor)) {
+            append(value.substring(matchStart, matchStart + needle.length))
+        }
+        cursor = matchStart + needle.length
     }
 }

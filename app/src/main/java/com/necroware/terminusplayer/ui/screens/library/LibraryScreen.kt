@@ -1,6 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.library
 
 import com.necroware.terminusplayer.ui.components.TerminalActionText
+import com.necroware.terminusplayer.ui.components.highlightedText
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -718,6 +719,7 @@ fun LibrarySongRow(
     song: Song,
     isSelected: Boolean,
     isCurrentlyPlaying: Boolean = false,
+    searchQuery: String = "",
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onLike: () -> Unit,
@@ -861,20 +863,46 @@ fun LibrarySongRow(
                 Row(modifier = Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                     SongArt(uriString = song.uriString, size = 48.dp)
                     Column(modifier = Modifier.padding(start = 12.dp).weight(1f)) {
-                        Text(
-                            song.title,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = accent,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "${if (local) "LOCAL" else "SERVER"} · $sourceStatus${transferStatus?.let { " · ${it.label}" }.orEmpty()} · ${song.artist} · ${song.duration.toMinutesSeconds()}${if (song.isLiked) "  [L]" else ""}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        val subtitleText = "${if (local) "LOCAL" else "SERVER"} · $sourceStatus${transferStatus?.let { " · ${it.label}" }.orEmpty()} · ${song.artist} · ${song.duration.toMinutesSeconds()}${if (song.isLiked) "  [L]" else ""}"
+                        if (searchQuery.isNotBlank()) {
+                            Text(
+                                text = highlightedText(
+                                    value = song.title,
+                                    query = searchQuery,
+                                    highlightColor = MaterialTheme.colorScheme.primary
+                                ),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = highlightedText(
+                                    value = subtitleText,
+                                    query = searchQuery,
+                                    highlightColor = MaterialTheme.colorScheme.primary
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        } else {
+                            Text(
+                                song.title,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = accent,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = subtitleText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                     when {
                         onRetryTransfer != null && transferStatus?.canRetry == true -> TerminalActionText(
