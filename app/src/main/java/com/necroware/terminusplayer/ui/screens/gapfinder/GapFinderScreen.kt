@@ -1,6 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.gapfinder
 
 import com.necroware.terminusplayer.ui.components.TerminalActionText
+import com.necroware.terminusplayer.ui.components.TerminalToggleButton
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -59,9 +61,18 @@ fun GapFinderScreen(
             TerminalBorder(modifier = Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("SETTINGS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth().clickable { viewModel.updateSettings(!s.enabled, s.threshold) }) {
-                        Text("Enabled", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                        TerminalActionText(if (s.enabled) "[ON]" else "[OFF]", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    Row(
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().clickable { viewModel.updateSettings(!s.enabled, s.threshold) }
+                    ) {
+                        Text(
+                            text = "Enabled",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f).padding(end = 12.dp)
+                        )
+                        TerminalToggleButton(checked = s.enabled)
                     }
                     OutlinedTextField(
                         value = thresholdStr,
