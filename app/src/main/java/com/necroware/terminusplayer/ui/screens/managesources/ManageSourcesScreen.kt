@@ -21,6 +21,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.ui.components.TerminalBorder
 import com.necroware.terminusplayer.ui.components.TerminalHeader
+import com.necroware.terminusplayer.ui.components.TerminalToggleButton
 
 @Composable
 fun ManageSourcesScreen(
@@ -87,10 +88,8 @@ fun ManageSourcesScreen(
                             color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.weight(1f).padding(end = 16.dp)
                         )
-                        TerminalActionText(
-                            text = if (isIncluded) "[ON]" else "[OFF]",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
+                        TerminalToggleButton(
+                            checked = isIncluded
                         )
                     }
                 }

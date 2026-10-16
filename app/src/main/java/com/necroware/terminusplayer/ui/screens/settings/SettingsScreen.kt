@@ -1,6 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.settings
 
 import com.necroware.terminusplayer.ui.components.TerminalActionText
+import com.necroware.terminusplayer.ui.components.TerminalToggleButton
 
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -599,18 +600,19 @@ private fun EqualizerSection(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Row {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     TerminalActionText(
                         text = "[RESET] ",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.clickable { onReset() }
                     )
-                    TerminalActionText(
-                        text = if (enabled) "[ON]" else "[OFF]",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.clickable { onEnabledChange(!enabled) }
+                    TerminalToggleButton(
+                        checked = enabled,
+                        onToggle = { onEnabledChange(!enabled) }
                     )
                 }
             }
@@ -655,20 +657,20 @@ private fun CrossfadeSection(
     TerminalBorder(modifier = Modifier.fillMaxWidth()) {
         Column {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onEnabledChange(!enabled) },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = "Fade between tracks",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f).padding(end = 12.dp)
                 )
-                TerminalActionText(
-                    text = if (enabled) "[ON]" else "[OFF]",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { onEnabledChange(!enabled) }
+                TerminalToggleButton(
+                    checked = enabled
                 )
             }
             Row(
@@ -697,13 +699,21 @@ private fun CrossfadeSection(
 
 @Composable
 private fun ToggleRow(label: String, sublabel: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+    TerminalBorder(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+    ) {
         Row(
-            modifier = Modifier.fillMaxWidth().clickable { onCheckedChange(!checked) },
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 12.dp)
+            ) {
                 Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
                 Text(
                     sublabel,
@@ -711,10 +721,8 @@ private fun ToggleRow(label: String, sublabel: String, checked: Boolean, onCheck
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            TerminalActionText(
-                text = if (checked) "[ON]" else "[OFF]",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary
+            TerminalToggleButton(
+                checked = checked
             )
         }
     }

@@ -1,6 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.playlists
 
 import com.necroware.terminusplayer.ui.components.TerminalActionText
+import com.necroware.terminusplayer.ui.components.TerminalToggleButton
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -161,9 +162,12 @@ fun PlaylistsScreen(
                     Text("${sortedPlaylists.size} playlists", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (account.isAdmin) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         Text("OTHER USERS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Switch(checked = showOtherUsers, onCheckedChange = { showOtherUsers = it })
+                        TerminalToggleButton(checked = showOtherUsers, onToggle = { showOtherUsers = !showOtherUsers })
                     }
                 }
             }
