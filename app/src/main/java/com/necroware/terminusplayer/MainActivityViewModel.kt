@@ -6,6 +6,7 @@ import com.necroware.terminusplayer.data.prefs.ThemePresetId
 import com.necroware.terminusplayer.data.prefs.MotionPreference
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.prefs.UserPreferences
+import com.necroware.terminusplayer.data.repository.MusicRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -17,11 +18,13 @@ import javax.inject.Inject
 @HiltViewModel
 class MainActivityViewModel @Inject constructor(
     preferencesRepository: UserPreferencesRepository,
-    uploadQueueManager: com.necroware.terminusplayer.data.repository.UploadQueueManager
+    uploadQueueManager: com.necroware.terminusplayer.data.repository.UploadQueueManager,
+    musicRepository: MusicRepository
 ) : ViewModel() {
 
     init {
         viewModelScope.launch { uploadQueueManager.resumePendingUploads() }
+        viewModelScope.launch { musicRepository.resumePendingLikeSyncs() }
     }
 
     val themeId: StateFlow<ThemePresetId> = preferencesRepository.preferences

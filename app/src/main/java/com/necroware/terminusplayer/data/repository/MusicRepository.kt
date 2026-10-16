@@ -30,6 +30,9 @@ import com.necroware.terminusplayer.data.model.PlaylistAccountInfo
 import com.necroware.terminusplayer.data.model.GenreMix
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.model.PlaylistDownloadPlan
+import com.necroware.terminusplayer.data.model.planPlaylistSync
+import com.necroware.terminusplayer.data.model.requiresPlaylistSyncConflict
+import com.necroware.terminusplayer.data.model.resolveTrackPlaybackUri
 import com.necroware.terminusplayer.data.model.buildPlaylistDownloadPlan
 import com.necroware.terminusplayer.data.model.playlistDownloadLookupKeys
 import com.necroware.terminusplayer.data.model.sqliteQueryBatches
@@ -41,8 +44,8 @@ import com.necroware.terminusplayer.util.parseM3u
 import com.necroware.terminusplayer.util.TransferProgress
 import com.necroware.terminusplayer.data.model.SyncedLyrics
 import com.necroware.terminusplayer.data.model.lyricsCacheIdentity
-import com.necroware.terminusplayer.data.model.normalizedRecordingMetadata
-import com.necroware.terminusplayer.data.model.uniqueRecordingMatch
+import com.necroware.terminusplayer.data.model.unambiguousRecordingMatches
+import com.necroware.terminusplayer.data.model.sameRecordingByMetadata
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -93,7 +96,9 @@ class MusicRepository @Inject constructor(
     private val preferencesRepository: UserPreferencesRepository,
     private val lrclibLyricsRepository: LrclibLyricsRepository,
     private val embeddedLyricsReader: EmbeddedLyricsReader
-) : DownloadTransferRepository {
+) : DownloadTransferRepository, UploadedTrackReconciler {
+
+    enum class AddSongResult { ADDED, ALREADY_PRESENT, LOCAL_ONLY_UNSUPPORTED, NOT_FOUND }
 
     private val syncMutex = Mutex()
     private val _playlistAccountInfo = MutableStateFlow(PlaylistAccountInfo())
@@ -148,15 +153,20 @@ class MusicRepository @Inject constructor(
             )
         } + retainedFailedProviderSongs
         
-        val localSongs = allScanned.filter { it.providerId == "local" }
+        val localSongs = allScanned.filter { it.providerId == "local" }.map { local ->
+            local.copy(navidromeId = existingSongs[local.remoteId]?.navidromeId ?: local.navidromeId)
+        }
         val remoteSongs = allScanned.filter { it.providerId != "local" }
-        
-        val remoteSongsByKey = remoteSongs.groupBy(::normalizedRecordingMetadata)
-        val matchedRemoteIds = mutableSetOf<String>()
+
+        val matchedRemoteIds = localSongs.mapNotNull { it.navidromeId }.toMutableSet()
+        val newMatches = unambiguousRecordingMatches(
+            localSongs.filter { it.navidromeId.isNullOrBlank() },
+            remoteSongs,
+            matchedRemoteIds
+        )
         val deduplicatedLocalSongs = localSongs.map { local ->
-            val key = normalizedRecordingMetadata(local)
-            val match = uniqueRecordingMatch(local, remoteSongsByKey[key].orEmpty())
-                ?.takeIf { it.providerRemoteId !in matchedRemoteIds }
+            if (!local.navidromeId.isNullOrBlank()) return@map local
+            val match = newMatches[local.remoteId]
             if (match != null) {
                 matchedRemoteIds += match.providerRemoteId
                 val mergedGenres = (parseGenreTags(local.genre) + parseGenreTags(match.genre))
@@ -200,6 +210,17 @@ class MusicRepository @Inject constructor(
         removedLocalSongs.forEach { removed ->
             if (embeddedLyricsReader.confirmsPermanentDeletion(removed.uriString)) {
                 lrclibLyricsRepository.cleanupConfirmedLocalFile(removed.uriString)
+            }
+        }
+
+        if ("navidrome" in scans) {
+            try {
+                promoteMatchedLocalLikes()
+                refreshServerLikedSongs()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // A favorites request failure must not invalidate a successful library scan.
             }
         }
 
@@ -261,25 +282,50 @@ class MusicRepository @Inject constructor(
     suspend fun toggleLike(songId: String): LikeChange {
         val song = songDao.getById(songId)
         if (song == null) return LikeChange(isLiked = false, syncQueued = false)
-        val newLikedState = likedSongDao.toggle(songId, System.currentTimeMillis())
-
-        // Local-only tracks have no server identity. A local copy that matched a
-        // Navidrome track uses that remote identity so the server star stays in sync.
-        val providerId = when {
-            song.navidromeId != null -> "navidrome"
-            song.providerId != "local" -> song.providerId
-            else -> return LikeChange(isLiked = newLikedState, syncQueued = false)
+        val now = System.currentTimeMillis()
+        val remoteId = when {
+            song.providerId == "navidrome" -> song.providerRemoteId
+            !song.navidromeId.isNullOrBlank() -> song.navidromeId
+            else -> null
         }
-        val remoteId = song.navidromeId ?: song.providerRemoteId
+        val (newLikedState, shouldQueueSync) = database.withTransaction {
+            val previous = likedSongDao.getLike(songId)
+            val newLikedState = !(previous?.isLiked ?: false)
+            // The version is a persisted operation generation. Millisecond timestamps can
+            // collide on rapid toggles, allowing a stale network acknowledgement to win.
+            val updatedAt = maxOf(now, (previous?.updatedAt ?: 0L) + 1L)
+            if (remoteId == null) {
+                if (newLikedState) {
+                    likedSongDao.like(LikedSongEntity(songId, updatedAt, ownership = LikedSongEntity.OWNERSHIP_LOCAL, updatedAt = updatedAt))
+                } else {
+                    likedSongDao.unlike(songId)
+                }
+                newLikedState to false
+            } else {
+                likedSongDao.like(
+                    LikedSongEntity(
+                        songId = songId,
+                        likedAt = if (newLikedState) updatedAt else previous?.likedAt ?: updatedAt,
+                        isLiked = newLikedState,
+                        ownership = LikedSongEntity.OWNERSHIP_SERVER,
+                        remoteSongId = remoteId,
+                        syncPending = true,
+                        updatedAt = updatedAt
+                    )
+                )
+                newLikedState to true
+            }
+        }
+        if (shouldQueueSync) enqueueLikeSync(songId)
+        return LikeChange(isLiked = newLikedState, syncQueued = shouldQueueSync)
+    }
+
+    private fun enqueueLikeSync(songId: String) {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
         val request = OneTimeWorkRequestBuilder<LikeSyncWorker>()
-            .setInputData(workDataOf(
-                LikeSyncWorker.KEY_PROVIDER_ID to providerId,
-                LikeSyncWorker.KEY_PROVIDER_REMOTE_ID to remoteId,
-                LikeSyncWorker.KEY_IS_LIKED to newLikedState
-            ))
+            .setInputData(workDataOf(LikeSyncWorker.KEY_SONG_ID to songId))
             .setConstraints(constraints)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
@@ -287,7 +333,29 @@ class MusicRepository @Inject constructor(
             ExistingWorkPolicy.REPLACE,
             request
         )
-        return LikeChange(isLiked = newLikedState, syncQueued = true)
+    }
+
+    /** Requeues durable favorite intents after startup if the app died before work was persisted. */
+    suspend fun resumePendingLikeSyncs() = withContext(Dispatchers.IO) {
+        likedSongDao.getPendingLikes().forEach { pending ->
+            enqueueLikeSyncIfAbsent(pending.songId)
+        }
+    }
+
+    private fun enqueueLikeSyncIfAbsent(songId: String) {
+        val request = OneTimeWorkRequestBuilder<LikeSyncWorker>()
+            .setInputData(workDataOf(LikeSyncWorker.KEY_SONG_ID to songId))
+            .setConstraints(
+                Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .build()
+            )
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "like-sync:$songId",
+            ExistingWorkPolicy.KEEP,
+            request
+        )
     }
 
     suspend fun syncLike(providerId: String, providerRemoteId: String, isLiked: Boolean) {
@@ -295,8 +363,91 @@ class MusicRepository @Inject constructor(
         provider.toggleLike(providerRemoteId, isLiked)
     }
 
+    suspend fun syncPendingLike(songId: String) {
+        val pending = likedSongDao.getLike(songId) ?: return
+        if (!pending.syncPending) return
+        val remoteId = pending.remoteSongId ?: throw IOException("Pending Navidrome favorite has no server song ID")
+        syncLike("navidrome", remoteId, pending.isLiked)
+        if (pending.isLiked) likedSongDao.markLikeSynced(songId, pending.updatedAt)
+        else likedSongDao.deleteSyncedUnlike(songId, pending.updatedAt)
+    }
+
+    private suspend fun promoteMatchedLocalLikes() {
+        val localLikes = likedSongDao.getLocalLikedRows()
+        if (localLikes.isEmpty()) return
+        val songs = localLikes.map { it.songId }.chunked(800).flatMap { songDao.getByIds(it) }
+            .filter { it.providerId == "local" && !it.navidromeId.isNullOrBlank() }
+        songs.forEach { song ->
+            val remoteId = song.navidromeId ?: return@forEach
+            val changedAt = System.currentTimeMillis()
+            likedSongDao.promoteLocalLike(song.remoteId, remoteId, changedAt)
+            enqueueLikeSync(song.remoteId)
+        }
+    }
+
     /** Used by the Now Playing like-button to reflect the current track's liked state. */
     fun observeLikedIds(): Flow<List<String>> = likedSongDao.observeLikedIds()
+
+    /** Imports Navidrome's starred songs while keeping likes on local-only tracks intact. */
+    suspend fun refreshServerLikedSongs() = withContext(Dispatchers.IO) {
+        val (user, token, salt) = subsonicCredentials()
+        val response = subsonicApi.getStarred2(user, token, salt)
+        if (response.response.status != "ok") {
+            throw IOException(response.response.error?.message ?: "Could not load Navidrome favorites")
+        }
+        val starredSongs = response.response.starred2?.songs.orEmpty()
+        val serverIds = starredSongs.map { it.id }.distinct()
+        val existingSongs = serverIds.chunked(400).flatMap { songDao.getByNavidromeIds(it) }
+        val serverSongsById = existingSongs.filter { it.providerId == "navidrome" }.associateBy { it.providerRemoteId }
+        val localSongsByServerId = existingSongs
+            .filter { it.providerId == "local" && !it.navidromeId.isNullOrBlank() }
+            .groupBy { it.navidromeId.orEmpty() }
+        val missingSongs = starredSongs.distinctBy { it.id }
+            .filter { serverSongsById[it.id] == null && localSongsByServerId[it.id].orEmpty().size != 1 }
+            .map { song ->
+            SongEntity(
+                remoteId = namespacedSongId("navidrome", song.id),
+                providerId = "navidrome",
+                providerRemoteId = song.id,
+                title = song.title,
+                artist = song.artist?.takeIf { it.isNotBlank() } ?: "Unknown Artist",
+                album = song.album?.takeIf { it.isNotBlank() } ?: "Unknown Album",
+                albumId = song.albumId.orEmpty(),
+                duration = (song.duration?.toLong() ?: 0L) * 1000L,
+                uriString = "terminus://${song.id}",
+                dateAdded = System.currentTimeMillis(),
+                trackNumber = song.track ?: 0,
+                year = song.year ?: 0,
+                folderPath = song.path.orEmpty(),
+                sizeBytes = song.size ?: 0L
+            )
+        }
+        val likedSongs = serverIds.mapNotNull { id ->
+            val songId = serverSongsById[id]?.remoteId
+                ?: localSongsByServerId[id].orEmpty().singleOrNull()?.remoteId
+                ?: namespacedSongId("navidrome", id).takeIf { missingSongs.any { song -> song.remoteId == it } }
+            songId?.let { it to id }
+        }
+        database.withTransaction {
+            missingSongs.chunked(400).forEach { songDao.upsertAll(it) }
+            likedSongDao.clearServerManagedLikes()
+            val syncedAt = System.currentTimeMillis()
+            likedSongs.forEach { (songId, serverId) ->
+                likedSongDao.applyServerSnapshotLike(songId, serverId, syncedAt, syncedAt)
+            }
+            if (likedSongs.isNotEmpty()) likedSongDao.insertSyncedLikes(
+                likedSongs.map { (songId, serverId) ->
+                    LikedSongEntity(
+                        songId = songId,
+                        likedAt = syncedAt,
+                        ownership = LikedSongEntity.OWNERSHIP_SERVER,
+                        remoteSongId = serverId,
+                        updatedAt = syncedAt
+                    )
+                }
+            )
+        }
+    }
 
     /**
      * Media3's MediaController doesn't preserve a MediaItem's local content
@@ -308,7 +459,7 @@ class MusicRepository @Inject constructor(
     suspend fun getSongUri(songId: String, timeOffsetMs: Long? = null): String? {
         val song = songDao.getById(songId) ?: return null
         return try {
-            val uri = resolveSongUri(song)
+            val uri = resolveSongUri(song) ?: return null
             if (song.providerId == "navidrome" && timeOffsetMs != null && timeOffsetMs > 0L) {
                 Uri.parse(uri).buildUpon()
                     .appendQueryParameter("timeOffset", (timeOffsetMs / 1000L).toString())
@@ -320,7 +471,7 @@ class MusicRepository @Inject constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            song.uriString
+            null
         }
     }
 
@@ -330,42 +481,165 @@ class MusicRepository @Inject constructor(
             .flatMap { songDao.getByIds(it) }
             .associateBy { it.remoteId }
 
-        val providerToRemoteIds = songsById.values.groupBy({ it.providerId }, { it.providerRemoteId })
-        val resolvedByProvider = providerToRemoteIds.mapValues { (providerId, remoteIds) ->
-            try {
-                val downloadedByRemoteId = songsById.values
-                    .filter { it.providerId == providerId && it.downloadedUri != null }
-                    .associate { it.providerRemoteId to it.downloadedUri.orEmpty() }
-                val unresolvedIds = remoteIds.distinct().filterNot { it in downloadedByRemoteId }
-                val liveUrls = if (unresolvedIds.isEmpty()) emptyMap() else {
-                    providers[providerId]?.resolveStreamUrls(unresolvedIds) ?: emptyMap()
-                }
-                downloadedByRemoteId + liveUrls
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                emptyMap()
+        val downloadedUris = mutableMapOf<String, String>()
+        val readableLocalUris = mutableMapOf<String, String>()
+        val serverIdsBySong = mutableMapOf<String, String>()
+        songsById.values.forEach { song ->
+            val downloaded = song.downloadedUri?.let(Uri::parse)?.takeIf(::isReadableDownload)
+            if (downloaded != null) {
+                downloadedUris[song.remoteId] = downloaded.toString()
+                return@forEach
             }
+            if (song.downloadedUri != null) songDao.setDownloadedUri(song.remoteId, null)
+            if (song.providerId == "local" && isReadableUri(song.uriString)) {
+                readableLocalUris[song.remoteId] = song.uriString
+                return@forEach
+            }
+            val serverId = when {
+                song.providerId == "navidrome" -> song.providerRemoteId
+                !song.navidromeId.isNullOrBlank() -> song.navidromeId
+                else -> null
+            }
+            if (serverId != null) serverIdsBySong[song.remoteId] = serverId
         }
-
+        val serverUrls = try {
+            providers["navidrome"]?.resolveStreamUrls(serverIdsBySong.values.distinct()) ?: emptyMap()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyMap()
+        }
         buildMap {
-            songIds.distinct().forEach { songId ->
-                val song = songsById[songId] ?: return@forEach
-                val resolvedUri = resolvedByProvider[song.providerId]?.get(song.providerRemoteId)
-                put(songId, resolvedUri ?: song.uriString)
+            songsById.values.forEach { song ->
+                val uri = resolveTrackPlaybackUri(
+                    downloadedUri = downloadedUris[song.remoteId],
+                    downloadedAvailable = downloadedUris.containsKey(song.remoteId),
+                    providerId = song.providerId,
+                    localUri = song.uriString,
+                    localAvailable = readableLocalUris.containsKey(song.remoteId),
+                    serverStreamUri = serverIdsBySong[song.remoteId]?.let(serverUrls::get)
+                )
+                if (uri != null) put(song.remoteId, uri)
             }
         }
     }
 
-    private suspend fun resolveSongUri(song: SongEntity): String =
-        song.downloadedUri
-            ?: providers[song.providerId]?.resolveStreamUrl(song.providerRemoteId)
-            ?: song.uriString
+    /** Resolves an already-loaded playback queue without re-reading every song from Room. */
+    suspend fun resolvePlaybackUris(songs: List<Song>): Map<String, String> = withContext(Dispatchers.IO) {
+        val serverIdsBySong = mutableMapOf<String, String>()
+        val downloadedUris = mutableMapOf<String, String>()
+
+        songs.distinctBy { it.id }.forEach { song ->
+            val downloaded = song.downloadedUri?.let(Uri::parse)?.takeIf(::isReadableDownload)
+            if (downloaded != null) {
+                downloadedUris[song.id] = downloaded.toString()
+                return@forEach
+            }
+            if (song.downloadedUri != null) songDao.setDownloadedUri(song.id, null)
+
+            // Local library URIs are already present on the Song. Avoid opening every
+            // local file before starting a queue; Media3 will report a missing file
+            // for the active item without delaying playback of the selected track.
+            if (song.providerId == "local") return@forEach
+
+            serverIdsBySong[song.id] = song.providerRemoteId
+        }
+
+        val serverUrls = try {
+            providers["navidrome"]?.resolveStreamUrls(serverIdsBySong.values.distinct()) ?: emptyMap()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyMap()
+        }
+
+        buildMap {
+            downloadedUris.forEach { (songId, uri) -> put(songId, uri) }
+            serverIdsBySong.forEach { (songId, remoteId) ->
+                serverUrls[remoteId]?.let { put(songId, it) }
+            }
+        }
+    }
+
+    private suspend fun resolveSongUri(song: SongEntity): String? {
+        val downloaded = song.downloadedUri?.let(Uri::parse)?.takeIf(::isReadableDownload)?.toString()
+        if (downloaded != null) {
+            return resolveTrackPlaybackUri(downloaded, true, song.providerId, song.uriString, false, null)
+        }
+        if (song.downloadedUri != null) songDao.setDownloadedUri(song.remoteId, null)
+        val localAvailable = song.providerId == "local" && isReadableUri(song.uriString)
+        if (localAvailable) {
+            return resolveTrackPlaybackUri(null, false, song.providerId, song.uriString, true, null)
+        }
+        val stream = when {
+            song.providerId == "navidrome" -> providers["navidrome"]?.resolveStreamUrl(song.providerRemoteId)
+            !song.navidromeId.isNullOrBlank() && !localAvailable -> providers["navidrome"]?.resolveStreamUrl(song.navidromeId)
+            else -> null
+        }
+        return resolveTrackPlaybackUri(
+            downloadedUri = null,
+            downloadedAvailable = false,
+            providerId = song.providerId,
+            localUri = song.uriString,
+            localAvailable = localAvailable,
+            serverStreamUri = stream
+        )
+    }
 
     suspend fun getSong(songId: String): Song? {
         val song = songDao.getById(songId) ?: return null
         val isLiked = likedSongDao.isLiked(songId)
         return song.toSong(isLiked = isLiked)
+    }
+
+    /** Re-scans after a completed upload and links only a unique metadata match. */
+    override suspend fun reconcileUploadedSong(songId: String): Boolean {
+        val before = songDao.getById(songId) ?: return false
+        if (before.providerId != "local") return false
+        val result = syncLibrary()
+        if ("navidrome" !in result.successfulProviders) return false
+        val linked = !songDao.getById(songId)?.navidromeId.isNullOrBlank()
+        if (linked) {
+            playlistDao.markContainingServerPlaylistsPending(songId)
+            enqueuePlaylistSync()
+        }
+        return linked
+    }
+
+    suspend fun getUploadMatchCandidates(localSongId: String): List<Song> = withContext(Dispatchers.Default) {
+        val local = songDao.getById(localSongId)?.takeIf {
+            it.providerId == "local" && it.navidromeId.isNullOrBlank()
+        } ?: return@withContext emptyList()
+        val all = songDao.getAllSongs()
+        val alreadyLinkedRemoteIds = all.asSequence()
+            .filter { it.providerId == "local" }
+            .mapNotNull { it.navidromeId }
+            .toSet()
+        val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
+        all.asSequence()
+            .filter { it.providerId == "navidrome" && it.providerRemoteId !in alreadyLinkedRemoteIds }
+            .filter { sameRecordingByMetadata(local, it) }
+            .map { it.toSong(isLiked = it.remoteId in likedIds) }
+            .toList()
+    }
+
+    /** Applies a mapping only after an explicit user choice and a fresh uniqueness check. */
+    suspend fun linkUploadedLocalSong(localSongId: String, serverSongId: String) {
+        val local = songDao.getById(localSongId)
+            ?: throw IOException("Local track no longer exists")
+        if (local.providerId != "local") throw IOException("Only local tracks can be linked this way")
+        val remote = songDao.getById(serverSongId)
+            ?.takeIf { it.providerId == "navidrome" }
+            ?: throw IOException("Selected Navidrome track is no longer in the library")
+        if (getUploadMatchCandidates(localSongId).none { it.id == remote.remoteId }) {
+            throw IOException("This match is no longer available or is already linked")
+        }
+        if (songDao.linkLocalSongToNavidrome(localSongId, remote.providerRemoteId) != 1) {
+            throw IOException("This Navidrome track has already been linked to another local file")
+        }
+        promoteMatchedLocalLikes()
+        playlistDao.markContainingServerPlaylistsPending(localSongId)
+        enqueuePlaylistSync()
     }
 
     suspend fun getSongByUri(uri: String): Song? {
@@ -907,7 +1181,9 @@ class MusicRepository @Inject constructor(
                     name = row.name,
                     songCount = row.songCount,
                     ownerUsername = row.ownerUsername,
-                    isRemote = row.id.startsWith(SERVER_PLAYLIST_PREFIX)
+                        isRemote = row.ownership == PlaylistEntity.OWNERSHIP_SERVER,
+                        hasSyncConflict = row.hasSyncConflict,
+                        serverPlaylistMissing = row.serverPlaylistMissing
                 )
             }
         }
@@ -927,20 +1203,18 @@ class MusicRepository @Inject constructor(
     suspend fun getCachedSongsForPlaylist(playlistId: String): List<Song> = withContext(Dispatchers.Default) {
         val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
         playlistDao.getSongsForPlaylist(playlistId).map { it.toSong(isLiked = it.remoteId in likedIds) }
-            .groupBy { offlineTrackKey(it.title, it.artist) }
-            .map { (_, group) -> group.find { it.providerId == "local" } ?: group.first() }
     }
 
     /** Refreshes the stored remote snapshot; callers can show cached songs while this runs. */
     suspend fun refreshPlaylistSongsFromServer(playlistId: String) {
         val playlist = playlistDao.getPlaylist(playlistId)
-        if (playlist?.serverPlaylistId != null) {
+        if (playlist?.ownership == PlaylistEntity.OWNERSHIP_SERVER && playlist.serverPlaylistId != null && !playlist.syncPending && !playlist.deletePending) {
             val refreshWindowMs = 5 * 60 * 1000L
             val snapshotIsFresh = playlist.remoteContentSignature != null &&
                 playlist.remoteSnapshotSongCount == playlist.remoteSongCount &&
                 System.currentTimeMillis() - playlist.remoteSnapshotCheckedAt < refreshWindowMs
             if (snapshotIsFresh) return
-            refreshServerPlaylistSongs(playlist, replaceMembership = playlist.id.startsWith(SERVER_PLAYLIST_PREFIX))
+            refreshServerPlaylistSongs(playlist)
         }
     }
 
@@ -1039,25 +1313,36 @@ class MusicRepository @Inject constructor(
     private fun offlineTrackKey(title: String, artist: String) =
         "${title.trim().lowercase()}|${artist.trim().lowercase()}"
 
+    private fun playlistContentSignature(songIds: List<String>): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(songIds.joinToString("\u0000").toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
     suspend fun refreshRemotePlaylists() = withContext(Dispatchers.IO) {
         val (user, token, salt) = subsonicCredentials()
         _playlistAccountInfo.value = PlaylistAccountInfo(username = user)
         val response = subsonicApi.getPlaylists(user, token, salt)
         if (response.response.status != "ok") throw IOException("Could not load server playlists")
         response.response.playlists?.items.orEmpty().forEach { remote ->
-            val existing = playlistDao.getPlaylistByServerId(remote.id)
+            val matches = playlistDao.getPlaylistsByServerId(remote.id)
+            if (matches.size > 1) throw IOException("More than one local playlist is linked to Navidrome playlist ${remote.id}")
+            val existing = matches.singleOrNull()
             if (existing == null) {
+                val preferredId = SERVER_PLAYLIST_PREFIX + remote.id
+                val idCollision = playlistDao.getPlaylist(preferredId)?.let { it.serverPlaylistId != remote.id } == true
                 playlistDao.insertPlaylist(
                     PlaylistEntity(
-                        id = SERVER_PLAYLIST_PREFIX + remote.id,
+                        id = if (idCollision) java.util.UUID.randomUUID().toString() else preferredId,
                         name = remote.name,
                         createdAt = System.currentTimeMillis(),
                         serverPlaylistId = remote.id,
                         remoteSongCount = remote.songCount ?: 0,
-                        ownerUsername = remote.owner
+                        ownerUsername = remote.owner,
+                        ownership = PlaylistEntity.OWNERSHIP_SERVER,
+                        remoteSnapshotName = remote.name
                     )
                 )
-            } else {
+            } else if (existing.ownership == PlaylistEntity.OWNERSHIP_SERVER) {
                 playlistDao.updateRemotePlaylist(
                     remote.id,
                     remote.name,
@@ -1087,31 +1372,41 @@ class MusicRepository @Inject constructor(
         }
     }
 
-    private suspend fun refreshServerPlaylistSongs(playlist: PlaylistEntity, replaceMembership: Boolean) {
+    private suspend fun refreshServerPlaylistSongs(playlist: PlaylistEntity, forceReplace: Boolean = false) {
+        if (playlist.ownership != PlaylistEntity.OWNERSHIP_SERVER) return
         val serverId = playlist.serverPlaylistId ?: return
         val (user, token, salt) = subsonicCredentials()
         val response = subsonicApi.getPlaylist(serverId, user, token, salt)
         if (response.response.status != "ok") throw IOException("Could not load playlist tracks")
         val remote = response.response.playlist ?: throw IOException("Server returned no playlist data")
         val entries = remote.entries.orEmpty()
-        val signature = java.security.MessageDigest.getInstance("SHA-256")
-            .digest(entries.joinToString("\u0000") { it.id }.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
+        val signature = playlistContentSignature(entries.map { it.id })
         val checkedAt = System.currentTimeMillis()
-        if (playlist.remoteContentSignature == signature) {
-            playlistDao.updateRemoteSnapshot(playlist.id, entries.size, signature, checkedAt)
+        if (playlist.remoteContentSignature == signature && !forceReplace) {
+            playlistDao.updateRemoteSnapshot(playlist.id, entries.size, signature, checkedAt, remote.name)
+            return
+        }
+        if (!forceReplace && playlist.syncPending) {
+            playlistDao.savePlaylistConflict(
+                playlistId = playlist.id,
+                signature = signature,
+                name = remote.name,
+                songIds = org.json.JSONArray(entries.map { it.id }).toString()
+            )
             return
         }
 
         val entryIds = entries.map { it.id }.distinct()
         val existingSongs = entryIds.chunked(400).flatMap { songDao.getByNavidromeIds(it) }
-        val byNavidromeId = buildMap {
-            existingSongs.forEach { song ->
-                if (song.providerId == "navidrome") put(song.providerRemoteId, song)
-                song.navidromeId?.let { put(it, song) }
-            }
-        }
-        val missingSongs = entries.filter { it.id !in byNavidromeId }.distinctBy { it.id }.map { entry ->
+        val serverSongsById = existingSongs
+            .filter { it.providerId == "navidrome" }
+            .associateBy { it.providerRemoteId }
+        val localSongsByServerId = existingSongs
+            .filter { it.providerId == "local" && !it.navidromeId.isNullOrBlank() }
+            .groupBy { it.navidromeId.orEmpty() }
+        val missingSongs = entries.distinctBy { it.id }
+            .filter { entry -> serverSongsById[entry.id] == null && localSongsByServerId[entry.id].orEmpty().size != 1 }
+            .map { entry ->
             SongEntity(
                 remoteId = namespacedSongId("navidrome", entry.id),
                 providerId = "navidrome",
@@ -1129,25 +1424,40 @@ class MusicRepository @Inject constructor(
                 sizeBytes = entry.size ?: 0L
             )
         }
-        val mappedIds = entries.mapNotNull { entry ->
-            byNavidromeId[entry.id]?.remoteId ?: namespacedSongId("navidrome", entry.id).takeIf { missingSongs.any { song -> song.remoteId == it } }
-        }.distinct()
-        val currentMemberships = playlistDao.getPlaylistMemberships(playlist.id)
-        val currentIds = currentMemberships.map { it.songId }.toSet()
-        val newMemberships = if (replaceMembership) {
-            mappedIds.mapIndexed { index, id -> PlaylistSongEntity(playlist.id, id, index, syncedToServer = true) }
-        } else {
-            var position = playlistDao.nextSongPosition(playlist.id)
-            mappedIds.filterNot { it in currentIds }.map { id ->
-                PlaylistSongEntity(playlist.id, id, position++, syncedToServer = true)
+        val mappedIds = entries.map { entry ->
+            serverSongsById[entry.id]?.remoteId
+                ?: localSongsByServerId[entry.id].orEmpty().singleOrNull()?.remoteId
+                ?: namespacedSongId("navidrome", entry.id)
+        }
+        val newMemberships = mappedIds.mapIndexed { index, id ->
+            PlaylistSongEntity(playlist.id, id, index, syncedToServer = true)
+        }
+        val previousMemberships = playlistDao.getPlaylistSongsForSync(playlist.id)
+        val localOnlyEntries = previousMemberships.filter { it.serverSongId.isNullOrBlank() }
+        val localEntriesByAnchor = localOnlyEntries.groupBy { localEntry ->
+            previousMemberships.count { it.serverSongId != null && it.position < localEntry.position }
+                .coerceAtMost(newMemberships.size)
+        }
+        val mergedMemberships = buildList {
+            for (anchor in 0..newMemberships.size) {
+                localEntriesByAnchor[anchor].orEmpty().forEach { localEntry ->
+                    val nextPosition = size
+                    add(PlaylistSongEntity(playlist.id, localEntry.songId, nextPosition, syncedToServer = false, entryId = localEntry.entryId))
+                }
+                if (anchor < newMemberships.size) {
+                    val serverEntry = newMemberships[anchor]
+                    val nextPosition = size
+                    add(serverEntry.copy(position = nextPosition))
+                }
             }
         }
 
         database.withTransaction {
             missingSongs.chunked(900).forEach { songDao.upsertAll(it) }
-            if (replaceMembership) playlistDao.purgePlaylistSongs(playlist.id)
-            if (newMemberships.isNotEmpty()) newMemberships.chunked(400).forEach { playlistDao.insertPlaylistSongs(it) }
-            playlistDao.updateRemoteSnapshot(playlist.id, entries.size, signature, checkedAt)
+            playlistDao.replaceServerPlaylistSnapshot(playlist.id, mergedMemberships, entries.size, signature, checkedAt, remote.name)
+            if (forceReplace) {
+                playlistDao.resolvePlaylistConflictUseServer(playlist.id, remote.name, signature, entries.size, checkedAt)
+            }
         }
     }
 
@@ -1174,15 +1484,106 @@ class MusicRepository @Inject constructor(
         require(cleanedName.isNotEmpty()) { "Playlist name cannot be empty" }
         val id = java.util.UUID.randomUUID().toString()
         playlistDao.insertPlaylist(
-            PlaylistEntity(id = id, name = cleanedName, createdAt = System.currentTimeMillis(), syncPending = true)
+            PlaylistEntity(id = id, name = cleanedName, createdAt = System.currentTimeMillis())
         )
-        enqueuePlaylistSync()
         return id
+    }
+
+    suspend fun renamePlaylist(playlistId: String, name: String) {
+        val cleanedName = name.trim()
+        require(cleanedName.isNotEmpty()) { "Playlist name cannot be empty" }
+        val playlist = playlistDao.getPlaylist(playlistId) ?: throw IOException("Playlist no longer exists")
+        if (playlist.ownership == PlaylistEntity.OWNERSHIP_SERVER) {
+            playlistDao.renameServerPlaylist(playlistId, cleanedName)
+            enqueuePlaylistSync()
+        } else {
+            playlistDao.renameLocalPlaylist(playlistId, cleanedName)
+        }
+    }
+
+    /** Creates a server-owned playlist only after the user explicitly requests it. */
+    suspend fun createServerPlaylist(name: String): String {
+        val cleanedName = name.trim()
+        require(cleanedName.isNotEmpty()) { "Playlist name cannot be empty" }
+        val (user, token, salt) = subsonicCredentials()
+        val response = subsonicApi.createPlaylist(name = cleanedName, user = user, token = token, salt = salt)
+        if (response.response.status != "ok") {
+            throw IOException(response.response.error?.message ?: "Navidrome could not create the playlist")
+        }
+        val remote = response.response.playlist ?: throw IOException("Navidrome returned no playlist data")
+        val id = SERVER_PLAYLIST_PREFIX + remote.id
+        val createdAt = System.currentTimeMillis()
+        val matches = playlistDao.getPlaylistsByServerId(remote.id)
+        if (matches.size > 1) throw IOException("This Navidrome playlist has ambiguous local associations")
+        val existing = matches.singleOrNull()
+        if (existing == null) {
+            val idCollision = playlistDao.getPlaylist(id)?.let { it.serverPlaylistId != remote.id } == true
+            val localId = if (idCollision) java.util.UUID.randomUUID().toString() else id
+            playlistDao.insertPlaylist(
+                PlaylistEntity(
+                    id = localId,
+                    name = remote.name.ifBlank { cleanedName },
+                    createdAt = createdAt,
+                    serverPlaylistId = remote.id,
+                    remoteSongCount = remote.songCount ?: 0,
+                    ownerUsername = remote.owner ?: user,
+                    ownership = PlaylistEntity.OWNERSHIP_SERVER,
+                    remoteSnapshotName = remote.name,
+                    remoteContentSignature = playlistContentSignature(emptyList()),
+                    remoteSnapshotSongCount = remote.songCount ?: 0,
+                    remoteSnapshotCheckedAt = createdAt
+                )
+            )
+        } else if (existing.ownership != PlaylistEntity.OWNERSHIP_SERVER) {
+            throw IOException("This server playlist is already linked to a local playlist")
+        }
+        return existing?.id ?: playlistDao.getPlaylistsByServerId(remote.id).single().id
+    }
+
+    /** Publishes server-addressable entries while keeping local-only entries in the device playlist. */
+    suspend fun publishPlaylistToServer(playlistId: String): Pair<Int, Int> {
+        val local = playlistDao.getPlaylist(playlistId) ?: throw IOException("Playlist no longer exists")
+        if (local.ownership != PlaylistEntity.OWNERSHIP_LOCAL || local.serverPlaylistId != null) {
+            throw IOException("Only an unlinked on-device playlist can be published")
+        }
+        val memberships = playlistDao.getPlaylistSongsForSync(playlistId)
+        val serverMemberships = memberships.filter { !it.serverSongId.isNullOrBlank() }
+        val serverSongIds = serverMemberships.map { it.serverSongId!! }
+        val (user, token, salt) = subsonicCredentials()
+        val response = subsonicApi.createPlaylist(
+            name = local.name,
+            songIds = serverSongIds,
+            user = user,
+            token = token,
+            salt = salt
+        )
+        if (response.response.status != "ok") {
+            throw IOException(response.response.error?.message ?: "Navidrome could not create the playlist")
+        }
+        val remote = response.response.playlist ?: throw IOException("Navidrome returned no playlist data")
+        val checkedAt = System.currentTimeMillis()
+        val signature = playlistContentSignature(serverSongIds)
+        database.withTransaction {
+            val attached = playlistDao.attachCreatedServerPlaylist(
+                playlistId = playlistId,
+                serverId = remote.id,
+                name = remote.name.ifBlank { local.name },
+                songCount = serverSongIds.size,
+                ownerUsername = remote.owner ?: user,
+                signature = signature,
+                checkedAt = checkedAt
+            )
+            if (attached != 1) throw IOException("Playlist ownership changed while publishing")
+            if (serverMemberships.isNotEmpty()) {
+                playlistDao.markPlaylistSongsSynced(playlistId, serverMemberships.map { it.entryId })
+            }
+        }
+        return serverSongIds.size to (memberships.size - serverMemberships.size)
     }
 
     suspend fun deletePlaylist(playlistId: String) {
         val playlist = playlistDao.getPlaylist(playlistId) ?: return
-        if (playlist.serverPlaylistId == null) {
+        if (playlist.ownership != PlaylistEntity.OWNERSHIP_SERVER) {
             playlistDao.purgePlaylistSongs(playlistId)
             playlistDao.purgePlaylist(playlistId)
         } else {
@@ -1191,20 +1592,104 @@ class MusicRepository @Inject constructor(
         }
     }
 
-    suspend fun addSongToPlaylist(playlistId: String, songId: String): Boolean {
-        val playlist = playlistDao.getPlaylist(playlistId) ?: return false
-        val song = songDao.getById(songId) ?: return false
-        if (playlistDao.containsSong(playlistId, songId)) return false
+    suspend fun addSongToPlaylist(playlistId: String, songId: String): AddSongResult {
+        val playlist = playlistDao.getPlaylist(playlistId) ?: return AddSongResult.NOT_FOUND
+        val song = songDao.getById(songId) ?: return AddSongResult.NOT_FOUND
+        if (playlistDao.containsSong(playlistId, songId)) return AddSongResult.ALREADY_PRESENT
+        val serverOwned = playlist.ownership == PlaylistEntity.OWNERSHIP_SERVER
+        val serverSongId = if (song.providerId == "navidrome") song.providerRemoteId else song.navidromeId
         val position = playlistDao.nextSongPosition(playlistId)
-        val localAlreadyOnServer = song.providerId == "local"
         playlistDao.insertPlaylistSongIfMissing(
-            PlaylistSongEntity(playlistId, songId, position, syncedToServer = localAlreadyOnServer)
+            PlaylistSongEntity(playlistId, songId, position, syncedToServer = serverOwned && !serverSongId.isNullOrBlank())
         )
-        if (playlist.serverPlaylistId != null || song.providerId == "navidrome") {
+        if (serverOwned && !serverSongId.isNullOrBlank()) {
             playlistDao.markPlaylistPending(playlistId)
             enqueuePlaylistSync()
         }
-        return true
+        return AddSongResult.ADDED
+    }
+
+    /** Removes selected tracks from a playlist. Server playlists require a live update request. */
+    suspend fun removeSongsFromPlaylist(playlistId: String, songIds: List<String>): Int {
+        val playlist = playlistDao.getPlaylist(playlistId) ?: return 0
+        val memberships = playlistDao.getPlaylistMemberships(playlistId)
+        val requested = songIds.toSet()
+        val selectedMemberships = memberships.filter { it.songId in requested }
+        if (selectedMemberships.isEmpty()) return 0
+        val selectedSongsById = songDao.getByIds(selectedMemberships.map { it.songId }).associateBy { it.remoteId }
+
+        database.withTransaction {
+            playlistDao.removePlaylistEntries(selectedMemberships.map { it.entryId })
+            if (playlist.ownership == PlaylistEntity.OWNERSHIP_SERVER) {
+                val removedServerEntries = selectedMemberships.count { membership ->
+                    selectedSongsById[membership.songId]?.let { it.providerId == "navidrome" || !it.navidromeId.isNullOrBlank() } == true
+                }
+                playlistDao.updateRemoteSongCountAndInvalidate(
+                    playlistId,
+                    (playlist.remoteSongCount - removedServerEntries).coerceAtLeast(0)
+                )
+                playlistDao.markPlaylistContentPending(playlistId)
+            }
+        }
+        if (playlist.ownership == PlaylistEntity.OWNERSHIP_SERVER) enqueuePlaylistSync()
+        return selectedMemberships.size
+    }
+
+    suspend fun reorderPlaylistSongs(playlistId: String, orderedEntryIds: List<Long>) {
+        val playlist = playlistDao.getPlaylist(playlistId) ?: throw IOException("Playlist no longer exists")
+        val current = playlistDao.getPlaylistMemberships(playlistId)
+        if (orderedEntryIds.size != current.size || orderedEntryIds.toSet() != current.map { it.entryId }.toSet()) {
+            throw IllegalArgumentException("Playlist order does not match its current entries")
+        }
+        val entriesById = current.associateBy { it.entryId }
+        val reordered = orderedEntryIds.mapIndexed { index, entryId ->
+            requireNotNull(entriesById[entryId]).copy(position = index)
+        }
+        database.withTransaction {
+            playlistDao.updatePlaylistMemberships(reordered)
+            if (playlist.ownership == PlaylistEntity.OWNERSHIP_SERVER) playlistDao.markPlaylistContentPending(playlistId)
+        }
+        if (playlist.ownership == PlaylistEntity.OWNERSHIP_SERVER) enqueuePlaylistSync()
+    }
+
+    suspend fun movePlaylistEntry(playlistId: String, fromIndex: Int, toIndex: Int) {
+        val entries = playlistDao.getPlaylistMemberships(playlistId).toMutableList()
+        if (fromIndex !in entries.indices || toIndex !in entries.indices || fromIndex == toIndex) return
+        val moved = entries.removeAt(fromIndex)
+        entries.add(toIndex, moved)
+        reorderPlaylistSongs(playlistId, entries.map { it.entryId })
+    }
+
+    suspend fun resolvePlaylistConflict(playlistId: String, keepLocalEdits: Boolean) {
+        val playlist = playlistDao.getPlaylist(playlistId)
+            ?: throw IOException("Playlist no longer exists")
+        val conflictSignature = playlist.conflictRemoteSignature
+            ?: throw IOException("This playlist has no pending synchronization conflict")
+        if (conflictSignature == PlaylistEntity.CONFLICT_SERVER_MISSING) {
+            throw IOException("Navidrome no longer has this playlist. Keep it as a local playlist to preserve its tracks.")
+        }
+        if (keepLocalEdits) {
+            val conflictName = playlist.conflictRemoteName
+                ?: throw IOException("The saved server playlist conflict is incomplete")
+            playlistDao.resolvePlaylistConflictKeepLocal(
+                playlistId = playlistId,
+                signature = conflictSignature,
+                name = conflictName,
+                songCount = playlist.conflictRemoteSongIds?.let { org.json.JSONArray(it).length() } ?: 0,
+                checkedAt = System.currentTimeMillis()
+            )
+            enqueuePlaylistSync()
+        } else {
+            // Fetch again at the explicit user action. If the server changed since the
+            // conflict was recorded, the user is explicitly accepting this newest state.
+            refreshServerPlaylistSongs(playlist, forceReplace = true)
+        }
+    }
+
+    suspend fun resolveMissingServerPlaylistAsLocal(playlistId: String) {
+        if (playlistDao.resolveMissingServerPlaylistAsLocal(playlistId) != 1) {
+            throw IOException("This playlist is not in the server-missing conflict state")
+        }
     }
 
     suspend fun syncPendingPlaylists(): Boolean {
@@ -1218,62 +1703,105 @@ class MusicRepository @Inject constructor(
         for (initial in playlistDao.getPendingPlaylists()) {
             val playlist = playlistDao.getPlaylist(initial.id) ?: continue
             val serverId = playlist.serverPlaylistId
-            if (playlist.deletePending) {
-                if (serverId != null) {
-                    val response = subsonicApi.deletePlaylist(serverId, config.username, token, salt)
-                    if (response.response.status != "ok" && response.response.error?.code != 70) return false
+            if (playlist.ownership != PlaylistEntity.OWNERSHIP_SERVER) {
+                if (playlist.deletePending) {
+                    playlistDao.purgePlaylistSongs(playlist.id)
+                    playlistDao.purgePlaylist(playlist.id)
+                } else {
+                    playlistDao.clearPlaylistSyncPending(playlist.id)
                 }
-                playlistDao.purgePlaylistSongs(playlist.id)
-                playlistDao.purgePlaylist(playlist.id)
+                continue
+            }
+            // A conflict remains durable and quiescent until the user explicitly resolves it.
+            if (playlist.conflictRemoteSignature != null) continue
+            if (playlist.deletePending) {
+                val remoteId = serverId ?: return false
+                val currentRemote = subsonicApi.getPlaylist(remoteId, config.username, token, salt)
+                if (currentRemote.response.status != "ok") {
+                    if (currentRemote.response.error?.code == 70) {
+                        playlistDao.purgeServerPlaylist(playlist.id)
+                        continue
+                    }
+                    return false
+                }
+                val remoteData = currentRemote.response.playlist ?: return false
+                val remoteIds = remoteData.entries.orEmpty().map { it.id }
+                val remoteSignature = playlistContentSignature(remoteIds)
+                val baselineKnown = playlist.remoteContentSignature != null && playlist.remoteSnapshotName != null
+                val remoteChanged = !baselineKnown || remoteSignature != playlist.remoteContentSignature ||
+                    remoteData.name != playlist.remoteSnapshotName
+                if (remoteChanged) {
+                    playlistDao.savePlaylistConflict(
+                        playlistId = playlist.id,
+                        signature = remoteSignature,
+                        name = remoteData.name,
+                        songIds = org.json.JSONArray(remoteIds).toString()
+                    )
+                    continue
+                }
+                val response = subsonicApi.deletePlaylist(remoteId, config.username, token, salt)
+                if (response.response.status != "ok" && response.response.error?.code != 70) return false
+                playlistDao.purgeServerPlaylist(playlist.id)
                 continue
             }
 
+            // Missing association is ambiguous. Never turn a pending edit into a new remote list.
+            val resolvedServerId = serverId ?: return false
             val playlistSongs = playlistDao.getPlaylistSongsForSync(playlist.id)
-            if (serverId == null && playlistSongs.none { it.providerId == "navidrome" }) {
-                val localSongs = playlistSongs.filter { it.providerId == "local" }.map { it.songId }
-                if (localSongs.isNotEmpty()) playlistDao.markPlaylistSongsSynced(playlist.id, localSongs)
-                playlistDao.markPlaylistSynced(playlist.id)
-                continue
-            }
-
-            val resolvedServerId = if (serverId == null) {
-                val created = subsonicApi.createPlaylist(
-                    name = playlist.name,
-                    user = config.username,
-                    token = token,
-                    salt = salt
-                )
-                if (created.response.status != "ok") return false
-                val newId = created.response.playlist?.id ?: return false
-                playlistDao.markPlaylistCreated(playlist.id, newId)
-                newId
-            } else serverId
+            val serverPlaylistSongs = playlistSongs.filter { !it.serverSongId.isNullOrBlank() }
+            val desiredSongIds = serverPlaylistSongs.map { it.serverSongId!! }
 
             val remotePlaylist = subsonicApi.getPlaylist(resolvedServerId, config.username, token, salt)
-            if (remotePlaylist.response.status != "ok") return false
+            if (remotePlaylist.response.status != "ok") {
+                if (remotePlaylist.response.error?.code == 70) {
+                    playlistDao.savePlaylistConflict(
+                        playlistId = playlist.id,
+                        signature = PlaylistEntity.CONFLICT_SERVER_MISSING,
+                        name = playlist.remoteSnapshotName ?: playlist.name,
+                        songIds = "[]"
+                    )
+                    continue
+                }
+                return false
+            }
             val remotePlaylistData = remotePlaylist.response.playlist ?: return false
-            val existingServerSongIds = remotePlaylistData.entries.orEmpty().map { it.id }.toSet()
-            val alreadyPresentLocalIds = playlistSongs.filter { it.providerId == "navidrome" && it.providerRemoteId in existingServerSongIds }.map { it.songId }
-            if (alreadyPresentLocalIds.isNotEmpty()) {
-                playlistDao.markPlaylistSongsSynced(playlist.id, alreadyPresentLocalIds)
+            val remoteSongIds = remotePlaylistData.entries.orEmpty().map { it.id }
+            val remoteSignature = playlistContentSignature(remoteSongIds)
+            val localSignature = playlistContentSignature(desiredSongIds)
+            val baselineKnown = playlist.remoteContentSignature != null && playlist.remoteSnapshotName != null
+            if (requiresPlaylistSyncConflict(
+                    baselineKnown = baselineKnown,
+                    baselineSignature = playlist.remoteContentSignature,
+                    baselineName = playlist.remoteSnapshotName,
+                    remoteSignature = remoteSignature,
+                    remoteName = remotePlaylistData.name,
+                    localSignature = localSignature,
+                    localName = playlist.name
+                )
+            ) {
+                playlistDao.savePlaylistConflict(
+                    playlistId = playlist.id,
+                    signature = remoteSignature,
+                    name = remotePlaylistData.name,
+                    songIds = org.json.JSONArray(remoteSongIds).toString()
+                )
+                continue
             }
-            val localSongs = playlistSongs.filter { it.providerId == "local" && !it.syncedToServer }.map { it.songId }
-            if (localSongs.isNotEmpty()) playlistDao.markPlaylistSongsSynced(playlist.id, localSongs)
-
-            val serverSongsToAdd = playlistSongs.filter {
-                it.providerId == "navidrome" && !it.syncedToServer && it.providerRemoteId !in existingServerSongIds
-            }
-            if (serverSongsToAdd.isNotEmpty()) {
+            val plan = planPlaylistSync(remotePlaylistData.name, playlist.name, remoteSongIds, desiredSongIds)
+            if (!plan.isEmpty) {
                 val added = subsonicApi.updatePlaylist(
                     playlistId = resolvedServerId,
-                    songIdsToAdd = serverSongsToAdd.map { it.providerRemoteId },
+                    name = plan.nameToSet,
+                    songIdsToAdd = plan.songIdsToAdd,
+                    songIndicesToRemove = plan.songIndicesToRemove,
                     user = config.username,
                     token = token,
                     salt = salt
                 )
                 if (added.response.status != "ok") return false
-                playlistDao.markPlaylistSongsSynced(playlist.id, serverSongsToAdd.map { it.songId })
             }
+            if (serverPlaylistSongs.isNotEmpty()) playlistDao.markPlaylistSongsSynced(playlist.id, serverPlaylistSongs.map { it.entryId })
+            playlistDao.updateRemoteSnapshot(playlist.id, desiredSongIds.size, localSignature, System.currentTimeMillis(), playlist.name)
             playlistDao.markPlaylistSynced(playlist.id)
         }
         return true
@@ -1319,16 +1847,12 @@ class MusicRepository @Inject constructor(
         val matched = entries.mapNotNull { entry -> matchM3uEntryToSong(entry, byNormalizedTitle) }
         if (matched.isEmpty()) return@withContext 0 to entries.size
 
-        // Playlist membership is unique by (playlistId, songId); repeated M3U rows
-        // therefore keep the first occurrence and are not stored a second time.
         val playlistId = java.util.UUID.randomUUID().toString()
-        val distinctMatched = matched.distinctBy { it.id }
         playlistDao.insertPlaylistWithSongs(
-            PlaylistEntity(id = playlistId, name = name, createdAt = System.currentTimeMillis(), syncPending = true),
-            distinctMatched.mapIndexed { index, song -> PlaylistSongEntity(playlistId, song.id, index) }
+            PlaylistEntity(id = playlistId, name = name, createdAt = System.currentTimeMillis()),
+            matched.mapIndexed { index, song -> PlaylistSongEntity(playlistId, song.id, index) }
         )
-        enqueuePlaylistSync()
-        distinctMatched.size to entries.size
+        matched.size to entries.size
     }
 
     // ---- Add files ---------------------------------------------------

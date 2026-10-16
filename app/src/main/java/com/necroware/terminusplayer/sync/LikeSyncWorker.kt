@@ -17,11 +17,9 @@ class LikeSyncWorker @AssistedInject constructor(
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        val providerId = inputData.getString(KEY_PROVIDER_ID) ?: return Result.failure()
-        val providerRemoteId = inputData.getString(KEY_PROVIDER_REMOTE_ID) ?: return Result.failure()
-        val isLiked = inputData.getBoolean(KEY_IS_LIKED, false)
+        val songId = inputData.getString(KEY_SONG_ID) ?: return Result.failure()
         return try {
-            musicRepository.syncLike(providerId, providerRemoteId, isLiked)
+            musicRepository.syncPendingLike(songId)
             Result.success()
         } catch (e: CancellationException) {
             throw e
@@ -31,8 +29,6 @@ class LikeSyncWorker @AssistedInject constructor(
     }
 
     companion object {
-        const val KEY_PROVIDER_ID = "provider_id"
-        const val KEY_PROVIDER_REMOTE_ID = "provider_remote_id"
-        const val KEY_IS_LIKED = "is_liked"
+        const val KEY_SONG_ID = "song_id"
     }
 }

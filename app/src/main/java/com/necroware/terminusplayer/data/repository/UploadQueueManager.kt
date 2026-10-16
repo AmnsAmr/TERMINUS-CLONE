@@ -10,12 +10,15 @@ import android.net.Uri
 import com.necroware.terminusplayer.data.database.dao.UploadQueueDao
 import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
 import com.necroware.terminusplayer.data.model.Song
+import com.necroware.terminusplayer.data.model.SongTransferStatus
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.sync.UploadWorker
 import com.necroware.terminusplayer.sync.TransferNotifications
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,9 +29,27 @@ class UploadQueueManager @Inject constructor(
     private val uploadQueueDao: UploadQueueDao,
     private val userPreferencesRepository: UserPreferencesRepository
 ) {
+    fun observeSongTransferStatuses(): Flow<Map<String, SongTransferStatus>> = uploadQueueDao.observeAll().map { rows ->
+        rows.mapNotNull { item ->
+            val songId = if (item.transferType == TRANSFER_DOWNLOAD) {
+                item.songId.removePrefix("download:")
+            } else item.songId.takeUnless { it.startsWith("upload-file:") }
+            songId?.let {
+                it to SongTransferStatus(
+                    transferType = item.transferType,
+                    state = item.state,
+                    phase = item.phase,
+                    bytesTransferred = item.bytesTransferred,
+                    totalBytes = item.totalBytes,
+                    errorMessage = item.errorMessage
+                )
+            }
+        }.toMap()
+    }
+
     suspend fun enqueueUploads(songs: List<Song>) = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
-        val entities = songs.mapIndexed { index, song ->
+        val entities = songs.filter { it.providerId == "local" && it.navidromeId.isNullOrBlank() }.mapIndexed { index, song ->
             UploadQueueEntity(
                 songId = song.id,
                 uriString = song.uriString,
@@ -93,6 +114,15 @@ class UploadQueueManager @Inject constructor(
 
     suspend fun retryUpload(songId: String) = withContext(Dispatchers.IO) {
         uploadQueueDao.resetForRetry(songId)
+        startWorker()
+    }
+
+    suspend fun retrySongTransfer(songId: String) = withContext(Dispatchers.IO) {
+        val item = uploadQueueDao.getAll().firstOrNull { queued ->
+            if (queued.transferType == TRANSFER_DOWNLOAD) queued.songId == downloadQueueId(songId)
+            else queued.songId == songId
+        } ?: return@withContext
+        uploadQueueDao.resetForRetry(item.songId)
         startWorker()
     }
 

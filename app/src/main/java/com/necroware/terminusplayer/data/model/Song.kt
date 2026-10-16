@@ -80,7 +80,9 @@ data class Playlist(
     val name: String,
     val songCount: Int,
     val ownerUsername: String? = null,
-    val isRemote: Boolean = false
+    val isRemote: Boolean = false,
+    val hasSyncConflict: Boolean = false,
+    val serverPlaylistMissing: Boolean = false
 )
 
 data class PlaylistAccountInfo(

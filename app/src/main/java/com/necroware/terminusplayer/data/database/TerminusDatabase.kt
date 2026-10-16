@@ -30,7 +30,7 @@ import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
         LyricsCacheFileEntity::class,
         UploadQueueEntity::class
     ],
-    version = 19,
+    version = 23,
     exportSchema = false
 )
 abstract class TerminusDatabase : RoomDatabase() {
@@ -156,6 +156,72 @@ abstract class TerminusDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS lyrics_cache_files (fileIdentity TEXT NOT NULL PRIMARY KEY, cacheKey TEXT NOT NULL, FOREIGN KEY(cacheKey) REFERENCES lyrics_cache(cacheKey) ON UPDATE NO ACTION ON DELETE CASCADE)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_lyrics_cache_files_cacheKey ON lyrics_cache_files(cacheKey)")
+            }
+        }
+
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE playlists ADD COLUMN ownership TEXT NOT NULL DEFAULT 'LOCAL'")
+                // Preserve legacy local-only tracks during classification: their playlist stays local.
+                db.execSQL(
+                    """UPDATE playlists SET ownership = 'SERVER'
+                       WHERE serverPlaylistId IS NOT NULL
+                         AND NOT EXISTS (
+                             SELECT 1 FROM playlist_songs ps
+                             INNER JOIN songs s ON s.remoteId = ps.songId
+                             WHERE ps.playlistId = playlists.id
+                               AND s.providerId = 'local'
+                               AND (s.navidromeId IS NULL OR s.navidromeId = '')
+                         )""".trimIndent()
+                )
+            }
+        }
+
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""CREATE TABLE playlist_songs_new (
+                    entryId INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    playlistId TEXT NOT NULL,
+                    songId TEXT NOT NULL,
+                    position INTEGER NOT NULL,
+                    syncedToServer INTEGER NOT NULL DEFAULT 0
+                )""")
+                db.execSQL("""INSERT INTO playlist_songs_new (playlistId, songId, position, syncedToServer)
+                    SELECT playlistId, songId, position, syncedToServer
+                    FROM playlist_songs ORDER BY playlistId, position, rowid""")
+                db.execSQL("DROP TABLE playlist_songs")
+                db.execSQL("ALTER TABLE playlist_songs_new RENAME TO playlist_songs")
+                db.execSQL("CREATE INDEX index_playlist_songs_playlistId_position ON playlist_songs(playlistId, position)")
+            }
+        }
+
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE liked_songs ADD COLUMN isLiked INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE liked_songs ADD COLUMN ownership TEXT NOT NULL DEFAULT 'LOCAL'")
+                db.execSQL("ALTER TABLE liked_songs ADD COLUMN remoteSongId TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE liked_songs ADD COLUMN syncPending INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE liked_songs ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE liked_songs SET updatedAt = likedAt")
+                db.execSQL("""UPDATE liked_songs
+                    SET ownership = 'SERVER',
+                        remoteSongId = COALESCE(
+                            (SELECT navidromeId FROM songs WHERE songs.remoteId = liked_songs.songId),
+                            (SELECT providerRemoteId FROM songs WHERE songs.remoteId = liked_songs.songId AND songs.providerId = 'navidrome')
+                        )
+                    WHERE EXISTS (
+                        SELECT 1 FROM songs WHERE songs.remoteId = liked_songs.songId
+                          AND (songs.providerId = 'navidrome' OR songs.navidromeId IS NOT NULL)
+                    )""")
+            }
+        }
+
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE playlists ADD COLUMN remoteSnapshotName TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE playlists ADD COLUMN conflictRemoteSignature TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE playlists ADD COLUMN conflictRemoteName TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE playlists ADD COLUMN conflictRemoteSongIds TEXT DEFAULT NULL")
             }
         }
     }
