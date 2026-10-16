@@ -344,9 +344,57 @@ class PlaybackController @Inject constructor(
             queueResolutionJob?.cancel()
             queueResolutionJob = playbackScope.launch {
                 try {
+                    val safeStartIndex = startIndex.coerceAtLeast(0)
+
+                    // Fast-path for large queues (e.g. Library with hundreds/thousands of songs):
+                    // Immediately resolve and start the selected track so playback begins instantly (<15ms),
+                    // then populate the surrounding queue asynchronously without interrupting playback.
+                    if (songsForResolution != null && songsForResolution.size > 32) {
+                        val boundedStartIndex = safeStartIndex.coerceIn(0, songsForResolution.lastIndex)
+                        val selectedSong = songsForResolution[boundedStartIndex]
+                        val resolvedTargetUri = musicRepository.resolvePlaybackUris(listOf(selectedSong))[selectedSong.id]
+                            ?: selectedSong.uriString
+                        val targetItem = selectedSong.copy(uriString = resolvedTargetUri).toMediaItem()
+
+                        if (generation != queueRequestGeneration.get()) return@launch
+                        withContext(Dispatchers.Main.immediate) {
+                            if (generation != queueRequestGeneration.get()) return@withContext
+                            val activeController = controller ?: return@withContext
+                            _state.value = _state.value.copy(connectionError = null)
+                            activeController.setMediaItem(targetItem, 0L)
+                            activeController.prepare()
+                            activeController.play()
+                            onQueueStarted()
+                        }
+
+                        val items = itemsProvider()
+                        if (items.isEmpty() || generation != queueRequestGeneration.get()) return@launch
+                        val resolvedUris = musicRepository.resolvePlaybackUris(songsForResolution)
+                        val resolvedItems = items.map { item ->
+                            resolvedUris[item.mediaId]?.let { item.buildUpon().setUri(Uri.parse(it)).build() } ?: item
+                        }
+                        if (generation != queueRequestGeneration.get()) return@launch
+
+                        withContext(Dispatchers.Main.immediate) {
+                            if (generation != queueRequestGeneration.get()) return@withContext
+                            val activeController = controller ?: return@withContext
+                            if (activeController.currentMediaItem?.mediaId == targetItem.mediaId) {
+                                val itemsBefore = resolvedItems.subList(0, boundedStartIndex)
+                                val itemsAfter = resolvedItems.subList(boundedStartIndex + 1, resolvedItems.size)
+                                if (itemsBefore.isNotEmpty()) {
+                                    activeController.addMediaItems(0, itemsBefore)
+                                }
+                                if (itemsAfter.isNotEmpty()) {
+                                    activeController.addMediaItems(itemsAfter)
+                                }
+                            }
+                        }
+                        return@launch
+                    }
+
                     val items = itemsProvider()
                     if (items.isEmpty()) return@launch
-                    val safeStartIndex = startIndex.coerceIn(0, items.lastIndex)
+                    val boundedIndex = safeStartIndex.coerceIn(0, items.lastIndex)
                     val resolvedUris = if (songsForResolution != null) {
                         musicRepository.resolvePlaybackUris(songsForResolution)
                     } else {
@@ -360,7 +408,7 @@ class PlaybackController @Inject constructor(
                         if (generation != queueRequestGeneration.get()) return@withContext
                         val activeController = controller ?: return@withContext
                         _state.value = _state.value.copy(connectionError = null)
-                        activeController.setMediaItems(resolvedItems, safeStartIndex, 0L)
+                        activeController.setMediaItems(resolvedItems, boundedIndex, 0L)
                         activeController.prepare()
                         activeController.play()
                         onQueueStarted()
