@@ -22,40 +22,31 @@ fun PlaylistSelectionControls(
     onClearSelection: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    if (totalCount == 0) return
+    if (totalCount == 0 || selectedCount <= 0) return
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (selectedCount > 0) {
-            Text(
-                "SELECTED $selectedCount / $totalCount",
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.labelSmall
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                if (selectedCount < totalCount) {
-                    TerminalActionText(
-                        "[ SELECT ALL ]",
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.clickable(onClick = onSelectAll).padding(vertical = 8.dp)
-                    )
-                }
+        Text(
+            "SELECTED $selectedCount / $totalCount",
+            color = MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.labelSmall
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            if (selectedCount < totalCount) {
                 TerminalActionText(
-                    "[ CLEAR ]",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "[ SELECT ALL ]",
+                    color = MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.clickable(onClick = onClearSelection).padding(vertical = 8.dp)
+                    modifier = Modifier.clickable(onClick = onSelectAll).padding(vertical = 8.dp)
                 )
             }
-        } else {
             TerminalActionText(
-                "[ SELECT ALL ]",
+                "[ CLEAR ]",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.clickable(onClick = onSelectAll).padding(vertical = 8.dp)
+                modifier = Modifier.clickable(onClick = onClearSelection).padding(vertical = 8.dp)
             )
         }
     }

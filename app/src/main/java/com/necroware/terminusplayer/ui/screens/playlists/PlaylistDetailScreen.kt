@@ -47,10 +47,14 @@ import com.necroware.terminusplayer.ui.components.stableSortedList
 import com.necroware.terminusplayer.ui.components.reconcileSelection
 import com.necroware.terminusplayer.ui.components.selectAllItemIds
 import com.necroware.terminusplayer.ui.components.playlistSelectionIdentity
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import com.necroware.terminusplayer.ui.components.shouldShowFastScroll
 import com.necroware.terminusplayer.ui.components.toggleSelection
 import com.necroware.terminusplayer.ui.components.PlaylistSelectionActionBar
 import com.necroware.terminusplayer.ui.components.PlaylistSelectionControls
+import com.necroware.terminusplayer.ui.components.TerminalSearchBar
 
 @Composable
 fun PlaylistDetailScreen(
@@ -71,6 +75,24 @@ fun PlaylistDetailScreen(
     val playlistIdentity = playlistSelectionIdentity(state.currentPlaylistId, state.kind?.name)
     var sortField by rememberSaveable(playlistIdentity) { mutableStateOf("PLAYLIST_ORDER") }
     var sortAscending by rememberSaveable(playlistIdentity) { mutableStateOf(true) }
+    var searchQuery by rememberSaveable(playlistIdentity) { mutableStateOf("") }
+    var isSearchOpen by rememberSaveable(playlistIdentity) { mutableStateOf(false) }
+    val searchFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    BackHandler(enabled = isSearchOpen) {
+        isSearchOpen = false
+        searchQuery = ""
+        keyboardController?.hide()
+    }
+
+    LaunchedEffect(isSearchOpen) {
+        if (isSearchOpen) {
+            searchFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
+    }
+
     var selectedSongIds by remember(playlistIdentity) { mutableStateOf<Set<String>>(emptySet()) }
     val haptic = LocalHapticFeedback.current
     val sortedSongs = remember(state.songs, sortField, sortAscending) {
@@ -86,7 +108,20 @@ fun PlaylistDetailScreen(
             }
         )
     }
+    val filteredSongs = remember(sortedSongs, searchQuery, isSearchOpen) {
+        if (!isSearchOpen || searchQuery.isBlank()) {
+            sortedSongs
+        } else {
+            val query = searchQuery.trim()
+            sortedSongs.filter { song ->
+                song.title.contains(query, ignoreCase = true) ||
+                song.artist.contains(query, ignoreCase = true) ||
+                song.album.contains(query, ignoreCase = true)
+            }
+        }
+    }
     val currentSongIds = remember(sortedSongs) { sortedSongs.map { it.id }.toSet() }
+    val visibleSongIds = remember(filteredSongs) { filteredSongs.map { it.id }.toSet() }
     val selectedIds = reconcileSelection(selectedSongIds, currentSongIds)
     val currentPlaylist = state.currentPlaylistId?.let { id -> playlists.firstOrNull { it.id == id } }
     val downloadableSongIds = (state.offlineAvailability as? PlaylistOfflineAvailability.Ready)
@@ -96,8 +131,8 @@ fun PlaylistDetailScreen(
     }
     val listState = rememberLazyListState()
     val playlistHeaderItems = 4 + (if (actionMessage != null) 1 else 0) + (if (currentPlaylist?.hasSyncConflict == true) 1 else 0)
-    val songIndexByKey = remember(sortedSongs) {
-        sortedSongs.mapIndexed { index, song -> "track-$index-${song.id}" to index }.toMap()
+    val songIndexByKey = remember(filteredSongs) {
+        filteredSongs.mapIndexed { index, song -> "track-$index-${song.id}" to index }.toMap()
     }
     val firstVisibleSongIndex = listState.layoutInfo.visibleItemsInfo.firstNotNullOfOrNull { item ->
         (item.key as? String)?.let(songIndexByKey::get)
@@ -127,7 +162,11 @@ fun PlaylistDetailScreen(
                     color = MaterialTheme.colorScheme.onBackground
                 )
                 TerminalActionText(
-                    text = "[ ${state.songs.size} tracks ]",
+                    text = if (isSearchOpen && searchQuery.isNotBlank()) {
+                        "[ ${filteredSongs.size} / ${state.songs.size} tracks ]"
+                    } else {
+                        "[ ${state.songs.size} tracks ]"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)
@@ -195,7 +234,7 @@ fun PlaylistDetailScreen(
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.clickable {
-                        viewModel.playAll(sortedSongs)
+                        viewModel.playAll(filteredSongs)
                         onOpenPlayer?.invoke()
                     }
                 )
@@ -251,24 +290,48 @@ fun PlaylistDetailScreen(
                     title = "SORT PLAYLIST TRACKS",
                     onFieldSelected = { sortField = it },
                     onDirectionSelected = { sortAscending = it },
-                    showDirectionControl = sortField != "PLAYLIST_ORDER"
+                    showDirectionControl = sortField != "PLAYLIST_ORDER",
+                    actionText = if (isSearchOpen) "[ CLOSE ]" else "[ SEARCH ]",
+                    actionColor = if (isSearchOpen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    onActionClick = {
+                        isSearchOpen = !isSearchOpen
+                        if (!isSearchOpen) {
+                            searchQuery = ""
+                            keyboardController?.hide()
+                        }
+                    }
                 )
+                if (isSearchOpen) {
+                    TerminalSearchBar(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it },
+                        placeholder = "FILTER TRACKS...",
+                        focusRequester = searchFocusRequester,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                        onClear = { searchQuery = "" },
+                        onSearchAction = { keyboardController?.hide() }
+                    )
+                }
                 PlaylistSelectionControls(
                     selectedCount = selectedIds.size,
-                    totalCount = sortedSongs.size,
-                    onSelectAll = { selectedSongIds = selectAllItemIds(currentSongIds.toList()) },
+                    totalCount = filteredSongs.size,
+                    onSelectAll = { selectedSongIds = selectedSongIds + visibleSongIds },
                     onClearSelection = { selectedSongIds = emptySet() }
                 )
             }
         }
 
-        if (!state.isLoading && state.songs.isEmpty()) {
+        if (!state.isLoading && filteredSongs.isEmpty()) {
             item {
-                TerminalState("PLAYLIST IS EMPTY", state.errorMessage ?: state.emptyMessage)
+                if (isSearchOpen && searchQuery.isNotBlank()) {
+                    TerminalState("NO MATCHES", "No tracks matching \"$searchQuery\" in this playlist.")
+                } else {
+                    TerminalState("PLAYLIST IS EMPTY", state.errorMessage ?: state.emptyMessage)
+                }
             }
         }
 
-        itemsIndexed(sortedSongs, key = { index, song -> "track-$index-${song.id}" }) { index, song ->
+        itemsIndexed(filteredSongs, key = { index, song -> "track-$index-${song.id}" }) { index, song ->
             LibrarySongRow(
                         song = song,
                         isSelected = song.id in selectedIds,
@@ -277,7 +340,7 @@ fun PlaylistDetailScreen(
                             selectedSongIds = if (selectedIds.isNotEmpty()) {
                                 toggleSelection(selectedIds, song.id)
                             } else {
-                                viewModel.playFrom(song, sortedSongs, index)
+                                viewModel.playFrom(song, filteredSongs, index)
                                 onOpenPlayer?.invoke()
                                 selectedSongIds
                             }
@@ -310,12 +373,12 @@ fun PlaylistDetailScreen(
                     )
         }
       }
-      if (shouldShowFastScroll(sortedSongs.size)) {
+      if (shouldShowFastScroll(filteredSongs.size)) {
           FastScrollRail(
               modifier = Modifier.align(Alignment.CenterEnd),
               listState = listState,
-              itemCount = sortedSongs.size,
-              scrollTargets = remember(sortedSongs, playlistHeaderItems) { fastScrollTargets(sortedSongs.size, playlistHeaderItems) },
+              itemCount = filteredSongs.size,
+              scrollTargets = remember(filteredSongs, playlistHeaderItems) { fastScrollTargets(filteredSongs.size, playlistHeaderItems) },
               initialIndex = firstVisibleSongIndex
           )
       }

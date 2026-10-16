@@ -1,6 +1,7 @@
 package com.necroware.terminusplayer.ui.screens.search
 
 import com.necroware.terminusplayer.ui.components.TerminalActionText
+import com.necroware.terminusplayer.ui.components.TerminalSearchBar
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -68,30 +69,13 @@ fun SearchScreen(
             )
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "> ",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-            SearchTextField(
-                query = query,
-                onQueryChange = viewModel::onQueryChange,
-                focusRequester = focusRequester,
-                modifier = Modifier.weight(1f)
-            )
-            if (query.isNotEmpty()) {
-                TerminalActionText(
-                    text = "[X]",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.clickable { viewModel.onQueryChange("") }
-                )
-            }
-        }
+        TerminalSearchBar(
+            query = query,
+            onQueryChange = viewModel::onQueryChange,
+            focusRequester = focusRequester,
+            modifier = Modifier.padding(top = 16.dp, bottom = 12.dp),
+            onSearchAction = { keyboardController?.hide() }
+        )
 
         when {
             query.isBlank() -> TerminalState(
@@ -109,23 +93,6 @@ fun SearchScreen(
             }
         }
     }
-}
-
-@Composable
-private fun SearchTextField(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    focusRequester: FocusRequester,
-    modifier: Modifier = Modifier
-) {
-    BasicTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        modifier = modifier.focusRequester(focusRequester),
-        textStyle = MaterialTheme.typography.titleMedium.copy(color = MaterialTheme.colorScheme.onBackground),
-        cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
-        singleLine = true
-    )
 }
 
 @Composable

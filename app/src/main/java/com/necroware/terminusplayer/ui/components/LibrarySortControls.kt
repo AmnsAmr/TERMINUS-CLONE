@@ -25,6 +25,9 @@ fun LibrarySortControls(
     onFieldSelected: (String) -> Unit,
     onDirectionSelected: (Boolean) -> Unit,
     showDirectionControl: Boolean = true,
+    actionText: String = "[ CHANGE ]",
+    actionColor: androidx.compose.ui.graphics.Color? = null,
+    onActionClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var showDialog = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
@@ -41,10 +44,16 @@ fun LibrarySortControls(
             modifier = Modifier.clickable { showDialog.value = true }.padding(vertical = 6.dp)
         )
         TerminalActionText(
-            text = "[ CHANGE ]",
+            text = actionText,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.clickable { showDialog.value = true }.padding(vertical = 6.dp)
+            color = actionColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.clickable {
+                if (onActionClick != null) {
+                    onActionClick()
+                } else {
+                    showDialog.value = true
+                }
+            }.padding(vertical = 6.dp)
         )
     }
 
