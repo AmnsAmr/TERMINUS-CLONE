@@ -13,9 +13,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.slideOutVertically
 import com.necroware.terminusplayer.data.prefs.MotionPreference
 
 /** Shared easing curves. Every motion surface should pick one of these instead of a local curve. */
@@ -130,11 +128,3 @@ internal fun MotionTransitionSpec.slideInHorizontallyOrNone(direction: Int = 1):
 internal fun MotionTransitionSpec.slideOutHorizontallyOrNone(direction: Int = 1): ExitTransition =
     if (isInstant || slideFraction == 0f) ExitTransition.None
     else slideOutHorizontally(tweenSpec()) { width -> direction * (width * slideFraction).toInt() }
-
-internal fun MotionTransitionSpec.slideInFromBottomOrNone(): EnterTransition =
-    if (isInstant || slideFraction == 0f) EnterTransition.None
-    else slideInVertically(tweenSpec()) { height -> (height * slideFraction).toInt() }
-
-internal fun MotionTransitionSpec.slideOutToBottomOrNone(): ExitTransition =
-    if (isInstant || slideFraction == 0f) ExitTransition.None
-    else slideOutVertically(tweenSpec()) { height -> (height * slideFraction).toInt() }

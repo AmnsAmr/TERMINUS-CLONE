@@ -10,6 +10,12 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -21,7 +27,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +42,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import kotlinx.coroutines.launch
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavBackStackEntry
@@ -47,6 +58,7 @@ import androidx.navigation.navArgument
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.prefs.MotionPreference
 import com.necroware.terminusplayer.ui.components.MiniPlayerBar
+import com.necroware.terminusplayer.ui.components.MiniPlayerHeight
 import com.necroware.terminusplayer.ui.components.SoundControl
 import com.necroware.terminusplayer.ui.components.TerminalNavIcon
 import com.necroware.terminusplayer.ui.screens.albumdetail.AlbumDetailScreen
@@ -98,12 +110,6 @@ private fun detailPopEnter(motion: MotionPreference, systemAnimationsEnabled: Bo
 private fun detailPopExit(motion: MotionPreference, systemAnimationsEnabled: Boolean): ExitTransition =
     motionTransitionSpec(motion, systemAnimationsEnabled).let { it.slideOutHorizontallyOrNone() + it.fadeOutOrNone() }
 
-private fun sheetEnter(motion: MotionPreference, systemAnimationsEnabled: Boolean): EnterTransition =
-    motionTransitionSpec(motion, systemAnimationsEnabled).let { it.slideInFromBottomOrNone() + it.fadeInOrNone() }
-
-private fun sheetPopExit(motion: MotionPreference, systemAnimationsEnabled: Boolean): ExitTransition =
-    motionTransitionSpec(motion, systemAnimationsEnabled).let { it.slideOutToBottomOrNone() + it.fadeOutOrNone() }
-
 @Composable
 private fun rememberSystemAnimationsEnabled(): Boolean {
     val context = LocalContext.current
@@ -134,6 +140,16 @@ fun TerminusNavGraph(
 ) {
     val navController = rememberNavController()
     val systemAnimationsEnabled = rememberSystemAnimationsEnabled()
+    val motion = remember(motionPreference, systemAnimationsEnabled) {
+        motionTokens(motionPreference, systemAnimationsEnabled)
+    }
+    val panelState = rememberPlayerPanelState(motion.panel)
+    val scope = rememberCoroutineScope()
+    val openPlayer: () -> Unit = { scope.launch { panelState.expand() } }
+    val collapsePlayer: () -> Unit = { scope.launch { panelState.collapse() } }
+    // These flip only at the ends of the travel, so reading them here does not recompose per frame.
+    val panelOpen by remember(panelState) { derivedStateOf { panelState.fraction > 0f } }
+    val panelFullyOpen by remember(panelState) { derivedStateOf { panelState.fraction >= 1f } }
     // Single PlaybackViewModel instance (Hilt, Activity-scoped by default when
     // requested at this top-level composable) shared by the mini bar and the
     // full Now Playing screen so both reflect the same MediaController state.
@@ -165,10 +181,10 @@ fun TerminusNavGraph(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
-    // Mini player + bottom nav are hidden on both the full player and the
-    // detail screens (they push their own back affordance instead).
+    // Mini player + bottom nav are hidden on the detail screens (they push
+    // their own back affordance instead). The full player is a panel above
+    // the NavHost, not a route; it slides the chrome away instead.
     val hideChromeRoutes = setOf(
-        Destination.NowPlaying.route,
         Destination.AlbumDetail.route,
         Destination.ArtistDetail.route,
         Destination.Search.route,
@@ -178,34 +194,35 @@ fun TerminusNavGraph(
     )
 
     val appPalette = LocalAppPalette.current
+    val showChrome = currentRoute !in hideChromeRoutes
+    val miniVisible = showChrome && nowPlaying.title.isNotBlank()
+    val currentScheme = MaterialTheme.colorScheme
+    val miniColorScheme = remember(currentScheme, miniAccent) {
+        currentScheme.copy(
+            primary = miniAccent,
+            outline = miniAccent.copy(alpha = 0.5f)
+        )
+    }
     val routeBackground = when (currentRoute) {
-        Destination.NowPlaying.route -> appPalette.playerBackground
         Destination.Playlists.route, Destination.PlaylistDetail.route -> appPalette.playlistSurface
         else -> appPalette.homeBackground
     }
     Scaffold(
         containerColor = routeBackground,
         bottomBar = {
-            if (currentRoute !in hideChromeRoutes) {
+            if (showChrome) {
                 Column {
-                    val currentScheme = MaterialTheme.colorScheme
-                    val miniColorScheme = remember(currentScheme, miniAccent) {
-                        currentScheme.copy(
-                            primary = miniAccent,
-                            outline = miniAccent.copy(alpha = 0.5f)
-                        )
+                    // Transparent room for the mini bar, which the player panel draws
+                    // underneath. Reserving it here keeps content padding fixed while the panel moves.
+                    if (miniVisible) {
+                        Spacer(Modifier.fillMaxWidth().height(MiniPlayerHeight))
                     }
-                    MaterialTheme(colorScheme = miniColorScheme) {
-                        MiniPlayerBar(
-                            nowPlaying = nowPlaying,
-                            currentSongUri = currentSongUri,
-                            onTogglePlayPause = { playbackViewModel.togglePlayPause() },
-                            onSkipNext = { playbackViewModel.skipToNext() },
-                            onSkipPrevious = { playbackViewModel.skipToPrevious() },
-                            onClick = { navController.navigate(Destination.NowPlaying.route) }
-                        )
-                    }
-                    NavigationBar(containerColor = appPalette.navigationBackground) {
+                    NavigationBar(
+                        containerColor = appPalette.navigationBackground,
+                        modifier = Modifier
+                            .graphicsLayer { translationY = size.height * panelState.fraction }
+                            .then(if (panelFullyOpen) Modifier.clearAndSetSemantics { } else Modifier)
+                    ) {
                         bottomNavItems.forEach { destination ->
                             NavigationBarItem(
                                 selected = currentRoute == destination.route,
@@ -245,13 +262,21 @@ fun TerminusNavGraph(
             }
         }
     ) { innerPadding ->
-        Box(Modifier.fillMaxSize().padding(innerPadding).pointerInput(Unit) {
+        Box(Modifier.fillMaxSize().pointerInput(Unit) {
             detectTapGestures(onDoubleTap = {
                 soundVolume = playbackViewModel.currentVolume()
                 soundControlOnLeft = it.x < size.width / 2f
                 soundControlOpen = true
             })
         }) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                // Fully covered by the open player: skip drawing it and hide it from accessibility.
+                .graphicsLayer { alpha = if (panelState.fraction >= 1f) 0f else 1f }
+                .then(if (panelFullyOpen) Modifier.clearAndSetSemantics { } else Modifier)
+        ) {
         NavHost(
             navController = navController,
             startDestination = Destination.Library.route,
@@ -263,12 +288,12 @@ fun TerminusNavGraph(
         ) {
             composable(Destination.Home.route) {
                 HomeScreen(
-                    onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, navController, prefs.openPlayerOnLibraryTrackSelect) }
+                    onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, openPlayer, prefs.openPlayerOnLibraryTrackSelect) }
                 )
             }
             composable(Destination.Library.route) {
                 LibraryScreen(
-                    onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, navController, prefs.openPlayerOnLibraryTrackSelect) },
+                    onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, openPlayer, prefs.openPlayerOnLibraryTrackSelect) },
                     onAlbumClick = { albumTitle -> navController.navigate(Destination.AlbumDetail.createRoute(albumTitle)) },
                     onArtistClick = { artist -> navController.navigate(Destination.ArtistDetail.createRoute(artist)) },
                     onSearchClick = { navController.navigate(Destination.Search.route) },
@@ -306,20 +331,6 @@ fun TerminusNavGraph(
                 com.necroware.terminusplayer.ui.screens.managesources.ManageSourcesScreen(onBack = { navController.popBackStack() })
             }
             composable(
-                route = Destination.NowPlaying.route,
-                enterTransition = { sheetEnter(motionPreference, systemAnimationsEnabled) },
-                exitTransition = { detailExit(motionPreference, systemAnimationsEnabled) },
-                popEnterTransition = { detailPopEnter(motionPreference, systemAnimationsEnabled) },
-                popExitTransition = { sheetPopExit(motionPreference, systemAnimationsEnabled) }
-            ) {
-                NowPlayingScreen(
-                    viewModel = playbackViewModel,
-                    onCollapse = { navController.popBackStack() },
-                    motionPreference = motionPreference,
-                    systemAnimationsEnabled = systemAnimationsEnabled
-                )
-            }
-            composable(
                 route = Destination.AlbumDetail.route,
                 arguments = listOf(navArgument("albumTitle") { type = NavType.StringType }),
                 enterTransition = { detailEnter(motionPreference, systemAnimationsEnabled) },
@@ -350,9 +361,7 @@ fun TerminusNavGraph(
                 PlaylistDetailScreen(
                     onBack = { navController.popBackStack() },
                     onOpenPlayer = {
-                        if (prefs.openPlayerOnPlaylistTrackSelect) {
-                            navController.navigate(Destination.NowPlaying.route) { launchSingleTop = true }
-                        }
+                        if (prefs.openPlayerOnPlaylistTrackSelect) openPlayer()
                     }
                 )
             }
@@ -364,11 +373,49 @@ fun TerminusNavGraph(
                 popExitTransition = { detailExit(motionPreference, systemAnimationsEnabled) }
             ) {
                 SearchScreen(
-                    onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, navController, prefs.openPlayerOnLibraryTrackSelect) },
+                    onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, openPlayer, prefs.openPlayerOnLibraryTrackSelect) },
                     onBack = { navController.popBackStack() }
                 )
             }
         }
+        }
+        PlayerPanel(
+            state = panelState,
+            bottomBarHeight = innerPadding.calculateBottomPadding(),
+            miniVisible = miniVisible,
+            background = appPalette.playerBackground,
+            onCollapsed = { playbackViewModel.clearPendingPlaybackSelection() },
+            mini = { artModifier, titleModifier, rowModifier ->
+                MaterialTheme(colorScheme = miniColorScheme) {
+                    MiniPlayerBar(
+                        nowPlaying = nowPlaying,
+                        currentSongUri = currentSongUri,
+                        onTogglePlayPause = { playbackViewModel.togglePlayPause() },
+                        onSkipNext = { playbackViewModel.skipToNext() },
+                        onSkipPrevious = { playbackViewModel.skipToPrevious() },
+                        onClick = openPlayer,
+                        modifier = rowModifier,
+                        artModifier = artModifier,
+                        titleModifier = titleModifier
+                    )
+                }
+            },
+            full = { transition ->
+                NowPlayingScreen(
+                    viewModel = playbackViewModel,
+                    onCollapse = collapsePlayer,
+                    motionPreference = motionPreference,
+                    transition = transition
+                )
+            }
+        )
+        // While the player is open it is the whole screen, so the sound control uses the
+        // bounds the full player had as a route (no bottom bar padding).
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(if (panelOpen) WindowInsets.systemBars.asPaddingValues() else innerPadding)
+        ) {
         val soundMotion = motionTransitionSpec(motionPreference, systemAnimationsEnabled)
         AnimatedVisibility(
             visible = soundControlOpen,
@@ -403,6 +450,7 @@ fun TerminusNavGraph(
             }
         }
         }
+        }
     }
 }
 
@@ -410,13 +458,11 @@ private fun handleSongClick(
     song: Song,
     queue: List<Song>,
     playbackViewModel: PlaybackViewModel,
-    navController: androidx.navigation.NavHostController,
+    openPlayer: () -> Unit,
     shouldOpenPlayer: Boolean
 ) {
     val index = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
     playbackViewModel.playSongQueue(queue, index) {
-        if (shouldOpenPlayer) {
-            navController.navigate(Destination.NowPlaying.route) { launchSingleTop = true }
-        }
+        if (shouldOpenPlayer) openPlayer()
     }
 }
