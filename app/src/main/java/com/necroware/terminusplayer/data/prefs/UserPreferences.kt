@@ -35,7 +35,9 @@ enum class PlaybackArtStyle {
     CASSETTE,
     REEL_TO_REEL,
     VINYL,
-    VHS
+    VHS,
+    /** Audio-reactive MilkDrop-style warp visualizer in place of artwork. */
+    VISUALIZER
 }
 
 enum class MotionPreference { FULL, MEDIUM, OFF, SYSTEM }

@@ -6,10 +6,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.necroware.terminusplayer.data.prefs.HudTelemetryMode
 import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
+import com.necroware.terminusplayer.data.prefs.SystemPowerSaverState
+import com.necroware.terminusplayer.data.prefs.shouldDeferOptionalWork
 import com.necroware.terminusplayer.data.prefs.UserPreferences
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.repository.MusicRepository
+import com.necroware.terminusplayer.playback.AudioSpectrum
 import com.necroware.terminusplayer.playback.NowPlayingState
+import com.necroware.terminusplayer.playback.SpectrumFrame
 import com.necroware.terminusplayer.playback.PlaybackController
 import com.necroware.terminusplayer.data.model.SyncedLyrics
 import com.necroware.terminusplayer.data.model.Song
@@ -37,8 +41,22 @@ import javax.inject.Inject
 class PlaybackViewModel @Inject constructor(
     private val controller: PlaybackController,
     private val repository: MusicRepository,
-    private val preferencesRepository: UserPreferencesRepository
+    private val preferencesRepository: UserPreferencesRepository,
+    audioSpectrum: AudioSpectrum,
+    powerSaverState: SystemPowerSaverState
 ) : ViewModel() {
+
+    /**
+     * Live audio spectrum for visualizers. Collect it only while a visualizer is visible,
+     * playback is running and motion is FULL; analysis runs only while collected.
+     */
+    val spectrum: StateFlow<SpectrumFrame> = audioSpectrum.frames
+
+    /** True when performance mode or Android's power saver asks optional work to wait. */
+    val deferOptionalWork: StateFlow<Boolean> =
+        combine(preferencesRepository.preferences, powerSaverState.enabled) { prefs, powerSaver ->
+            shouldDeferOptionalWork(prefs.performanceMode, powerSaver)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
     private val _sleepTimerRemainingMs = MutableStateFlow<Long?>(null)
     val sleepTimerRemainingMs: StateFlow<Long?> = _sleepTimerRemainingMs.asStateFlow()
