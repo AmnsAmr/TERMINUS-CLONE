@@ -9,6 +9,7 @@ import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -37,11 +38,14 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import kotlinx.coroutines.launch
@@ -61,6 +65,7 @@ import com.necroware.terminusplayer.ui.components.MiniPlayerBar
 import com.necroware.terminusplayer.ui.components.MiniPlayerHeight
 import com.necroware.terminusplayer.ui.components.SoundControl
 import com.necroware.terminusplayer.ui.components.TerminalNavIcon
+import com.necroware.terminusplayer.ui.components.rememberTerminalHaptics
 import com.necroware.terminusplayer.ui.screens.albumdetail.AlbumDetailScreen
 import com.necroware.terminusplayer.ui.screens.artistdetail.ArtistDetailScreen
 import com.necroware.terminusplayer.ui.screens.home.HomeScreen
@@ -73,7 +78,7 @@ import com.necroware.terminusplayer.ui.screens.search.SearchScreen
 import com.necroware.terminusplayer.ui.screens.settings.SettingsScreen
 import com.necroware.terminusplayer.ui.screens.stats.StatsScreen
 import com.necroware.terminusplayer.ui.theme.LocalAppPalette
-import com.necroware.terminusplayer.ui.theme.rememberAdaptiveAccent
+import com.necroware.terminusplayer.ui.theme.rememberAnimatedAdaptiveAccent
 
 /** Index within the bottom-nav tab order, used to pick left/right slide direction. -1 if not a tab route. */
 private fun tabIndex(route: String?): Int = bottomNavItems.indexOfFirst { it.route == route }
@@ -157,16 +162,22 @@ fun TerminusNavGraph(
     val nowPlaying by playbackViewModel.nowPlaying.collectAsStateWithLifecycle()
     val currentSongUri by playbackViewModel.currentSongUri.collectAsStateWithLifecycle()
     val prefs by playbackViewModel.preferences.collectAsStateWithLifecycle()
+    val pendingSong by playbackViewModel.pendingSong.collectAsStateWithLifecycle()
     val defaultAccent = MaterialTheme.colorScheme.primary
-    val targetArtUri = nowPlaying.artworkUri?.takeIf { it.isNotBlank() }
-        ?: currentSongUri.takeIf { !it.isNullOrBlank() }
+    // Same artwork choice the full player makes, so the mini bar and full player share one accent.
+    val targetArtUri = pendingSong?.artworkUri?.takeIf { it.isNotBlank() }
+        ?: nowPlaying.artworkUri?.takeIf { it.isNotBlank() }
+        ?: (pendingSong?.uriString ?: currentSongUri)?.takeIf { it.isNotBlank() }
         ?: nowPlaying.mediaId?.let { if (it.startsWith("terminus://")) it else "terminus://$it" }
-    val miniAccent = rememberAdaptiveAccent(
+    val accentSpec = remember(motion) { motion.crossfadeSpec<Color>() }
+    val playerAccent = rememberAnimatedAdaptiveAccent(
         artworkUri = targetArtUri,
         defaultAccent = defaultAccent,
         enabled = prefs.adaptiveArtAccent,
-        performanceMode = prefs.performanceMode
+        performanceMode = prefs.performanceMode,
+        animationSpec = accentSpec
     )
+    val haptic = rememberTerminalHaptics(prefs.terminalHaptics)
     var soundControlOpen by remember { mutableStateOf(false) }
     var soundControlOnLeft by remember { mutableStateOf(true) }
     var soundVolume by remember { mutableFloatStateOf(playbackViewModel.currentVolume()) }
@@ -197,18 +208,24 @@ fun TerminusNavGraph(
     val showChrome = currentRoute !in hideChromeRoutes
     val miniVisible = showChrome && nowPlaying.title.isNotBlank()
     val currentScheme = MaterialTheme.colorScheme
-    val miniColorScheme = remember(currentScheme, miniAccent) {
+    val miniColorScheme = remember(currentScheme, playerAccent) {
         currentScheme.copy(
-            primary = miniAccent,
-            outline = miniAccent.copy(alpha = 0.5f)
+            primary = playerAccent,
+            outline = playerAccent.copy(alpha = 0.5f)
         )
     }
     val routeBackground = when (currentRoute) {
         Destination.Playlists.route, Destination.PlaylistDetail.route -> appPalette.playlistSurface
         else -> appPalette.homeBackground
     }
+    // Blend between route backgrounds with the screen transition. Read only while drawing,
+    // so the blend does not recompose the Scaffold.
+    val routeBackgroundSpec = remember(motion) { motion.transition.tweenSpec<Color>() }
+    val animatedRouteBackground = animateColorAsState(routeBackground, routeBackgroundSpec, label = "routeBackground")
     Scaffold(
-        containerColor = routeBackground,
+        modifier = Modifier.drawBehind { drawRect(animatedRouteBackground.value) },
+        containerColor = Color.Transparent,
+        contentColor = contentColorFor(routeBackground),
         bottomBar = {
             if (showChrome) {
                 Column {
@@ -386,6 +403,9 @@ fun TerminusNavGraph(
             background = appPalette.playerBackground,
             onCollapsed = { playbackViewModel.clearPendingPlaybackSelection() },
             mini = { artModifier, titleModifier, rowModifier ->
+                // Collected only while the mini bar is composed; the flow polls every 500 ms while
+                // playing (2 s paused) and stops shortly after the last collector leaves.
+                val miniPosition = playbackViewModel.positionMs.collectAsStateWithLifecycle()
                 MaterialTheme(colorScheme = miniColorScheme) {
                     MiniPlayerBar(
                         nowPlaying = nowPlaying,
@@ -396,7 +416,17 @@ fun TerminusNavGraph(
                         onClick = openPlayer,
                         modifier = rowModifier,
                         artModifier = artModifier,
-                        titleModifier = titleModifier
+                        titleModifier = titleModifier,
+                        artCrossfadeMs = motion.crossfadeMs,
+                        progress = {
+                            val duration = nowPlaying.durationMs
+                            if (duration > 0L) miniPosition.value.toFloat() / duration else 0f
+                        },
+                        onSwipeSkip = { toNext ->
+                            haptic(true)
+                            if (toNext) playbackViewModel.skipToNext() else playbackViewModel.skipToPrevious()
+                        },
+                        swipeSettleSpec = motion.panel.floatSpec
                     )
                 }
             },
@@ -404,6 +434,8 @@ fun TerminusNavGraph(
                 NowPlayingScreen(
                     viewModel = playbackViewModel,
                     onCollapse = collapsePlayer,
+                    accent = playerAccent,
+                    motion = motion,
                     motionPreference = motionPreference,
                     transition = transition
                 )

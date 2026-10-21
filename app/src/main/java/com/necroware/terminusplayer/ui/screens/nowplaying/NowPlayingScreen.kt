@@ -5,7 +5,6 @@ import com.necroware.terminusplayer.ui.components.CrtScanlineOverlay
 import com.necroware.terminusplayer.ui.components.CrtCollapseOverlay
 import com.necroware.terminusplayer.ui.components.TerminalCursorGlyph
 import com.necroware.terminusplayer.ui.components.rememberTerminalHaptics
-import com.necroware.terminusplayer.ui.theme.rememberAdaptiveAccent
 import com.necroware.terminusplayer.ui.theme.LocalAppPalette
 import androidx.compose.runtime.CompositionLocalProvider
 
@@ -13,7 +12,11 @@ import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.delay
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -47,6 +50,12 @@ import com.necroware.terminusplayer.ui.components.BlockSeekBar
 import com.necroware.terminusplayer.ui.components.FullTransportControls
 import com.necroware.terminusplayer.ui.components.PlaybackArt
 import com.necroware.terminusplayer.ui.components.SongArt
+import com.necroware.terminusplayer.ui.navigation.MotionTokens
+import com.necroware.terminusplayer.ui.navigation.MotionTransitionSpec
+import com.necroware.terminusplayer.ui.navigation.fadeInOrNone
+import com.necroware.terminusplayer.ui.navigation.fadeOutOrNone
+import com.necroware.terminusplayer.ui.navigation.slideInHorizontallyOrNone
+import com.necroware.terminusplayer.ui.navigation.slideOutHorizontallyOrNone
 import com.necroware.terminusplayer.util.estimateKbpsFromSize
 import com.necroware.terminusplayer.util.sizeLabelFromBytes
 import com.necroware.terminusplayer.util.toMinutesSeconds
@@ -191,10 +200,44 @@ private fun SleepTimerControl(
     }
 }
 
+/** What the track-swap animation shows for one track. Outgoing content keeps its own copy. */
+private data class TrackDisplay(
+    val id: String?,
+    val title: String,
+    val artist: String,
+    val artUri: String,
+    /** +1 when this track was reached going forward, -1 when going back. */
+    val direction: Int
+)
+
+/** Remembers the last track id and back-skip count so a change can be labelled next or previous. */
+internal class TrackChangeTracker(var id: String?, var backSkipCount: Int) {
+    var direction: Int = 1
+
+    fun update(newId: String?, newBackSkipCount: Int): Int {
+        if (newId != id) {
+            direction = if (newBackSkipCount > backSkipCount) -1 else 1
+            id = newId
+            backSkipCount = newBackSkipCount
+        }
+        return direction
+    }
+}
+
+/** Incoming track slides in from the side it was skipped toward; the outgoing one leaves the other way. */
+private fun trackSwapTransform(spec: MotionTransitionSpec, direction: Int): ContentTransform = ContentTransform(
+    targetContentEnter = spec.slideInHorizontallyOrNone(direction) + spec.fadeInOrNone(),
+    initialContentExit = spec.slideOutHorizontallyOrNone(-direction) + spec.fadeOutOrNone(),
+    // Profiles without movement (OFF, disabled system animations) must not animate size either.
+    sizeTransform = SizeTransform { _, _ -> if (spec.isInstant || spec.slideFraction == 0f) snap() else spec.tweenSpec() }
+)
+
 @Composable
-fun NowPlayingScreen(
+internal fun NowPlayingScreen(
     viewModel: PlaybackViewModel,
     onCollapse: () -> Unit,
+    accent: Color,
+    motion: MotionTokens,
     motionPreference: MotionPreference = MotionPreference.FULL,
     transition: NowPlayingTransition = NowPlayingTransition.None
 ) {
@@ -224,13 +267,6 @@ fun NowPlayingScreen(
         ?: nowPlaying.artworkUri?.takeIf { it.isNotBlank() }
         ?: displaySongUri.takeIf { it.isNotBlank() }
         ?: nowPlaying.mediaId?.let { if (it.startsWith("terminus://")) it else "terminus://$it" }
-    val defaultAccent = MaterialTheme.colorScheme.primary
-    val adaptiveAccent = rememberAdaptiveAccent(
-        artworkUri = targetArtUri,
-        defaultAccent = defaultAccent,
-        enabled = prefs.adaptiveArtAccent,
-        performanceMode = prefs.performanceMode
-    )
     val displayIsPlaying = !preparingSelection && nowPlaying.isPlaying
     var hudAlertColor by remember { mutableStateOf<Color?>(null) }
     var previousPlayingState by remember { mutableStateOf<Boolean?>(null) }
@@ -250,7 +286,7 @@ fun NowPlayingScreen(
         previousPlayingState = displayIsPlaying
     }
 
-    val activeAccent = hudAlertColor ?: adaptiveAccent
+    val activeAccent = hudAlertColor ?: accent
     val displayPositionMs = if (preparingSelection) 0L else positionMs
     val collapsePlayer = {
         viewModel.clearPendingPlaybackSelection()
@@ -266,6 +302,14 @@ fun NowPlayingScreen(
     var showPlaylistPicker by remember { mutableStateOf(false) }
     val selectedSongId = pendingSong?.id ?: nowPlaying.mediaId
     val selectedSongIsExternal = selectedSongId.orEmpty().startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)
+    val trackChanges = remember { TrackChangeTracker(selectedSongId, viewModel.backSkipCount) }
+    val trackDisplay = TrackDisplay(
+        id = selectedSongId,
+        title = displayTitle,
+        artist = displayArtist,
+        artUri = targetArtUri ?: displaySongUri,
+        direction = trackChanges.update(selectedSongId, viewModel.backSkipCount)
+    )
     val scrollState = rememberScrollState()
 
     LaunchedEffect(lyricsExpanded) {
@@ -367,42 +411,63 @@ fun NowPlayingScreen(
                     }
 
             // Playback Art / Song Art
-            if (artStyle == com.necroware.terminusplayer.data.prefs.PlaybackArtStyle.STANDARD) {
-                SongArt(
-                    uriString = targetArtUri ?: displaySongUri,
-                    size = 300.dp,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art)
-                )
-            } else {
-                PlaybackArt(
-                    style = artStyle,
-                    title = displayTitle,
-                    artist = displayArtist,
-                    isPlaying = displayIsPlaying,
-                    size = 300.dp,
-                    motionPreference = motionPreference,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art)
-                )
+            AnimatedContent(
+                targetState = trackDisplay,
+                contentKey = { it.id },
+                transitionSpec = { trackSwapTransform(motion.transition, targetState.direction) },
+                modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art),
+                label = "trackArt"
+            ) { track ->
+                if (artStyle == com.necroware.terminusplayer.data.prefs.PlaybackArtStyle.STANDARD) {
+                    SongArt(
+                        uriString = track.artUri,
+                        size = 300.dp,
+                        crossfadeMs = motion.crossfadeMs
+                    )
+                } else {
+                    PlaybackArt(
+                        style = artStyle,
+                        title = track.title,
+                        artist = track.artist,
+                        isPlaying = displayIsPlaying,
+                        size = 300.dp,
+                        motionPreference = motionPreference
+                    )
+                }
             }
 
-            Text(
-                text = displayTitle.ifBlank { "—" },
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = transition.title
-            )
+            AnimatedContent(
+                targetState = trackDisplay,
+                contentKey = { it.id },
+                transitionSpec = { trackSwapTransform(motion.transition, targetState.direction) },
+                modifier = transition.title,
+                label = "trackTitle"
+            ) { track ->
+                Text(
+                    text = track.title.ifBlank { "—" },
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             // Everything below the title fades in together while the player panel opens.
             Column(
                 modifier = Modifier.fillMaxWidth().then(transition.content),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-            Text(
-                text = displayArtist,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            AnimatedContent(
+                targetState = trackDisplay,
+                contentKey = { it.id },
+                transitionSpec = { trackSwapTransform(motion.transition, targetState.direction) },
+                label = "trackArtist"
+            ) { track ->
+                Text(
+                    text = track.artist,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Text(
                 text = if (preparingSelection) {
                     pendingPlaybackError?.let { "UNABLE TO START · $it" } ?: "PREPARING TRACK…"

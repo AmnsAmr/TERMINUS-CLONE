@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.os.PowerManager
 import android.util.LruCache
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
@@ -82,6 +84,22 @@ fun rememberAdaptiveAccent(
     }
 
     return accent
+}
+
+/**
+ * [rememberAdaptiveAccent] with color changes blended over [animationSpec] instead of snapping.
+ * Compute it once per player surface and share the result.
+ */
+@Composable
+fun rememberAnimatedAdaptiveAccent(
+    artworkUri: String?,
+    defaultAccent: Color,
+    enabled: Boolean,
+    performanceMode: PerformanceMode,
+    animationSpec: AnimationSpec<Color>
+): Color {
+    val target = rememberAdaptiveAccent(artworkUri, defaultAccent, enabled, performanceMode)
+    return animateColorAsState(target, animationSpec, label = "adaptiveAccent").value
 }
 
 private suspend fun extractDominantAccent(context: Context, uri: String): Color? = runCatching {
