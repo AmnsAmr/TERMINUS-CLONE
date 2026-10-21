@@ -9,8 +9,12 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.TeeAudioProcessor
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.necroware.terminusplayer.MainActivity
@@ -52,6 +56,9 @@ class MusicService : MediaSessionService() {
     @Inject
     lateinit var musicRepository: MusicRepository
 
+    @Inject
+    lateinit var audioSpectrum: AudioSpectrum
+
     private var mediaSession: MediaSession? = null
     private lateinit var player: ExoPlayer
 
@@ -91,6 +98,7 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            audioSpectrum.setPlaying(isPlaying)
             activePlayTracker.onIsPlayingChanged(
                 isPlaying = isPlaying,
                 nowElapsedMs = SystemClock.elapsedRealtime(),
@@ -114,7 +122,21 @@ class MusicService : MediaSessionService() {
         val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this, extractorsFactory)
             .setDataSourceFactory(dataSourceFactory)
 
-        player = ExoPlayer.Builder(this)
+        // Same audio sink Media3 builds by default, plus a pass-through tee that feeds the
+        // visualizer spectrum. The tee copies samples unchanged, so output is bit-identical.
+        val renderersFactory = object : DefaultRenderersFactory(this) {
+            override fun buildAudioSink(
+                context: android.content.Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): AudioSink = DefaultAudioSink.Builder(context)
+                .setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                .setAudioProcessors(arrayOf(TeeAudioProcessor(audioSpectrum)))
+                .build()
+        }
+
+        player = ExoPlayer.Builder(this, renderersFactory)
             .setMediaSourceFactory(mediaSourceFactory)
             .setHandleAudioBecomingNoisy(true)
             .build()
@@ -236,6 +258,7 @@ class MusicService : MediaSessionService() {
         synchronized(playEventJobsLock) {
             if (playEventJobs.isEmpty()) playEventScope.cancel()
         }
+        audioSpectrum.setPlaying(false)
         fadeInJob?.cancel()
         fadeTickerJob?.cancel()
         savePositionJob?.cancel()

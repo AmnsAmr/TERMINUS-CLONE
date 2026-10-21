@@ -5,21 +5,20 @@ import com.necroware.terminusplayer.ui.components.CrtScanlineOverlay
 import com.necroware.terminusplayer.ui.components.CrtCollapseOverlay
 import com.necroware.terminusplayer.ui.components.TerminalCursorGlyph
 import com.necroware.terminusplayer.ui.components.rememberTerminalHaptics
-import com.necroware.terminusplayer.ui.theme.rememberAdaptiveAccent
 import com.necroware.terminusplayer.ui.theme.LocalAppPalette
 import androidx.compose.runtime.CompositionLocalProvider
 
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.delay
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,7 +26,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
@@ -38,14 +36,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.ui.components.AudioMonitorCard
@@ -54,12 +50,19 @@ import com.necroware.terminusplayer.ui.components.BlockSeekBar
 import com.necroware.terminusplayer.ui.components.FullTransportControls
 import com.necroware.terminusplayer.ui.components.PlaybackArt
 import com.necroware.terminusplayer.ui.components.SongArt
+import com.necroware.terminusplayer.ui.components.visualizer.WarpVisualizer
+import com.necroware.terminusplayer.ui.components.visualizer.collectSpectrum
+import com.necroware.terminusplayer.ui.navigation.MotionTokens
+import com.necroware.terminusplayer.ui.navigation.MotionTransitionSpec
+import com.necroware.terminusplayer.ui.navigation.fadeInOrNone
+import com.necroware.terminusplayer.ui.navigation.fadeOutOrNone
+import com.necroware.terminusplayer.ui.navigation.slideInHorizontallyOrNone
+import com.necroware.terminusplayer.ui.navigation.slideOutHorizontallyOrNone
 import com.necroware.terminusplayer.util.estimateKbpsFromSize
 import com.necroware.terminusplayer.util.sizeLabelFromBytes
 import com.necroware.terminusplayer.util.toMinutesSeconds
 import com.necroware.terminusplayer.util.EXTERNAL_AUDIO_MEDIA_ID_PREFIX
 import kotlinx.coroutines.isActive
-import kotlin.math.roundToInt
 
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -199,12 +202,46 @@ private fun SleepTimerControl(
     }
 }
 
+/** What the track-swap animation shows for one track. Outgoing content keeps its own copy. */
+private data class TrackDisplay(
+    val id: String?,
+    val title: String,
+    val artist: String,
+    val artUri: String,
+    /** +1 when this track was reached going forward, -1 when going back. */
+    val direction: Int
+)
+
+/** Remembers the last track id and back-skip count so a change can be labelled next or previous. */
+internal class TrackChangeTracker(var id: String?, var backSkipCount: Int) {
+    var direction: Int = 1
+
+    fun update(newId: String?, newBackSkipCount: Int): Int {
+        if (newId != id) {
+            direction = if (newBackSkipCount > backSkipCount) -1 else 1
+            id = newId
+            backSkipCount = newBackSkipCount
+        }
+        return direction
+    }
+}
+
+/** Incoming track slides in from the side it was skipped toward; the outgoing one leaves the other way. */
+private fun trackSwapTransform(spec: MotionTransitionSpec, direction: Int): ContentTransform = ContentTransform(
+    targetContentEnter = spec.slideInHorizontallyOrNone(direction) + spec.fadeInOrNone(),
+    initialContentExit = spec.slideOutHorizontallyOrNone(-direction) + spec.fadeOutOrNone(),
+    // Profiles without movement (OFF, disabled system animations) must not animate size either.
+    sizeTransform = SizeTransform { _, _ -> if (spec.isInstant || spec.slideFraction == 0f) snap() else spec.tweenSpec() }
+)
+
 @Composable
-fun NowPlayingScreen(
+internal fun NowPlayingScreen(
     viewModel: PlaybackViewModel,
     onCollapse: () -> Unit,
+    accent: Color,
+    motion: MotionTokens,
     motionPreference: MotionPreference = MotionPreference.FULL,
-    systemAnimationsEnabled: Boolean = true
+    transition: NowPlayingTransition = NowPlayingTransition.None
 ) {
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
     val pendingSong by viewModel.pendingSong.collectAsStateWithLifecycle()
@@ -221,6 +258,7 @@ fun NowPlayingScreen(
     val isSleepCollapsing by viewModel.isSleepCollapsing.collectAsStateWithLifecycle()
     val bufferedPositionMs by viewModel.bufferedPositionMs.collectAsStateWithLifecycle()
     val serverPingMs by viewModel.serverPingMs.collectAsStateWithLifecycle()
+    val deferOptionalWork by viewModel.deferOptionalWork.collectAsStateWithLifecycle()
     val haptic = rememberTerminalHaptics(prefs.terminalHaptics)
 
     val preparingSelection = pendingSong != null
@@ -232,14 +270,11 @@ fun NowPlayingScreen(
         ?: nowPlaying.artworkUri?.takeIf { it.isNotBlank() }
         ?: displaySongUri.takeIf { it.isNotBlank() }
         ?: nowPlaying.mediaId?.let { if (it.startsWith("terminus://")) it else "terminus://$it" }
-    val defaultAccent = MaterialTheme.colorScheme.primary
-    val adaptiveAccent = rememberAdaptiveAccent(
-        artworkUri = targetArtUri,
-        defaultAccent = defaultAccent,
-        enabled = prefs.adaptiveArtAccent,
-        performanceMode = prefs.performanceMode
-    )
     val displayIsPlaying = !preparingSelection && nowPlaying.isPlaying
+    // This screen is composed only while the player panel is open, so "visible" is implied.
+    // Collecting is what starts audio analysis; one collection feeds every visualizer here.
+    val visualizerActive = displayIsPlaying && motionPreference == MotionPreference.FULL && !deferOptionalWork
+    val spectrum = collectSpectrum(viewModel.spectrum, visualizerActive)
     var hudAlertColor by remember { mutableStateOf<Color?>(null) }
     var previousPlayingState by remember { mutableStateOf<Boolean?>(null) }
 
@@ -258,7 +293,7 @@ fun NowPlayingScreen(
         previousPlayingState = displayIsPlaying
     }
 
-    val activeAccent = hudAlertColor ?: adaptiveAccent
+    val activeAccent = hudAlertColor ?: accent
     val displayPositionMs = if (preparingSelection) 0L else positionMs
     val collapsePlayer = {
         viewModel.clearPendingPlaybackSelection()
@@ -269,13 +304,19 @@ fun NowPlayingScreen(
         collapsePlayer()
     }
 
-    var dragOffsetPx by remember { mutableFloatStateOf(0f) }
     var screenHeightPx by remember { mutableStateOf(1f) }
     var lyricsExpanded by remember { mutableStateOf(false) }
     var showPlaylistPicker by remember { mutableStateOf(false) }
     val selectedSongId = pendingSong?.id ?: nowPlaying.mediaId
     val selectedSongIsExternal = selectedSongId.orEmpty().startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)
-    val dismissThresholdFraction = 0.25f
+    val trackChanges = remember { TrackChangeTracker(selectedSongId, viewModel.backSkipCount) }
+    val trackDisplay = TrackDisplay(
+        id = selectedSongId,
+        title = displayTitle,
+        artist = displayArtist,
+        artUri = targetArtUri ?: displaySongUri,
+        direction = trackChanges.update(selectedSongId, viewModel.backSkipCount)
+    )
     val scrollState = rememberScrollState()
 
     LaunchedEffect(lyricsExpanded) {
@@ -289,29 +330,6 @@ fun NowPlayingScreen(
         if (lyricsExpanded && scrollState.value < previousScrollValue) lyricsExpanded = false
         previousScrollValue = scrollState.value
     }
-    val dragState = rememberDraggableState { delta ->
-        dragOffsetPx = (dragOffsetPx + delta).coerceAtLeast(0f)
-    }
-    val dragModifier = Modifier.draggable(
-        state = dragState,
-        orientation = Orientation.Vertical,
-        onDragStopped = {
-            if (dragOffsetPx > screenHeightPx * dismissThresholdFraction) {
-                dragOffsetPx = 0f
-                collapsePlayer()
-            } else {
-                when (motionPreference) {
-                    MotionPreference.FULL -> Animatable(dragOffsetPx).animateTo(0f) { dragOffsetPx = value }
-                    MotionPreference.MEDIUM -> Animatable(dragOffsetPx).animateTo(0f, tween(120)) { dragOffsetPx = value }
-                    MotionPreference.OFF -> dragOffsetPx = 0f
-                    MotionPreference.SYSTEM -> if (systemAnimationsEnabled) {
-                        Animatable(dragOffsetPx).animateTo(0f, tween(180)) { dragOffsetPx = value }
-                    } else dragOffsetPx = 0f
-                }
-            }
-        }
-    )
-
     val currentScheme = MaterialTheme.colorScheme
     val themedColorScheme = remember(currentScheme, activeAccent) {
         currentScheme.copy(
@@ -332,7 +350,6 @@ fun NowPlayingScreen(
         modifier = Modifier
             .fillMaxSize()
             .onSizeChanged { screenHeightPx = it.height.toFloat().coerceAtLeast(1f) }
-            .offset { IntOffset(0, dragOffsetPx.roundToInt()) }
     ) {
         CompositionLocalProvider(LocalAppPalette provides themedPalette) {
             MaterialTheme(colorScheme = themedColorScheme) {
@@ -345,7 +362,7 @@ fun NowPlayingScreen(
                     verticalArrangement = Arrangement.Top
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 20.dp).then(transition.content),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -401,36 +418,72 @@ fun NowPlayingScreen(
                     }
 
             // Playback Art / Song Art
-            if (artStyle == com.necroware.terminusplayer.data.prefs.PlaybackArtStyle.STANDARD) {
-                SongArt(
-                    uriString = targetArtUri ?: displaySongUri,
+            if (artStyle == com.necroware.terminusplayer.data.prefs.PlaybackArtStyle.VISUALIZER) {
+                // Continuous across tracks, so it stays outside the per-track swap animation.
+                WarpVisualizer(
+                    spectrum = spectrum,
+                    active = visualizerActive,
+                    accent = activeAccent,
                     size = 300.dp,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(dragModifier)
+                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art)
                 )
-            } else {
-                PlaybackArt(
-                    style = artStyle,
-                    title = displayTitle,
-                    artist = displayArtist,
-                    isPlaying = displayIsPlaying,
-                    size = 300.dp,
-                    motionPreference = motionPreference,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(dragModifier)
-                )
+            } else AnimatedContent(
+                targetState = trackDisplay,
+                contentKey = { it.id },
+                transitionSpec = { trackSwapTransform(motion.transition, targetState.direction) },
+                modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art),
+                label = "trackArt"
+            ) { track ->
+                if (artStyle == com.necroware.terminusplayer.data.prefs.PlaybackArtStyle.STANDARD) {
+                    SongArt(
+                        uriString = track.artUri,
+                        size = 300.dp,
+                        crossfadeMs = motion.crossfadeMs
+                    )
+                } else {
+                    PlaybackArt(
+                        style = artStyle,
+                        title = track.title,
+                        artist = track.artist,
+                        isPlaying = displayIsPlaying,
+                        size = 300.dp,
+                        motionPreference = motionPreference
+                    )
+                }
             }
 
-            Text(
-                text = displayTitle.ifBlank { "—" },
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onBackground,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = displayArtist,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            AnimatedContent(
+                targetState = trackDisplay,
+                contentKey = { it.id },
+                transitionSpec = { trackSwapTransform(motion.transition, targetState.direction) },
+                modifier = transition.title,
+                label = "trackTitle"
+            ) { track ->
+                Text(
+                    text = track.title.ifBlank { "—" },
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            // Everything below the title fades in together while the player panel opens.
+            Column(
+                modifier = Modifier.fillMaxWidth().then(transition.content),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+            AnimatedContent(
+                targetState = trackDisplay,
+                contentKey = { it.id },
+                transitionSpec = { trackSwapTransform(motion.transition, targetState.direction) },
+                label = "trackArtist"
+            ) { track ->
+                Text(
+                    text = track.artist,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Text(
                 text = if (preparingSelection) {
                     pendingPlaybackError?.let { "UNABLE TO START · $it" } ?: "PREPARING TRACK…"
@@ -510,6 +563,8 @@ fun NowPlayingScreen(
                 serverPingMs = if (preparingSelection) null else serverPingMs,
                 preferHardwareDecoder = prefs.preferHardwareDecoder,
                 visualizerStyle = prefs.visualizerStyle,
+                spectrum = spectrum,
+                visualizerActive = visualizerActive,
                 modifier = Modifier.padding(top = 24.dp, bottom = 24.dp)
             )
 
@@ -604,12 +659,14 @@ fun NowPlayingScreen(
                 }
             }
             }
+            }
         }
         }
         }
         CrtScanlineOverlay(
             intensity = prefs.scanlineIntensity,
-            phosphorAfterglow = prefs.phosphorAfterglow
+            phosphorAfterglow = prefs.phosphorAfterglow,
+            modifier = transition.content
         )
         CrtCollapseOverlay(
             isCollapsing = isSleepCollapsing
