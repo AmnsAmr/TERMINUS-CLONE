@@ -228,9 +228,10 @@ fun NowPlayingScreen(
     val displayArtist = pendingSong?.artist ?: nowPlaying.artist
     val displayDurationMs = pendingSong?.duration ?: nowPlaying.durationMs
     val displaySongUri = pendingSong?.uriString ?: currentSongUri.orEmpty()
-    val targetArtUri = displaySongUri.takeIf { it.isNotBlank() }
+    val targetArtUri = pendingSong?.artworkUri?.takeIf { it.isNotBlank() }
+        ?: nowPlaying.artworkUri?.takeIf { it.isNotBlank() }
+        ?: displaySongUri.takeIf { it.isNotBlank() }
         ?: nowPlaying.mediaId?.let { if (it.startsWith("terminus://")) it else "terminus://$it" }
-        ?: nowPlaying.artworkUri
     val defaultAccent = MaterialTheme.colorScheme.primary
     val adaptiveAccent = rememberAdaptiveAccent(
         artworkUri = targetArtUri,
@@ -402,7 +403,7 @@ fun NowPlayingScreen(
             // Playback Art / Song Art
             if (artStyle == com.necroware.terminusplayer.data.prefs.PlaybackArtStyle.STANDARD) {
                 SongArt(
-                    uriString = displaySongUri,
+                    uriString = targetArtUri ?: displaySongUri,
                     size = 300.dp,
                     modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(dragModifier)
                 )

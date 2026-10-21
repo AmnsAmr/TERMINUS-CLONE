@@ -62,22 +62,24 @@ The app brings together:
 
 * local music discovery
 * Navidrome server library browsing and streaming
+* YouTube Music search, explore categories, and streaming
 * album and artist organization
-* music playback
+* music playback with sub-300ms queue fast-start
 * background playback
 * queue management
 * shuffle
 * repeat
 * playlists
-* search
+* search across local files and YouTube cloud
 * playback history
 * listening statistics
-* album artwork
+* album artwork with adaptive palette extraction
 * audio focus handling
 * persistent playback state
 * home-screen controls
 * terminal-inspired visualizations
-* background uploads and downloads with transfer status
+* background uploads and downloads with configurable quality ceilings and folder selection
+* resilient transcoding fallback and format resolution
 
 The interface is intentionally opinionated.
 

@@ -27,8 +27,10 @@ private val accentCache = LruCache<String, Color>(128)
  * Resolves artwork URI into a format understandable by Terminus Coil fetchers.
  */
 private fun resolveArtModel(uriString: String): Any? {
-    if (uriString.isBlank()) return null
-    return if (uriString.startsWith("terminus://")) {
+    if (uriString.isBlank() || uriString.startsWith("https://www.youtube.com/watch") || uriString.startsWith("http://www.youtube.com/watch") || uriString.startsWith("https://youtu.be/")) return null
+    return if (uriString.startsWith("http://") || uriString.startsWith("https://")) {
+        uriString
+    } else if (uriString.startsWith("terminus://")) {
         val songId = uriString.removePrefix("terminus://")
         "https://terminus.invalid/rest/getCoverArt?id=$songId&v=1.16.1&c=Terminus"
     } else {

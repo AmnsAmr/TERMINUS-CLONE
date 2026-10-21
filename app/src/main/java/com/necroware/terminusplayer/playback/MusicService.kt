@@ -2,6 +2,7 @@ package com.necroware.terminusplayer.playback
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.net.Uri
 import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
@@ -102,8 +103,15 @@ class MusicService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
 
-        val dataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this)
-        val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this)
+        val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(true)
+        val httpDataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
+            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            .setConnectTimeoutMs(8000)
+            .setReadTimeoutMs(15000)
+        val dataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(this, httpDataSourceFactory)
+        val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this, extractorsFactory)
             .setDataSourceFactory(dataSourceFactory)
 
         player = ExoPlayer.Builder(this)
@@ -316,9 +324,11 @@ class MusicService : MediaSessionService() {
                 playWhenReady = player.playWhenReady
             )
         }
-        if (snapshot.currentMediaId == null ||
-            snapshot.items.none { it.mediaMetadata.providerIdOrNull() == "navidrome" }
-        ) return
+        val hasRemoteStreams = snapshot.items.any {
+            val provider = it.mediaMetadata.providerIdOrNull()
+            provider == "navidrome" || provider == "youtube" || provider == "jamendo"
+        }
+        if (snapshot.currentMediaId == null || !hasRemoteStreams) return
 
         val streamUris = musicRepository.getSongUris(snapshot.items.map { it.mediaId }).toMutableMap()
         val currentItem = snapshot.items.firstOrNull { it.mediaId == snapshot.currentMediaId }
@@ -336,15 +346,20 @@ class MusicService : MediaSessionService() {
         }
         val resolvedItems = snapshot.items.map { item ->
             val uri = streamUris[item.mediaId] ?: return@map item
-            if (item.mediaMetadata.providerIdOrNull() == "navidrome") {
-                item.withStreamUriAndOffset(
+            when (item.mediaMetadata.providerIdOrNull()) {
+                "navidrome" -> item.withStreamUriAndOffset(
                     uri,
                     if (item.mediaId == snapshot.currentMediaId) currentOffsetMs else 0L
                 )
-            } else {
-                item
+                "youtube", "jamendo" -> item.buildUpon().setUri(Uri.parse(uri)).build()
+                else -> item
             }
         }
+
+        val anyUriChanged = snapshot.items.zip(resolvedItems).any { (old, new) ->
+            old.localConfiguration?.uri != new.localConfiguration?.uri
+        }
+        if (!anyUriChanged) return
 
         withContext(Dispatchers.Main.immediate) {
             if (player.mediaItemCount != snapshot.items.size ||

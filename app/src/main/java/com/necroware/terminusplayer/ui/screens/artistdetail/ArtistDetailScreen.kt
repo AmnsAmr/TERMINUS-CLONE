@@ -148,7 +148,7 @@ private fun ArtistTrackRow(song: Song, isTopTrack: Boolean, onClick: () -> Unit)
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        SongArt(uriString = song.uriString, size = 44.dp)
+        SongArt(uriString = song.artworkUri?.takeIf { it.isNotBlank() } ?: song.uriString, size = 44.dp)
         Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
             Text(
                 text = song.title,

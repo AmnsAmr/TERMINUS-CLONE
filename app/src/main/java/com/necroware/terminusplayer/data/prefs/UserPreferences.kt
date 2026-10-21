@@ -149,5 +149,6 @@ data class UserPreferences(
     val excludedFolders: Set<String> = emptySet(),
     val hasSetupDefaultExcludes: Boolean = false,
     val maxBitRate: Int? = null,
+    val downloadMaxBitRate: Int? = null,
     val downloadFolderUri: String? = null
 )

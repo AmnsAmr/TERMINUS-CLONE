@@ -3,6 +3,7 @@ package com.necroware.terminusplayer.di
 import com.necroware.terminusplayer.data.provider.LocalMediaProvider
 import com.necroware.terminusplayer.data.provider.MediaProvider
 import com.necroware.terminusplayer.data.provider.NavidromeProvider
+import com.necroware.terminusplayer.data.provider.YouTubeMusicProvider
 import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
@@ -23,4 +24,9 @@ interface ProviderModule {
     @IntoMap
     @StringKey("navidrome")
     fun bindNavidromeProvider(provider: NavidromeProvider): MediaProvider
+
+    @Binds
+    @IntoMap
+    @StringKey("youtube")
+    fun bindYouTubeMusicProvider(provider: YouTubeMusicProvider): MediaProvider
 }

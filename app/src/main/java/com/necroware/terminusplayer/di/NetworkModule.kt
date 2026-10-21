@@ -35,6 +35,9 @@ object NetworkModule {
             .writeTimeout(java.time.Duration.ofSeconds(30))
             .addInterceptor { chain ->
                 val request = chain.request()
+                if (request.url.host != "terminus.invalid") {
+                    return@addInterceptor chain.proceed(request)
+                }
                 val config = prefsRepo.serverConnectionConfig.value
                 if (!config.isLoaded) {
                     throw java.io.IOException("Server configuration is still loading")

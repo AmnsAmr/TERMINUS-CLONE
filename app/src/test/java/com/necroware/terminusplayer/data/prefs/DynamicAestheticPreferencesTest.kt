@@ -54,6 +54,7 @@ class DynamicAestheticPreferencesTest {
             assertEquals(TerminalHaptics.TACTILE, defaults.terminalHaptics)
             assertFalse(defaults.smartBitrateEnabled)
             assertEquals(128, defaults.cellularMaxBitRate)
+            assertNull(defaults.downloadMaxBitRate)
             assertFalse(defaults.openPlayerOnLibraryTrackSelect)
             assertFalse(defaults.openPlayerOnPlaylistTrackSelect)
             assertTrue(defaults.reactiveHudFlash)
@@ -68,6 +69,7 @@ class DynamicAestheticPreferencesTest {
             repository.setTerminalHaptics(TerminalHaptics.CLICKY)
             repository.setSmartBitrateEnabled(true)
             repository.setCellularMaxBitRate(192)
+            repository.setDownloadMaxBitRate(256)
             repository.setOpenPlayerOnLibraryTrackSelect(true)
             repository.setOpenPlayerOnPlaylistTrackSelect(true)
             repository.setReactiveHudFlash(false)
@@ -85,11 +87,15 @@ class DynamicAestheticPreferencesTest {
             assertEquals(TerminalHaptics.CLICKY, updated.terminalHaptics)
             assertTrue(updated.smartBitrateEnabled)
             assertEquals(192, updated.cellularMaxBitRate)
+            assertEquals(256, updated.downloadMaxBitRate)
             assertTrue(updated.openPlayerOnLibraryTrackSelect)
             assertTrue(updated.openPlayerOnPlaylistTrackSelect)
             assertFalse(updated.reactiveHudFlash)
             assertEquals(VisualizerStyle.OSCILLOSCOPE, updated.visualizerStyle)
             assertEquals(HudTelemetryMode.EXPANDED, updated.hudTelemetryMode)
+
+            repository.setDownloadMaxBitRate(null)
+            assertNull(repository.preferences.first().downloadMaxBitRate)
         } finally {
             scope.cancel()
         }

@@ -27,6 +27,7 @@ fun Song.toMediaItem(): MediaItem {
         .setArtist(artist)
         .setAlbumTitle(album)
         .setDurationMs(duration.coerceAtLeast(0L))
+        .setArtworkUri(artworkUri?.takeIf { it.isNotBlank() }?.let(Uri::parse))
         .setExtras(extras)
         .build()
 

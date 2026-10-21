@@ -19,7 +19,8 @@ data class Song(
     val downloadedUri: String? = null,
     val genre: String = "",
     /** Navidrome identity for a local track matched with a server track. */
-    val navidromeId: String? = null
+    val navidromeId: String? = null,
+    val artworkUri: String? = null
 )
 
 data class PlaylistDownloadPlan(
@@ -90,3 +91,26 @@ data class PlaylistAccountInfo(
     val isAdmin: Boolean = false,
     val isLoaded: Boolean = false
 )
+
+fun Song.toSongEntity(): com.necroware.terminusplayer.data.database.entity.SongEntity {
+    return com.necroware.terminusplayer.data.database.entity.SongEntity(
+        remoteId = id,
+        providerId = providerId,
+        providerRemoteId = providerRemoteId,
+        title = title,
+        artist = artist,
+        album = album,
+        albumId = albumId,
+        duration = duration,
+        uriString = uriString,
+        dateAdded = dateAdded,
+        trackNumber = trackNumber,
+        year = year,
+        folderPath = folderPath,
+        sizeBytes = sizeBytes,
+        navidromeId = navidromeId,
+        downloadedUri = downloadedUri,
+        genre = genre,
+        artworkUri = artworkUri
+    )
+}

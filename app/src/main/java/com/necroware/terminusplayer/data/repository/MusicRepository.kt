@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.webkit.MimeTypeMap
 import com.necroware.terminusplayer.data.database.dao.LikedSongDao
 import com.necroware.terminusplayer.data.database.dao.PlayEventDao
 import com.necroware.terminusplayer.data.database.dao.PlaylistDao
@@ -42,11 +43,14 @@ import com.necroware.terminusplayer.data.model.parseGenreTags
 import com.necroware.terminusplayer.util.matchM3uEntryToSong
 import com.necroware.terminusplayer.util.normalizeForMatch
 import com.necroware.terminusplayer.util.parseM3u
+import com.necroware.terminusplayer.util.DownloadFormatUtils
 import com.necroware.terminusplayer.util.TransferProgress
+import okhttp3.ResponseBody
 import com.necroware.terminusplayer.data.model.SyncedLyrics
 import com.necroware.terminusplayer.data.model.lyricsCacheIdentity
 import com.necroware.terminusplayer.data.model.unambiguousRecordingMatches
 import com.necroware.terminusplayer.data.model.sameRecordingByMetadata
+import com.necroware.terminusplayer.data.model.toSongEntity
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -76,7 +80,8 @@ import com.necroware.terminusplayer.sync.LyricsCacheWorker
 import androidx.work.Constraints
 import androidx.work.NetworkType
 import java.io.IOException
-import android.webkit.MimeTypeMap
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 private data class ProviderScanResult(
     val providerId: String,
@@ -94,6 +99,7 @@ class MusicRepository @Inject constructor(
     private val database: TerminusDatabase,
     private val providers: Map<String, @JvmSuppressWildcards MediaProvider>,
     private val subsonicApi: SubsonicApiService,
+    private val okHttpClient: OkHttpClient,
     private val preferencesRepository: UserPreferencesRepository,
     private val lrclibLyricsRepository: LrclibLyricsRepository,
     private val embeddedLyricsReader: EmbeddedLyricsReader
@@ -194,7 +200,7 @@ class MusicRepository @Inject constructor(
             val currentSongs = songDao.getAllSongs().associateBy { it.remoteId }
             val currentToUpsert = scanned.filter { currentSongs[it.remoteId] != it }
             val currentToDelete = currentSongs.values
-                .filter { it.providerId !in failedProviders && it.remoteId !in scannedIds }
+                .filter { it.providerId != "jamendo" && it.providerId != "youtube" && it.providerId !in failedProviders && it.remoteId !in scannedIds }
                 .map { it.remoteId }
 
             removedLocalSongs += currentToDelete.mapNotNull(currentSongs::get).filter { it.providerId == "local" }
@@ -282,6 +288,28 @@ class MusicRepository @Inject constructor(
         val syncQueued: Boolean,
         val serverBacked: Boolean
     )
+
+    suspend fun ensureTrackPersisted(song: Song) = withContext(Dispatchers.IO) {
+        if (song.providerId != "jamendo" && song.providerId != "youtube") return@withContext
+        if (songDao.getById(song.id) == null) {
+            songDao.insertSong(song.toSongEntity())
+        }
+    }
+
+    suspend fun ensureTracksPersisted(songs: List<Song>) = withContext(Dispatchers.IO) {
+        val remoteTracks = songs.filter { it.providerId == "jamendo" || it.providerId == "youtube" }
+        if (remoteTracks.isEmpty()) return@withContext
+        remoteTracks.forEach { song ->
+            if (songDao.getById(song.id) == null) {
+                songDao.insertSong(song.toSongEntity())
+            }
+        }
+    }
+
+    suspend fun toggleLike(song: Song): LikeChange {
+        ensureTrackPersisted(song)
+        return toggleLike(song.id)
+    }
 
     suspend fun toggleLike(songId: String): LikeChange {
         val song = songDao.getById(songId)
@@ -502,6 +530,7 @@ class MusicRepository @Inject constructor(
         val downloadedUris = mutableMapOf<String, String>()
         val readableLocalUris = mutableMapOf<String, String>()
         val serverIdsBySong = mutableMapOf<String, String>()
+        val youtubeIdsBySong = mutableMapOf<String, String>()
         songsById.values.forEach { song ->
             val downloaded = song.downloadedUri?.let(Uri::parse)?.takeIf(::isReadableDownload)
             if (downloaded != null) {
@@ -511,6 +540,13 @@ class MusicRepository @Inject constructor(
             if (song.downloadedUri != null) songDao.setDownloadedUri(song.remoteId, null)
             if (song.providerId == "local" && isReadableUri(song.uriString)) {
                 readableLocalUris[song.remoteId] = song.uriString
+                return@forEach
+            }
+            if (song.providerId == "youtube") {
+                youtubeIdsBySong[song.remoteId] = song.providerRemoteId
+                return@forEach
+            }
+            if (song.providerId == "jamendo") {
                 return@forEach
             }
             val serverId = when {
@@ -527,15 +563,27 @@ class MusicRepository @Inject constructor(
         } catch (_: Exception) {
             emptyMap()
         }
+        val youtubeUrls = try {
+            providers["youtube"]?.resolveStreamUrls(youtubeIdsBySong.values.distinct()) ?: emptyMap()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyMap()
+        }
         buildMap {
             songsById.values.forEach { song ->
+                val serverStreamUri = when (song.providerId) {
+                    "youtube" -> youtubeIdsBySong[song.remoteId]?.let(youtubeUrls::get) ?: song.uriString
+                    "jamendo" -> song.uriString
+                    else -> serverIdsBySong[song.remoteId]?.let(serverUrls::get)
+                }
                 val uri = resolveTrackPlaybackUri(
                     downloadedUri = downloadedUris[song.remoteId],
                     downloadedAvailable = downloadedUris.containsKey(song.remoteId),
                     providerId = song.providerId,
                     localUri = song.uriString,
                     localAvailable = readableLocalUris.containsKey(song.remoteId),
-                    serverStreamUri = serverIdsBySong[song.remoteId]?.let(serverUrls::get)
+                    serverStreamUri = serverStreamUri
                 )
                 if (uri != null) put(song.remoteId, uri)
             }
@@ -545,6 +593,7 @@ class MusicRepository @Inject constructor(
     /** Resolves an already-loaded playback queue without re-reading every song from Room. */
     suspend fun resolvePlaybackUris(songs: List<Song>): Map<String, String> = withContext(Dispatchers.IO) {
         val serverIdsBySong = mutableMapOf<String, String>()
+        val youtubeIdsBySong = mutableMapOf<String, String>()
         val downloadedUris = mutableMapOf<String, String>()
 
         songs.distinctBy { it.id }.forEach { song ->
@@ -560,6 +609,15 @@ class MusicRepository @Inject constructor(
             // for the active item without delaying playback of the selected track.
             if (song.providerId == "local") return@forEach
 
+            if (song.providerId == "youtube") {
+                youtubeIdsBySong[song.id] = song.providerRemoteId
+                return@forEach
+            }
+
+            if (song.providerId == "jamendo") {
+                return@forEach
+            }
+
             serverIdsBySong[song.id] = song.providerRemoteId
         }
 
@@ -571,10 +629,24 @@ class MusicRepository @Inject constructor(
             emptyMap()
         }
 
+        val youtubeUrls = try {
+            providers["youtube"]?.resolveStreamUrls(youtubeIdsBySong.values.distinct()) ?: emptyMap()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyMap()
+        }
+
         buildMap {
             downloadedUris.forEach { (songId, uri) -> put(songId, uri) }
             serverIdsBySong.forEach { (songId, remoteId) ->
                 serverUrls[remoteId]?.let { put(songId, it) }
+            }
+            youtubeIdsBySong.forEach { (songId, remoteId) ->
+                val streamUrl = youtubeUrls[remoteId] ?: songs.find { it.id == songId }?.uriString
+                if (!streamUrl.isNullOrBlank()) {
+                    put(songId, streamUrl)
+                }
             }
         }
     }
@@ -591,6 +663,8 @@ class MusicRepository @Inject constructor(
         }
         val stream = when {
             song.providerId == "navidrome" -> providers["navidrome"]?.resolveStreamUrl(song.providerRemoteId)
+            song.providerId == "youtube" -> providers["youtube"]?.resolveStreamUrl(song.providerRemoteId) ?: song.uriString
+            song.providerId == "jamendo" -> song.uriString
             !song.navidromeId.isNullOrBlank() && !localAvailable -> providers["navidrome"]?.resolveStreamUrl(song.navidromeId)
             else -> null
         }
@@ -669,51 +743,227 @@ class MusicRepository @Inject constructor(
         songId: String,
         force: Boolean,
         onProgress: ((TransferProgress) -> Unit)?
+    ): String = downloadSong(songId, force, null, onProgress)
+
+    override suspend fun downloadSong(
+        songId: String,
+        force: Boolean,
+        maxBitRate: Int?,
+        onProgress: ((TransferProgress) -> Unit)?
     ): String = withContext(Dispatchers.IO) {
         val song = songDao.getById(songId) ?: throw PermanentTransferException("Track is no longer in the library")
         try {
+            val prefs = preferencesRepository.preferences.first()
+            val targetBitRate = maxBitRate
+            val previousDownloadedUri = song.downloadedUri
+
+            if (!force) {
+                val currentUri = song.downloadedUri?.let(Uri::parse)
+                if (currentUri != null && isReadableDownload(currentUri)) {
+                    scheduleLyricsWarmup(songId)
+                    return@withContext currentUri.toString()
+                }
+                if (song.downloadedUri != null) songDao.setDownloadedUri(songId, null)
+
+                val candidateNames = listOfNotNull(
+                    DownloadFormatUtils.buildDownloadFileName(song.title, song.artist, song.folderPath, "mp3"),
+                    DownloadFormatUtils.buildDownloadFileName(song.title, song.artist, song.folderPath, "flac"),
+                    DownloadFormatUtils.buildDownloadFileName(song.title, song.artist, song.folderPath, "m4a"),
+                    DownloadFormatUtils.buildDownloadFileName(song.title, song.artist, song.folderPath, "webm"),
+                    DownloadFormatUtils.buildDownloadFileName(song.title, song.artist, song.folderPath, "opus"),
+                    downloadFileName(song, targetBitRate),
+                    downloadFileName(song)
+                ).distinct()
+
+                for (candName in candidateNames) {
+                    val existing = findExistingDownload(candName, prefs.downloadFolderUri)
+                    if (existing != null) {
+                        songDao.setDownloadedUri(songId, existing.toString())
+                        scheduleLyricsWarmup(songId)
+                        return@withContext existing.toString()
+                    }
+                }
+            }
+
+            if (song.providerId == "youtube") {
+                val ytProvider = providers["youtube"]
+                var streamUrl = ytProvider?.resolveDownloadUrl(song.providerRemoteId, targetBitRate)
+                    ?: ytProvider?.resolveStreamUrl(song.providerRemoteId)
+                    ?: throw PermanentTransferException("Could not resolve YouTube stream URL")
+                if (streamUrl.isBlank()) throw IOException("YouTube stream URL is empty")
+
+                var request = Request.Builder()
+                    .url(streamUrl)
+                    .header("User-Agent", "Mozilla/5.0")
+                    .build()
+                var response = okHttpClient.newCall(request).execute()
+
+                // If stream URL expired (403 Forbidden or 410 Gone), refresh format and retry once
+                if (!response.isSuccessful && (response.code == 403 || response.code == 410)) {
+                    response.close()
+                    ytProvider?.invalidateStream(song.providerRemoteId)
+                    val refreshedUrl = ytProvider?.resolveDownloadUrl(song.providerRemoteId, targetBitRate)
+                        ?: ytProvider?.resolveStreamUrl(song.providerRemoteId)
+                    if (!refreshedUrl.isNullOrBlank() && refreshedUrl != streamUrl) {
+                        streamUrl = refreshedUrl
+                        request = Request.Builder()
+                            .url(streamUrl)
+                            .header("User-Agent", "Mozilla/5.0")
+                            .build()
+                        response = okHttpClient.newCall(request).execute()
+                    }
+                }
+
+                if (!response.isSuccessful) {
+                    val code = response.code
+                    response.close()
+                    val message = "YouTube download failed with HTTP $code"
+                    if (code == 404) throw PermanentTransferException(message)
+                    if (code == 403) throw PermanentTransferException("YouTube video is restricted or unavailable: $message")
+                    throw IOException(message)
+                }
+                val body = response.body ?: throw IOException("Server returned an empty download")
+
+                val contentType = response.header("Content-Type")
+                val contentDisposition = response.header("Content-Disposition")
+                val (actualExt, actualMime) = DownloadFormatUtils.resolveFormatFromResponse(
+                    contentTypeHeader = contentType,
+                    contentDispositionHeader = contentDisposition,
+                    fallbackExtension = "m4a"
+                )
+                val finalName = DownloadFormatUtils.buildDownloadFileName(
+                    songTitle = song.title,
+                    artist = song.artist,
+                    folderPath = song.folderPath,
+                    extension = actualExt
+                )
+
+                val destination = createDownloadDestination(finalName, actualMime, prefs.downloadFolderUri)
+                try {
+                    val totalBytes = body.contentLength().takeIf { it >= 0L }
+                    onProgress?.invoke(TransferProgress(0L, totalBytes, destination.uri.toString()))
+                    body.use { downloaded ->
+                        downloaded.byteStream().use { input ->
+                            context.contentResolver.openOutputStream(destination.uri, "w")?.use { output ->
+                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                var bytesTransferred = 0L
+                                var lastReportedBytes = 0L
+                                var lastReportedAt = System.currentTimeMillis()
+                                while (true) {
+                                    val count = input.read(buffer)
+                                    if (count < 0) break
+                                    output.write(buffer, 0, count)
+                                    bytesTransferred += count
+                                    val now = System.currentTimeMillis()
+                                    if (bytesTransferred - lastReportedBytes >= 256L * 1024L || now - lastReportedAt >= 500L) {
+                                        onProgress?.invoke(TransferProgress(bytesTransferred, totalBytes))
+                                        lastReportedBytes = bytesTransferred
+                                        lastReportedAt = now
+                                    }
+                                }
+                                onProgress?.invoke(TransferProgress(bytesTransferred, totalBytes))
+                            } ?: throw IOException("Cannot open the selected download folder")
+                        }
+                    }
+                    destination.publish()
+                    songDao.setDownloadedUri(songId, destination.uri.toString())
+                    if (previousDownloadedUri != null && previousDownloadedUri != destination.uri.toString()) {
+                        cleanupInterruptedDownload(previousDownloadedUri)
+                    }
+                    scheduleLyricsWarmup(songId)
+                    return@withContext destination.uri.toString()
+                } catch (e: CancellationException) {
+                    destination.delete()
+                    throw e
+                } catch (e: Exception) {
+                    destination.delete()
+                    throw e
+                }
+            }
+
             val serverTrackId = when {
                 song.providerId == "navidrome" -> song.providerRemoteId
                 !song.navidromeId.isNullOrBlank() -> song.navidromeId
-                else -> throw PermanentTransferException("Only server tracks can be downloaded")
-            }
-            val prefs = preferencesRepository.preferences.first()
-            val name = downloadFileName(song)
-            
-            if (!force) {
-                song.downloadedUri?.let(Uri::parse)?.takeIf(::isReadableDownload)?.let { existing ->
-                    scheduleLyricsWarmup(songId)
-                    return@withContext existing.toString()
-                }
-                if (song.downloadedUri != null) songDao.setDownloadedUri(songId, null)
-                findExistingDownload(name, prefs.downloadFolderUri)?.let { existing ->
-                    songDao.setDownloadedUri(songId, existing.toString())
-                    scheduleLyricsWarmup(songId)
-                    return@withContext existing.toString()
-                }
-            } else {
-                if (song.downloadedUri != null) songDao.setDownloadedUri(songId, null)
+                else -> throw PermanentTransferException("Only server or YouTube tracks can be downloaded")
             }
 
             val config = preferencesRepository.awaitServerConnectionConfig()
-            if (config.username.isBlank() || config.password.isBlank()) throw PermanentTransferException("Navidrome credentials are missing")
+            if (config.username.isBlank() || config.password.isBlank()) {
+                throw PermanentTransferException("Navidrome credentials are missing")
+            }
             val salt = newSubsonicSalt()
             val token = buildSubsonicToken(config.password, salt)
-            
-            val response = subsonicApi.download(serverTrackId, config.username, token, salt)
+
+            val response: retrofit2.Response<ResponseBody> = if (targetBitRate != null) {
+                val streamResp = subsonicApi.stream(
+                    id = serverTrackId,
+                    user = config.username,
+                    token = token,
+                    salt = salt,
+                    maxBitRate = targetBitRate,
+                    targetFormat = "mp3"
+                )
+                if (streamResp.isSuccessful) {
+                    val streamBody = streamResp.body()
+                    val contentType = streamResp.headers()["Content-Type"]?.lowercase().orEmpty()
+                    if (contentType.contains("json") || contentType.contains("xml")) {
+                        val bodyString = streamBody?.string().orEmpty()
+                        if (DownloadFormatUtils.isTranscodingFailure(200, bodyString)) {
+                            subsonicApi.download(serverTrackId, config.username, token, salt)
+                        } else {
+                            val msg = "Navidrome streaming error: $bodyString"
+                            if (bodyString.contains("40") || bodyString.contains("unauthorized")) {
+                                throw PermanentTransferException(msg)
+                            }
+                            throw IOException(msg)
+                        }
+                    } else {
+                        streamResp
+                    }
+                } else {
+                    val code = streamResp.code()
+                    val errorBody = streamResp.errorBody()?.string()
+                    if (DownloadFormatUtils.isTranscodingFailure(code, errorBody)) {
+                        subsonicApi.download(serverTrackId, config.username, token, salt)
+                    } else {
+                        val msg = "Navidrome stream failed with HTTP $code: $errorBody"
+                        if (code in 400..499) throw PermanentTransferException(msg)
+                        throw IOException(msg)
+                    }
+                }
+            } else {
+                subsonicApi.download(serverTrackId, config.username, token, salt)
+            }
+
             if (!response.isSuccessful) {
-                response.errorBody()?.close()
-                val message = "Download failed with HTTP ${response.code()}"
-                if (response.code() in 400..499) throw PermanentTransferException(message)
+                val code = response.code()
+                val err = response.errorBody()?.string()
+                val message = "Download failed with HTTP $code: $err"
+                if (code in 400..499) throw PermanentTransferException(message)
                 throw IOException(message)
             }
             val body = response.body() ?: throw IOException("Server returned an empty download")
-            if (body.contentType()?.subtype?.contains("json", ignoreCase = true) == true) {
-                body.close()
-                throw PermanentTransferException("Server returned an authentication or download error")
+            val contentType = response.headers()["Content-Type"]
+            val contentDisposition = response.headers()["Content-Disposition"]
+            if (contentType?.contains("json", ignoreCase = true) == true) {
+                val errBody = body.string()
+                throw PermanentTransferException("Server returned an error response: $errBody")
             }
-            
-            val destination = createDownloadDestination(name, prefs.downloadFolderUri)
+
+            val fallbackExt = song.folderPath.substringAfterLast('.', "").takeIf { it.matches(Regex("[A-Za-z0-9]{1,8}")) } ?: "mp3"
+            val (actualExt, actualMime) = DownloadFormatUtils.resolveFormatFromResponse(
+                contentTypeHeader = contentType,
+                contentDispositionHeader = contentDisposition,
+                fallbackExtension = fallbackExt
+            )
+            val finalName = DownloadFormatUtils.buildDownloadFileName(
+                songTitle = song.title,
+                artist = song.artist,
+                folderPath = song.folderPath,
+                extension = actualExt
+            )
+
+            val destination = createDownloadDestination(finalName, actualMime, prefs.downloadFolderUri)
             try {
                 val totalBytes = body.contentLength().takeIf { it >= 0L }
                 onProgress?.invoke(TransferProgress(0L, totalBytes, destination.uri.toString()))
@@ -742,8 +992,11 @@ class MusicRepository @Inject constructor(
                 }
                 destination.publish()
                 songDao.setDownloadedUri(songId, destination.uri.toString())
+                if (previousDownloadedUri != null && previousDownloadedUri != destination.uri.toString()) {
+                    cleanupInterruptedDownload(previousDownloadedUri)
+                }
                 scheduleLyricsWarmup(songId)
-                destination.uri.toString()
+                return@withContext destination.uri.toString()
             } catch (e: CancellationException) {
                 destination.delete()
                 throw e
@@ -774,26 +1027,43 @@ class MusicRepository @Inject constructor(
         val delete: () -> Unit
     )
 
-    private fun createDownloadDestination(name: String, folderUri: String?): DownloadDestination {
+    private suspend fun createDownloadDestination(
+        name: String,
+        mimeType: String,
+        folderUri: String?
+    ): DownloadDestination {
         val resolver = context.contentResolver
         if (!folderUri.isNullOrBlank()) {
-            val treeUri = Uri.parse(folderUri)
-            val treeDocumentUri = DocumentsContract.buildDocumentUriUsingTree(
-                treeUri,
-                DocumentsContract.getTreeDocumentId(treeUri)
-            )
-            val documentUri = DocumentsContract.createDocument(
-                resolver,
-                treeDocumentUri,
-                mimeTypeFor(name),
-                name
-            ) ?: throw IOException("Could not create a file in the selected folder")
-            return DownloadDestination(documentUri, {}, { DocumentsContract.deleteDocument(resolver, documentUri) })
+            try {
+                val treeUri = Uri.parse(folderUri)
+                val treeDocumentUri = DocumentsContract.buildDocumentUriUsingTree(
+                    treeUri,
+                    DocumentsContract.getTreeDocumentId(treeUri)
+                )
+                val documentUri = DocumentsContract.createDocument(
+                    resolver,
+                    treeDocumentUri,
+                    mimeType,
+                    name
+                )
+                if (documentUri != null) {
+                    return DownloadDestination(
+                        uri = documentUri,
+                        publish = {},
+                        delete = { DocumentsContract.deleteDocument(resolver, documentUri) }
+                    )
+                }
+            } catch (e: SecurityException) {
+                runCatching { preferencesRepository.setDownloadFolderUri(null) }
+            } catch (e: IllegalArgumentException) {
+                runCatching { preferencesRepository.setDownloadFolderUri(null) }
+            } catch (_: Exception) {
+            }
         }
 
         val values = ContentValues().apply {
             put(MediaStore.Audio.Media.DISPLAY_NAME, name)
-            put(MediaStore.Audio.Media.MIME_TYPE, mimeTypeFor(name))
+            put(MediaStore.Audio.Media.MIME_TYPE, mimeType)
             put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/Terminus")
             put(MediaStore.Audio.Media.IS_MUSIC, 1)
             put(MediaStore.Audio.Media.IS_PENDING, 1)
@@ -802,7 +1072,14 @@ class MusicRepository @Inject constructor(
             ?: throw IOException("Could not create the download file")
         return DownloadDestination(
             uri = uri,
-            publish = { resolver.update(uri, ContentValues().apply { put(MediaStore.Audio.Media.IS_PENDING, 0) }, null, null) },
+            publish = {
+                resolver.update(
+                    uri,
+                    ContentValues().apply { put(MediaStore.Audio.Media.IS_PENDING, 0) },
+                    null,
+                    null
+                )
+            },
             delete = { resolver.delete(uri, null, null) }
         )
     }
@@ -875,13 +1152,18 @@ class MusicRepository @Inject constructor(
         return matches
     }
 
-    private fun downloadFileName(song: SongEntity): String {
+    private fun downloadFileName(song: SongEntity, maxBitRate: Int? = null): String {
         val extension = song.folderPath.substringAfterLast('.', "").takeIf { it.matches(Regex("[A-Za-z0-9]{1,8}")) }
         val base = song.folderPath.substringAfterLast('/').substringBeforeLast('.', "")
             .ifBlank { "${song.artist} - ${song.title}" }
             .replace(Regex("[\\\\/:*?\"<>|]"), "_")
             .take(120)
-        return "$base.${extension ?: "mp3"}"
+        val ext = when {
+            song.providerId == "youtube" -> "m4a"
+            maxBitRate != null -> "mp3"
+            else -> extension ?: "mp3"
+        }
+        return "$base.$ext"
     }
 
     private fun mimeTypeFor(name: String): String =
@@ -1268,7 +1550,10 @@ class MusicRepository @Inject constructor(
             ) song.id to downloadEntity else null
         }.toMap()
         val existingDownloads = runCatching {
-            findExistingDownloads(downloadEntitiesBySong.values.map(::downloadFileName).toSet(), prefs.downloadFolderUri)
+            val names = downloadEntitiesBySong.values.flatMap { entity ->
+                listOf(downloadFileName(entity), downloadFileName(entity, prefs.downloadMaxBitRate))
+            }.toSet()
+            findExistingDownloads(names, prefs.downloadFolderUri)
         }.getOrDefault(emptyMap())
 
         songs.forEach { song ->
@@ -1308,7 +1593,8 @@ class MusicRepository @Inject constructor(
                 unavailableIds += song.id
                 return@forEach
             }
-            val existingFile = existingDownloads[downloadFileName(downloadEntity)]
+            val existingFile = existingDownloads[downloadFileName(downloadEntity, prefs.downloadMaxBitRate)]
+                ?: existingDownloads[downloadFileName(downloadEntity)]
             if (existingFile != null) {
                 songDao.setDownloadedUri(downloadEntity.remoteId, existingFile.toString())
                 offlineIds += song.id
@@ -1608,6 +1894,11 @@ class MusicRepository @Inject constructor(
             playlistDao.markPlaylistDeletePending(playlistId)
             enqueuePlaylistSync()
         }
+    }
+
+    suspend fun addSongToPlaylist(playlistId: String, song: Song): AddSongResult {
+        ensureTrackPersisted(song)
+        return addSongToPlaylist(playlistId, song.id)
     }
 
     suspend fun addSongToPlaylist(playlistId: String, songId: String): AddSongResult {
@@ -1941,7 +2232,7 @@ fun SongEntity.toSong(isLiked: Boolean = false): Song = Song(
     artist = artist,
     album = album,
     albumId = albumId,
-    duration = duration,
+    duration = if (providerId == "jamendo" && duration in 1..36000L) duration * 1000L else duration,
     uriString = uriString,
     trackNumber = trackNumber,
     year = year,
@@ -1951,7 +2242,8 @@ fun SongEntity.toSong(isLiked: Boolean = false): Song = Song(
     isLiked = isLiked,
     downloadedUri = downloadedUri,
     genre = genre,
-    navidromeId = navidromeId
+    navidromeId = navidromeId,
+    artworkUri = artworkUri
 )
 
 private fun namespacedSongId(providerId: String, providerRemoteId: String): String =

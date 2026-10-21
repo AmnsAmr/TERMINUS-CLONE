@@ -122,10 +122,17 @@ class UploadWorkerTest {
 
     private class FakeDownloader : DownloadTransferRepository {
         var downloadedSongId: String? = null
+        var lastMaxBitRate: Int? = null
         var cleanedPartialUri: String? = null
         var failuresRemaining = 0
-        override suspend fun downloadSong(songId: String, force: Boolean, onProgress: ((TransferProgress) -> Unit)?): String {
+        override suspend fun downloadSong(
+            songId: String,
+            force: Boolean,
+            maxBitRate: Int?,
+            onProgress: ((TransferProgress) -> Unit)?
+        ): String {
             downloadedSongId = songId
+            lastMaxBitRate = maxBitRate
             if (failuresRemaining > 0) {
                 failuresRemaining--
                 throw IOException("Temporary download failure")

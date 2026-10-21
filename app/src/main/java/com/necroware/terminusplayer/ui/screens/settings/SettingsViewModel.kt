@@ -186,6 +186,10 @@ class SettingsViewModel @Inject constructor(
         preferencesRepository.setMaxBitRate(bitRate)
     }
 
+    fun setDownloadMaxBitRate(bitRate: Int?) = viewModelScope.launch {
+        preferencesRepository.setDownloadMaxBitRate(bitRate)
+    }
+
     fun setDownloadFolderUri(uri: Uri, grantFlags: Int) = viewModelScope.launch {
         try {
             context.contentResolver.takePersistableUriPermission(uri, grantFlags)

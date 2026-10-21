@@ -14,6 +14,10 @@ interface MediaProvider {
         return remoteIds.associateWith { resolveStreamUrl(it) }
     }
 
+    suspend fun resolveDownloadUrl(remoteId: String, maxBitRate: Int? = null): String = resolveStreamUrl(remoteId)
+
+    fun invalidateStream(remoteId: String) {}
+
     suspend fun scrobble(remoteId: String)
 
     suspend fun toggleLike(remoteId: String, isLiked: Boolean)

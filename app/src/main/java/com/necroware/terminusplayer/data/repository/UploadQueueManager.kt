@@ -81,8 +81,9 @@ class UploadQueueManager @Inject constructor(
 
     suspend fun enqueueDownloads(songs: List<Song>, force: Boolean = false) = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
+        val currentMaxBitRate = userPreferencesRepository.preferences.first().downloadMaxBitRate
         val entities = songs.distinctBy { it.id }
-            .filter { it.providerId == "navidrome" || !it.navidromeId.isNullOrBlank() }
+            .filter { it.providerId == "navidrome" || it.providerId == "youtube" || !it.navidromeId.isNullOrBlank() }
             .mapIndexed { index, song ->
             UploadQueueEntity(
                 songId = downloadQueueId(song.id),
@@ -93,7 +94,8 @@ class UploadQueueManager @Inject constructor(
                 attemptCount = 0,
                 addedAtEpochMs = now + index,
                 title = "${song.artist} - ${song.title}",
-                forceDownload = force
+                forceDownload = force,
+                maxBitRate = currentMaxBitRate
             )
         }
         if (entities.isNotEmpty()) {
