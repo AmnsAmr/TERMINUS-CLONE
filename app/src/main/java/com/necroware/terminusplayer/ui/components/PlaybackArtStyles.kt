@@ -65,6 +65,9 @@ fun PlaybackArt(
             PlaybackArtStyle.REEL_TO_REEL -> ReelToReel(rotation)
             PlaybackArtStyle.VINYL -> VinylRecord(rotation)
             PlaybackArtStyle.VHS -> VhsTape(title, artist, rotation)
+            PlaybackArtStyle.VISUALIZER -> {
+                // Drawn by WarpVisualizer in NowPlayingScreen, which has the live spectrum.
+            }
         }
     }
 }

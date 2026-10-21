@@ -475,6 +475,11 @@ class PlaybackController @Inject constructor(
 
     fun skipToNext() = controller?.seekToNext()
     fun skipToPrevious() = controller?.seekToPrevious()
+
+    /** True when [skipToPrevious] will move to the previous item rather than restart the current one (Media3 seekToPrevious rule). */
+    fun willSkipToPreviousItem(): Boolean = controller?.let { player ->
+        player.hasPreviousMediaItem() && player.currentPosition <= player.maxSeekToPreviousPosition
+    } ?: false
     fun seekTo(positionMs: Long) {
         val targetPositionMs = positionMs.coerceAtLeast(0L)
         val activeController = controller ?: return
