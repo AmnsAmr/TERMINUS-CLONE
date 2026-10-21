@@ -36,6 +36,10 @@ class SpectrumFrame(
     val bands: FloatArray,
     /** RMS level of the analysed window, 0..1. */
     val level: Float,
+    /** Largest absolute sample in the analysed window, 0..1. */
+    val peak: Float,
+    /** [AudioSpectrum.WAVEFORM_POINTS] evenly spaced samples of the window, -1..1. */
+    val waveform: FloatArray,
     /** True on a detected bass onset. */
     val beat: Boolean,
     /** Increases by one per published frame; 0 for silence. */
@@ -47,7 +51,14 @@ class SpectrumFrame(
     override fun hashCode(): Int = sequence.hashCode()
 
     companion object {
-        val Silent = SpectrumFrame(FloatArray(AudioSpectrum.BAND_COUNT), level = 0f, beat = false, sequence = 0L)
+        val Silent = SpectrumFrame(
+            bands = FloatArray(AudioSpectrum.BAND_COUNT),
+            level = 0f,
+            peak = 0f,
+            waveform = FloatArray(AudioSpectrum.WAVEFORM_POINTS),
+            beat = false,
+            sequence = 0L
+        )
     }
 }
 
@@ -162,18 +173,36 @@ class AudioSpectrum internal constructor(
             }
             val bands = FloatArray(BAND_COUNT)
             val level = analyzer.analyze(window, rate, bands)
-            _frames.value = SpectrumFrame(bands, level, beats.update(bands), ++sequence)
+            val waveform = FloatArray(WAVEFORM_POINTS)
+            val peak = downsampleWaveform(window, waveform)
+            _frames.value = SpectrumFrame(bands, level, peak, waveform, beats.update(bands), ++sequence)
         }
     }
 
     companion object {
         const val BAND_COUNT = 16
+        const val WAVEFORM_POINTS = 64
         /** About 30 frames per second, enough for smooth visuals. */
         const val FRAME_INTERVAL_MS = 33L
         internal const val FFT_SIZE = 1024
         private const val RING_SIZE = 4096
         private const val RING_MASK = (RING_SIZE - 1).toLong()
     }
+}
+
+/**
+ * Fills [out] with evenly spaced samples of [window] and returns the window's peak
+ * absolute value, both clamped to the -1..1 / 0..1 range.
+ */
+internal fun downsampleWaveform(window: FloatArray, out: FloatArray): Float {
+    var peak = 0f
+    for (sample in window) {
+        val magnitude = kotlin.math.abs(sample)
+        if (magnitude > peak) peak = magnitude
+    }
+    val step = window.size.toFloat() / out.size
+    for (i in out.indices) out[i] = window[(i * step).toInt()].coerceIn(-1f, 1f)
+    return peak.coerceAtMost(1f)
 }
 
 /**

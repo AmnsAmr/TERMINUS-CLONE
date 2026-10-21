@@ -57,6 +57,7 @@ import com.necroware.terminusplayer.data.prefs.TerminalCursorStyle
 import com.necroware.terminusplayer.data.prefs.TerminalCursorBlink
 import com.necroware.terminusplayer.data.prefs.TerminalHaptics
 import com.necroware.terminusplayer.data.prefs.HudTelemetryMode
+import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
 import com.necroware.terminusplayer.data.prefs.VisualizerStyle
 import com.necroware.terminusplayer.data.prefs.ThemePresetId
 import com.necroware.terminusplayer.data.prefs.ThemeColorRole
@@ -215,6 +216,8 @@ fun SettingsScreen(
                     onReactiveHudFlashChange = viewModel::setReactiveHudFlash,
                     visualizerStyle = prefs.visualizerStyle,
                     onVisualizerStyleChange = viewModel::setVisualizerStyle,
+                    playbackArtStyle = prefs.playbackArtStyle,
+                    onPlaybackArtStyleChange = viewModel::setPlaybackArtStyle,
                     motionPreference = effectiveMotionPreference
                 )
             }
@@ -1072,6 +1075,8 @@ private fun CrtAestheticsSection(
     onReactiveHudFlashChange: (Boolean) -> Unit,
     visualizerStyle: VisualizerStyle,
     onVisualizerStyleChange: (VisualizerStyle) -> Unit,
+    playbackArtStyle: PlaybackArtStyle,
+    onPlaybackArtStyleChange: (PlaybackArtStyle) -> Unit,
     motionPreference: MotionPreference
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1140,6 +1145,46 @@ private fun CrtAestheticsSection(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onVisualizerStyleChange(style) }
+                            .padding(vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = (if (isSelected) "> " else "  ") + label,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = desc,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+            Column {
+                Text(
+                    "NOW PLAYING ART",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                PlaybackArtStyle.entries.forEach { style ->
+                    val isSelected = style == playbackArtStyle
+                    val (label, desc) = when (style) {
+                        PlaybackArtStyle.STANDARD -> "ALBUM ART" to "Cover artwork for the current track"
+                        PlaybackArtStyle.CASSETTE -> "CASSETTE" to "Animated tape deck with track label"
+                        PlaybackArtStyle.REEL_TO_REEL -> "REEL-TO-REEL" to "Spinning open-reel tape machine"
+                        PlaybackArtStyle.VINYL -> "VINYL" to "Spinning record"
+                        PlaybackArtStyle.VHS -> "VHS" to "Video cassette with track label"
+                        PlaybackArtStyle.VISUALIZER -> "WARP VISUALIZER" to
+                            "Audio-reactive feedback visuals (Full motion only; pauses in power saving)"
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onPlaybackArtStyleChange(style) }
                             .padding(vertical = 6.dp)
                     ) {
                         Text(

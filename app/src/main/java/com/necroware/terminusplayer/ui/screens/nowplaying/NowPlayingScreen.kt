@@ -50,6 +50,8 @@ import com.necroware.terminusplayer.ui.components.BlockSeekBar
 import com.necroware.terminusplayer.ui.components.FullTransportControls
 import com.necroware.terminusplayer.ui.components.PlaybackArt
 import com.necroware.terminusplayer.ui.components.SongArt
+import com.necroware.terminusplayer.ui.components.visualizer.WarpVisualizer
+import com.necroware.terminusplayer.ui.components.visualizer.collectSpectrum
 import com.necroware.terminusplayer.ui.navigation.MotionTokens
 import com.necroware.terminusplayer.ui.navigation.MotionTransitionSpec
 import com.necroware.terminusplayer.ui.navigation.fadeInOrNone
@@ -256,6 +258,7 @@ internal fun NowPlayingScreen(
     val isSleepCollapsing by viewModel.isSleepCollapsing.collectAsStateWithLifecycle()
     val bufferedPositionMs by viewModel.bufferedPositionMs.collectAsStateWithLifecycle()
     val serverPingMs by viewModel.serverPingMs.collectAsStateWithLifecycle()
+    val deferOptionalWork by viewModel.deferOptionalWork.collectAsStateWithLifecycle()
     val haptic = rememberTerminalHaptics(prefs.terminalHaptics)
 
     val preparingSelection = pendingSong != null
@@ -268,6 +271,10 @@ internal fun NowPlayingScreen(
         ?: displaySongUri.takeIf { it.isNotBlank() }
         ?: nowPlaying.mediaId?.let { if (it.startsWith("terminus://")) it else "terminus://$it" }
     val displayIsPlaying = !preparingSelection && nowPlaying.isPlaying
+    // This screen is composed only while the player panel is open, so "visible" is implied.
+    // Collecting is what starts audio analysis; one collection feeds every visualizer here.
+    val visualizerActive = displayIsPlaying && motionPreference == MotionPreference.FULL && !deferOptionalWork
+    val spectrum = collectSpectrum(viewModel.spectrum, visualizerActive)
     var hudAlertColor by remember { mutableStateOf<Color?>(null) }
     var previousPlayingState by remember { mutableStateOf<Boolean?>(null) }
 
@@ -411,7 +418,16 @@ internal fun NowPlayingScreen(
                     }
 
             // Playback Art / Song Art
-            AnimatedContent(
+            if (artStyle == com.necroware.terminusplayer.data.prefs.PlaybackArtStyle.VISUALIZER) {
+                // Continuous across tracks, so it stays outside the per-track swap animation.
+                WarpVisualizer(
+                    spectrum = spectrum,
+                    active = visualizerActive,
+                    accent = activeAccent,
+                    size = 300.dp,
+                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art)
+                )
+            } else AnimatedContent(
                 targetState = trackDisplay,
                 contentKey = { it.id },
                 transitionSpec = { trackSwapTransform(motion.transition, targetState.direction) },
@@ -547,6 +563,8 @@ internal fun NowPlayingScreen(
                 serverPingMs = if (preparingSelection) null else serverPingMs,
                 preferHardwareDecoder = prefs.preferHardwareDecoder,
                 visualizerStyle = prefs.visualizerStyle,
+                spectrum = spectrum,
+                visualizerActive = visualizerActive,
                 modifier = Modifier.padding(top = 24.dp, bottom = 24.dp)
             )
 
