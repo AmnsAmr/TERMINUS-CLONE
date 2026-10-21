@@ -15,8 +15,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.necroware.terminusplayer.playback.NowPlayingState
+
+/** Fixed bar height. The bottom bar reserves exactly this much space for the player panel. */
+val MiniPlayerHeight: Dp = 52.dp
 
 /**
  * Edge-to-edge mini player bar sitting directly above the bottom nav — NOT
@@ -32,14 +36,16 @@ fun MiniPlayerBar(
     onSkipNext: () -> Unit,
     onSkipPrevious: () -> Unit,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    artModifier: Modifier = Modifier,
+    titleModifier: Modifier = Modifier
 ) {
     if (nowPlaying.title.isBlank()) return
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .height(MiniPlayerHeight)
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .border(
                 androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
@@ -51,14 +57,15 @@ fun MiniPlayerBar(
     ) {
         Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             val artUri = nowPlaying.artworkUri?.takeIf { it.isNotBlank() } ?: currentSongUri.orEmpty()
-            SongArt(uriString = artUri, size = 34.dp)
+            SongArt(uriString = artUri, size = 34.dp, modifier = artModifier)
             Column(modifier = Modifier.padding(start = 8.dp)) {
                 Text(
                     text = nowPlaying.title,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = titleModifier
                 )
                 Text(
                     text = nowPlaying.artist,

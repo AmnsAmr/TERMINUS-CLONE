@@ -12,14 +12,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.delay
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,7 +23,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
@@ -38,14 +33,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.ui.components.AudioMonitorCard
@@ -59,7 +52,6 @@ import com.necroware.terminusplayer.util.sizeLabelFromBytes
 import com.necroware.terminusplayer.util.toMinutesSeconds
 import com.necroware.terminusplayer.util.EXTERNAL_AUDIO_MEDIA_ID_PREFIX
 import kotlinx.coroutines.isActive
-import kotlin.math.roundToInt
 
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -204,7 +196,7 @@ fun NowPlayingScreen(
     viewModel: PlaybackViewModel,
     onCollapse: () -> Unit,
     motionPreference: MotionPreference = MotionPreference.FULL,
-    systemAnimationsEnabled: Boolean = true
+    transition: NowPlayingTransition = NowPlayingTransition.None
 ) {
     val nowPlaying by viewModel.nowPlaying.collectAsStateWithLifecycle()
     val pendingSong by viewModel.pendingSong.collectAsStateWithLifecycle()
@@ -269,13 +261,11 @@ fun NowPlayingScreen(
         collapsePlayer()
     }
 
-    var dragOffsetPx by remember { mutableFloatStateOf(0f) }
     var screenHeightPx by remember { mutableStateOf(1f) }
     var lyricsExpanded by remember { mutableStateOf(false) }
     var showPlaylistPicker by remember { mutableStateOf(false) }
     val selectedSongId = pendingSong?.id ?: nowPlaying.mediaId
     val selectedSongIsExternal = selectedSongId.orEmpty().startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)
-    val dismissThresholdFraction = 0.25f
     val scrollState = rememberScrollState()
 
     LaunchedEffect(lyricsExpanded) {
@@ -289,29 +279,6 @@ fun NowPlayingScreen(
         if (lyricsExpanded && scrollState.value < previousScrollValue) lyricsExpanded = false
         previousScrollValue = scrollState.value
     }
-    val dragState = rememberDraggableState { delta ->
-        dragOffsetPx = (dragOffsetPx + delta).coerceAtLeast(0f)
-    }
-    val dragModifier = Modifier.draggable(
-        state = dragState,
-        orientation = Orientation.Vertical,
-        onDragStopped = {
-            if (dragOffsetPx > screenHeightPx * dismissThresholdFraction) {
-                dragOffsetPx = 0f
-                collapsePlayer()
-            } else {
-                when (motionPreference) {
-                    MotionPreference.FULL -> Animatable(dragOffsetPx).animateTo(0f) { dragOffsetPx = value }
-                    MotionPreference.MEDIUM -> Animatable(dragOffsetPx).animateTo(0f, tween(120)) { dragOffsetPx = value }
-                    MotionPreference.OFF -> dragOffsetPx = 0f
-                    MotionPreference.SYSTEM -> if (systemAnimationsEnabled) {
-                        Animatable(dragOffsetPx).animateTo(0f, tween(180)) { dragOffsetPx = value }
-                    } else dragOffsetPx = 0f
-                }
-            }
-        }
-    )
-
     val currentScheme = MaterialTheme.colorScheme
     val themedColorScheme = remember(currentScheme, activeAccent) {
         currentScheme.copy(
@@ -332,7 +299,6 @@ fun NowPlayingScreen(
         modifier = Modifier
             .fillMaxSize()
             .onSizeChanged { screenHeightPx = it.height.toFloat().coerceAtLeast(1f) }
-            .offset { IntOffset(0, dragOffsetPx.roundToInt()) }
     ) {
         CompositionLocalProvider(LocalAppPalette provides themedPalette) {
             MaterialTheme(colorScheme = themedColorScheme) {
@@ -345,7 +311,7 @@ fun NowPlayingScreen(
                     verticalArrangement = Arrangement.Top
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 20.dp).then(transition.content),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -405,7 +371,7 @@ fun NowPlayingScreen(
                 SongArt(
                     uriString = targetArtUri ?: displaySongUri,
                     size = 300.dp,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(dragModifier)
+                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art)
                 )
             } else {
                 PlaybackArt(
@@ -415,7 +381,7 @@ fun NowPlayingScreen(
                     isPlaying = displayIsPlaying,
                     size = 300.dp,
                     motionPreference = motionPreference,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(dragModifier)
+                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art)
                 )
             }
 
@@ -424,8 +390,14 @@ fun NowPlayingScreen(
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                modifier = transition.title
             )
+            // Everything below the title fades in together while the player panel opens.
+            Column(
+                modifier = Modifier.fillMaxWidth().then(transition.content),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
             Text(
                 text = displayArtist,
                 style = MaterialTheme.typography.bodyMedium,
@@ -604,12 +576,14 @@ fun NowPlayingScreen(
                 }
             }
             }
+            }
         }
         }
         }
         CrtScanlineOverlay(
             intensity = prefs.scanlineIntensity,
-            phosphorAfterglow = prefs.phosphorAfterglow
+            phosphorAfterglow = prefs.phosphorAfterglow,
+            modifier = transition.content
         )
         CrtCollapseOverlay(
             isCollapsing = isSleepCollapsing
