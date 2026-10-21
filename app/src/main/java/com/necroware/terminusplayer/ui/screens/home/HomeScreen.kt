@@ -266,7 +266,7 @@ private fun GenreMixCard(mix: GenreMix, onPlay: () -> Unit) {
             )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 mix.songs.take(3).forEach { song ->
-                    SongArt(uriString = song.uriString, size = 48.dp)
+                    SongArt(uriString = song.artworkUri?.takeIf { it.isNotBlank() } ?: song.uriString, size = 48.dp)
                 }
             }
             TerminalActionText(
@@ -310,7 +310,7 @@ private fun YourMixCard(mix: List<Song>, onPlayMix: () -> Unit) {
             if (mix.isNotEmpty()) {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(mix.take(10), key = { it.id }) { song ->
-                        SongArt(uriString = song.uriString, size = 72.dp)
+                        SongArt(uriString = song.artworkUri?.takeIf { it.isNotBlank() } ?: song.uriString, size = 72.dp)
                     }
                 }
             } else {
@@ -333,7 +333,7 @@ private fun RecentlyPlayedChip(song: Song, onClick: () -> Unit) {
     ) {
         TerminalBorder(modifier = Modifier.fillMaxWidth()) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                SongArt(uriString = song.uriString, size = 112.dp)
+                SongArt(uriString = song.artworkUri?.takeIf { it.isNotBlank() } ?: song.uriString, size = 112.dp)
                 Text(
                     text = song.title,
                     style = MaterialTheme.typography.bodyMedium,

@@ -23,10 +23,11 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import com.necroware.terminusplayer.data.repository.YouTubeMusicRepository
 import javax.inject.Inject
 
 enum class LibraryTab(val label: String) {
-    SONGS("SONGS"), LOCAL_MUSIC("LOCAL MUSIC"), ALBUMS("ALBUMS"), ARTISTS("ARTISTS")
+    SONGS("SONGS"), LOCAL_MUSIC("LOCAL MUSIC"), ALBUMS("ALBUMS"), ARTISTS("ARTISTS"), YOUTUBE("YOUTUBE")
 }
 
 @HiltViewModel
@@ -34,7 +35,8 @@ class LibraryViewModel @Inject constructor(
     private val repository: MusicRepository,
     private val preferencesRepository: UserPreferencesRepository,
     private val playbackController: PlaybackController,
-    private val uploadQueueManager: UploadQueueManager
+    private val uploadQueueManager: UploadQueueManager,
+    private val youTubeRepository: YouTubeMusicRepository
 ) : ViewModel() {
 
     private val _isLibraryLoaded = MutableStateFlow(false)
@@ -72,6 +74,213 @@ class LibraryViewModel @Inject constructor(
     private val _actionMessage = MutableStateFlow<String?>(null)
     val actionMessage = _actionMessage.asStateFlow()
 
+    enum class YouTubeDiscoveryMode(val label: String) {
+        POPULAR("POPULAR"), TRENDING("TRENDING"), CHARTS("CHARTS")
+    }
+
+    private val _youTubeQuery = MutableStateFlow("")
+    val youTubeQuery: StateFlow<String> = _youTubeQuery.asStateFlow()
+
+    private val _youTubeDiscoveryMode = MutableStateFlow(YouTubeDiscoveryMode.POPULAR)
+    val youTubeDiscoveryMode: StateFlow<YouTubeDiscoveryMode> = _youTubeDiscoveryMode.asStateFlow()
+
+    private val _youTubeDiscoveryCategory = MutableStateFlow(com.necroware.terminusplayer.data.api.youtube.YouTubeDiscoveryCategory.FEATURED)
+    val youTubeDiscoveryCategory: StateFlow<com.necroware.terminusplayer.data.api.youtube.YouTubeDiscoveryCategory> = _youTubeDiscoveryCategory.asStateFlow()
+
+    private val _youTubeDiscoveryFilter = MutableStateFlow(com.necroware.terminusplayer.data.api.youtube.YouTubeDiscoveryFilter.DEFAULT_FILTERS.first())
+    val youTubeDiscoveryFilter: StateFlow<com.necroware.terminusplayer.data.api.youtube.YouTubeDiscoveryFilter> = _youTubeDiscoveryFilter.asStateFlow()
+
+    private val _youTubeSearchFilter = MutableStateFlow(com.necroware.terminusplayer.data.api.youtube.YouTubeSearchFilter.ALL)
+    val youTubeSearchFilter: StateFlow<com.necroware.terminusplayer.data.api.youtube.YouTubeSearchFilter> = _youTubeSearchFilter.asStateFlow()
+
+    private val _youTubeDynamicChips = MutableStateFlow<List<com.necroware.terminusplayer.data.api.youtube.YouTubeFilterChip>>(emptyList())
+    val youTubeDynamicChips: StateFlow<List<com.necroware.terminusplayer.data.api.youtube.YouTubeFilterChip>> = _youTubeDynamicChips.asStateFlow()
+
+    private val _selectedDynamicChipParams = MutableStateFlow<String?>(null)
+    val selectedDynamicChipParams: StateFlow<String?> = _selectedDynamicChipParams.asStateFlow()
+
+    private val _youTubeTracks = MutableStateFlow<List<Song>>(emptyList())
+    val youTubeTracks: StateFlow<List<Song>> = _youTubeTracks.asStateFlow()
+
+    private val _isYouTubeLoading = MutableStateFlow(false)
+    val isYouTubeLoading: StateFlow<Boolean> = _isYouTubeLoading.asStateFlow()
+
+    private val _isYouTubeLoadingMore = MutableStateFlow(false)
+    val isYouTubeLoadingMore: StateFlow<Boolean> = _isYouTubeLoadingMore.asStateFlow()
+
+    private var youTubeContinuationToken: String? = null
+
+    private val _hasMoreYouTubeTracks = MutableStateFlow(false)
+    val hasMoreYouTubeTracks: StateFlow<Boolean> = _hasMoreYouTubeTracks.asStateFlow()
+
+    private val _youTubeSuggestions = MutableStateFlow<List<String>>(emptyList())
+    val youTubeSuggestions: StateFlow<List<String>> = _youTubeSuggestions.asStateFlow()
+
+    private val _showSuggestions = MutableStateFlow(false)
+    val showSuggestions: StateFlow<Boolean> = _showSuggestions.asStateFlow()
+
+    private val _youTubeError = MutableStateFlow<String?>(null)
+    val youTubeError: StateFlow<String?> = _youTubeError.asStateFlow()
+
+    private var suggestionDebounceJob: kotlinx.coroutines.Job? = null
+
+    fun setYouTubeQuery(query: String) {
+        _youTubeQuery.value = query
+        suggestionDebounceJob?.cancel()
+        if (query.trim().length >= 2) {
+            suggestionDebounceJob = viewModelScope.launch {
+                kotlinx.coroutines.delay(220)
+                val res = youTubeRepository.getSearchSuggestions(query)
+                val suggestions = res.getOrDefault(emptyList())
+                _youTubeSuggestions.value = suggestions
+                _showSuggestions.value = suggestions.isNotEmpty()
+            }
+        } else {
+            _youTubeSuggestions.value = emptyList()
+            _showSuggestions.value = false
+        }
+    }
+
+    fun clearYouTubeQuery() {
+        _youTubeQuery.value = ""
+        _showSuggestions.value = false
+        _youTubeSuggestions.value = emptyList()
+        _selectedDynamicChipParams.value = null
+        _youTubeSearchFilter.value = com.necroware.terminusplayer.data.api.youtube.YouTubeSearchFilter.ALL
+        loadDiscoveryTracks(_youTubeDiscoveryFilter.value)
+    }
+
+    fun dismissSuggestions() {
+        _showSuggestions.value = false
+    }
+
+    fun selectSearchSuggestion(suggestion: String) {
+        _youTubeQuery.value = suggestion
+        _showSuggestions.value = false
+        searchYouTube(query = suggestion)
+    }
+
+    fun setSearchFilter(filter: com.necroware.terminusplayer.data.api.youtube.YouTubeSearchFilter) {
+        _youTubeSearchFilter.value = filter
+        _selectedDynamicChipParams.value = null
+        searchYouTube()
+    }
+
+    fun selectDynamicChip(chip: com.necroware.terminusplayer.data.api.youtube.YouTubeFilterChip) {
+        _selectedDynamicChipParams.value = chip.params
+        searchYouTube(chipParams = chip.params)
+    }
+
+    fun setYouTubeDiscoveryCategory(category: com.necroware.terminusplayer.data.api.youtube.YouTubeDiscoveryCategory) {
+        _youTubeDiscoveryCategory.value = category
+        val firstFilter = com.necroware.terminusplayer.data.api.youtube.YouTubeDiscoveryFilter.DEFAULT_FILTERS.firstOrNull { it.category == category }
+            ?: com.necroware.terminusplayer.data.api.youtube.YouTubeDiscoveryFilter.DEFAULT_FILTERS.first()
+        setYouTubeDiscoveryFilter(firstFilter)
+    }
+
+    fun setYouTubeDiscoveryFilter(filter: com.necroware.terminusplayer.data.api.youtube.YouTubeDiscoveryFilter) {
+        _youTubeDiscoveryFilter.value = filter
+        _youTubeDiscoveryCategory.value = filter.category
+        _youTubeQuery.value = ""
+        _showSuggestions.value = false
+        _selectedDynamicChipParams.value = null
+        when (filter.id) {
+            "popular" -> _youTubeDiscoveryMode.value = YouTubeDiscoveryMode.POPULAR
+            "trending" -> _youTubeDiscoveryMode.value = YouTubeDiscoveryMode.TRENDING
+            "charts" -> _youTubeDiscoveryMode.value = YouTubeDiscoveryMode.CHARTS
+        }
+        loadDiscoveryTracks(filter)
+    }
+
+    fun setYouTubeDiscoveryMode(mode: YouTubeDiscoveryMode) {
+        _youTubeDiscoveryMode.value = mode
+        val matchingFilter = com.necroware.terminusplayer.data.api.youtube.YouTubeDiscoveryFilter.DEFAULT_FILTERS.firstOrNull { it.id == mode.name.lowercase() }
+            ?: com.necroware.terminusplayer.data.api.youtube.YouTubeDiscoveryFilter.DEFAULT_FILTERS.first()
+        setYouTubeDiscoveryFilter(matchingFilter)
+    }
+
+    fun searchYouTube(query: String? = null, mode: YouTubeDiscoveryMode? = null, chipParams: String? = null) {
+        suggestionDebounceJob?.cancel()
+        _showSuggestions.value = false
+        val q = query ?: _youTubeQuery.value
+        if (q.isBlank()) {
+            if (mode != null) setYouTubeDiscoveryMode(mode) else loadDiscoveryTracks(_youTubeDiscoveryFilter.value)
+            return
+        }
+        val activeParams = chipParams ?: _selectedDynamicChipParams.value ?: _youTubeSearchFilter.value.params
+        viewModelScope.launch {
+            _isYouTubeLoading.value = true
+            _youTubeError.value = null
+            youTubeContinuationToken = null
+            _hasMoreYouTubeTracks.value = false
+            val result = youTubeRepository.searchSongsPaged(query = q, params = activeParams)
+            _isYouTubeLoading.value = false
+            result.onSuccess { paged ->
+                _youTubeTracks.value = paged.songs
+                youTubeContinuationToken = paged.continuationToken
+                _hasMoreYouTubeTracks.value = !paged.continuationToken.isNullOrBlank()
+                _youTubeDynamicChips.value = paged.dynamicFilterChips
+                if (paged.songs.isEmpty()) {
+                    _youTubeError.value = "No YouTube Music tracks found for \"$q\"."
+                }
+            }.onFailure { e ->
+                _youTubeError.value = "Failed to query YouTube Music: ${e.message ?: "Network error"}"
+            }
+        }
+    }
+
+    private fun loadDiscoveryTracks(filter: com.necroware.terminusplayer.data.api.youtube.YouTubeDiscoveryFilter) {
+        viewModelScope.launch {
+            _isYouTubeLoading.value = true
+            _youTubeError.value = null
+            youTubeContinuationToken = null
+            _hasMoreYouTubeTracks.value = false
+            val result = youTubeRepository.getDiscoverySongsPaged(filter)
+            _isYouTubeLoading.value = false
+            result.onSuccess { paged ->
+                _youTubeTracks.value = paged.songs
+                youTubeContinuationToken = paged.continuationToken
+                _hasMoreYouTubeTracks.value = !paged.continuationToken.isNullOrBlank()
+                _youTubeDynamicChips.value = emptyList()
+                if (paged.songs.isEmpty()) {
+                    _youTubeError.value = "No tracks found for ${filter.label}."
+                }
+            }.onFailure { e ->
+                _youTubeError.value = "Failed to load ${filter.label}: ${e.message ?: "Network error"}"
+            }
+        }
+    }
+
+    fun loadMoreYouTubeTracks() {
+        if (_isYouTubeLoading.value || _isYouTubeLoadingMore.value) return
+        val token = youTubeContinuationToken ?: return
+        val q = _youTubeQuery.value
+        viewModelScope.launch {
+            _isYouTubeLoadingMore.value = true
+            val result = if (q.isNotBlank()) {
+                val activeParams = _selectedDynamicChipParams.value ?: _youTubeSearchFilter.value.params
+                youTubeRepository.searchSongsPaged(query = q, params = activeParams, continuation = token)
+            } else {
+                youTubeRepository.getDiscoverySongsPaged(filter = _youTubeDiscoveryFilter.value, continuation = token)
+            }
+            _isYouTubeLoadingMore.value = false
+            result.onSuccess { paged ->
+                val currentIds = _youTubeTracks.value.map { it.id }.toSet()
+                val newUnique = paged.songs.filter { it.id !in currentIds }
+                _youTubeTracks.value = _youTubeTracks.value + newUnique
+                youTubeContinuationToken = paged.continuationToken
+                _hasMoreYouTubeTracks.value = !paged.continuationToken.isNullOrBlank()
+            }.onFailure {
+                // If continuation fails, keep existing buffer intact
+            }
+        }
+    }
+
+    fun loadYouTubePopular() {
+        if (_youTubeTracks.value.isNotEmpty() || _isYouTubeLoading.value) return
+        loadDiscoveryTracks(_youTubeDiscoveryFilter.value)
+    }
+
     // The library destination can be disposed while opening Now Playing. Keep a
     // few prepared lists so returning to the same songs does not show a spinner
     // while SongList rebuilds its sections and fast-scroll indexes.
@@ -91,17 +300,27 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun playSong(song: Song, queue: List<Song>) {
+        if (song.providerId == "youtube") {
+            viewModelScope.launch { youTubeRepository.ensureTracksPersisted(queue.filter { it.providerId == "youtube" }) }
+        }
         val index = queue.indexOfFirst { it.id == song.id }.coerceAtLeast(0)
         playbackController.playSongsFromSongs(queue, index)
     }
 
     fun playNext(song: Song) {
+        if (song.providerId == "youtube") {
+            viewModelScope.launch { youTubeRepository.ensureTrackPersisted(song) }
+        }
         playbackController.playSongNext(song)
         _actionMessage.value = "${song.title} added to play next."
     }
 
     fun toggleLike(songId: String) {
         viewModelScope.launch {
+            val youTubeSong = _youTubeTracks.value.firstOrNull { it.id == songId }
+            if (youTubeSong != null) {
+                youTubeRepository.ensureTrackPersisted(youTubeSong)
+            }
             val change = repository.toggleLike(songId)
             val action = if (change.isLiked) "Liked" else "Unliked"
             _actionMessage.value = when {
@@ -113,8 +332,12 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun addSongToPlaylist(playlistId: String, songId: String) = viewModelScope.launch {
+        val youTubeSong = _youTubeTracks.value.firstOrNull { it.id == songId }
+        if (youTubeSong != null) {
+            youTubeRepository.ensureTrackPersisted(youTubeSong)
+        }
         _actionMessage.value = when (repository.addSongToPlaylist(playlistId, songId)) {
-            MusicRepository.AddSongResult.ADDED -> "Added to playlist. Server sync will run when connected."
+            MusicRepository.AddSongResult.ADDED -> "Added to playlist."
             MusicRepository.AddSongResult.ALREADY_PRESENT -> "Track is already in that playlist."
             MusicRepository.AddSongResult.LOCAL_ONLY_UNSUPPORTED -> "This local-only track cannot be added to a Navidrome playlist."
             MusicRepository.AddSongResult.NOT_FOUND -> "Track or playlist is no longer available."
@@ -126,6 +349,10 @@ class LibraryViewModel @Inject constructor(
         var localOnly = 0
         var duplicates = 0
         songIds.distinct().forEach { songId ->
+            val youTubeSong = _youTubeTracks.value.firstOrNull { it.id == songId }
+            if (youTubeSong != null) {
+                youTubeRepository.ensureTrackPersisted(youTubeSong)
+            }
             when (repository.addSongToPlaylist(playlistId, songId)) {
                 MusicRepository.AddSongResult.ADDED -> added++
                 MusicRepository.AddSongResult.LOCAL_ONLY_UNSUPPORTED -> localOnly++
@@ -159,7 +386,14 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun downloadSong(song: Song) = viewModelScope.launch {
+        if (song.providerId == "jamendo") {
+            _actionMessage.value = "Jamendo tracks are streaming-only."
+            return@launch
+        }
         try {
+            if (song.providerId == "youtube") {
+                youTubeRepository.ensureTrackPersisted(song)
+            }
             uploadQueueManager.enqueueDownloads(listOf(song))
             _actionMessage.value = "Queued ${song.title} for download. Track progress in Stats."
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -170,9 +404,18 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun downloadSongs(songs: List<Song>) = viewModelScope.launch {
+        val downloadable = songs.filter { it.providerId != "jamendo" }
+        if (downloadable.isEmpty()) {
+            _actionMessage.value = "Selected tracks cannot be downloaded."
+            return@launch
+        }
         try {
-            uploadQueueManager.enqueueDownloads(songs)
-            _actionMessage.value = "Queued ${songs.size} songs for download. Track progress in Stats."
+            val youTubeSongs = downloadable.filter { it.providerId == "youtube" }
+            if (youTubeSongs.isNotEmpty()) {
+                youTubeRepository.ensureTracksPersisted(youTubeSongs)
+            }
+            uploadQueueManager.enqueueDownloads(downloadable)
+            _actionMessage.value = "Queued ${downloadable.size} ${if (downloadable.size == 1) "song" else "songs"} for download. Track progress in Stats."
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {

@@ -22,5 +22,6 @@ data class UploadQueueEntity(
     @ColumnInfo(defaultValue = "NULL") val lastProgressAtEpochMs: Long? = null,
     @ColumnInfo(defaultValue = "'QUEUED'") val phase: String = "QUEUED",
     @ColumnInfo(defaultValue = "0") val forceDownload: Boolean = false,
-    @ColumnInfo(defaultValue = "NULL") val partialUri: String? = null
+    @ColumnInfo(defaultValue = "NULL") val partialUri: String? = null,
+    @ColumnInfo(defaultValue = "NULL") val maxBitRate: Int? = null
 )

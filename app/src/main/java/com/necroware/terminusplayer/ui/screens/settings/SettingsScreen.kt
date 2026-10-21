@@ -363,6 +363,36 @@ fun SettingsScreen(
 
         item {
             SettingsDropdown(
+                label = "DOWNLOAD SETTINGS",
+                expanded = expandedSections.contains("DOWNLOAD SETTINGS"),
+                onToggle = { toggleSection("DOWNLOAD SETTINGS") },
+                motionPreference = effectiveMotionPreference
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "DOWNLOAD QUALITY",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    QualitySection(
+                        selectedBitRate = prefs.downloadMaxBitRate,
+                        onSelect = viewModel::setDownloadMaxBitRate
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    ActionRow(
+                        label = "[ DOWNLOAD FOLDER ]",
+                        sublabel = prefs.downloadFolderUri?.let { "Custom folder selected" } ?: "Music/Terminus (default)",
+                        onClick = { downloadFolderLauncher.launch(null) }
+                    )
+                    downloadFolderError?.let { error ->
+                        Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+
+        item {
+            SettingsDropdown(
                 label = "PLAYBACK BEHAVIOR",
                 expanded = expandedSections.contains("PLAYBACK BEHAVIOR"),
                 onToggle = { toggleSection("PLAYBACK BEHAVIOR") },

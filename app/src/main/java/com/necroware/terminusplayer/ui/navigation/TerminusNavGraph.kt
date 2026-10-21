@@ -185,9 +185,9 @@ fun TerminusNavGraph(
     val currentSongUri by playbackViewModel.currentSongUri.collectAsStateWithLifecycle()
     val prefs by playbackViewModel.preferences.collectAsStateWithLifecycle()
     val defaultAccent = MaterialTheme.colorScheme.primary
-    val targetArtUri = currentSongUri.takeIf { !it.isNullOrBlank() }
+    val targetArtUri = nowPlaying.artworkUri?.takeIf { it.isNotBlank() }
+        ?: currentSongUri.takeIf { !it.isNullOrBlank() }
         ?: nowPlaying.mediaId?.let { if (it.startsWith("terminus://")) it else "terminus://$it" }
-        ?: nowPlaying.artworkUri
     val miniAccent = rememberAdaptiveAccent(
         artworkUri = targetArtUri,
         defaultAccent = defaultAccent,

@@ -26,8 +26,10 @@ fun SongArt(
     size: Dp = 56.dp
 ) {
     val model = remember(uriString) {
-        if (uriString.isBlank()) {
+        if (uriString.isBlank() || uriString.startsWith("https://www.youtube.com/watch") || uriString.startsWith("http://www.youtube.com/watch") || uriString.startsWith("https://youtu.be/")) {
             null
+        } else if (uriString.startsWith("http://") || uriString.startsWith("https://")) {
+            uriString
         } else if (uriString.startsWith("terminus://")) {
             val songId = uriString.removePrefix("terminus://")
             // NetworkModule replaces this sentinel with the configured server URL.

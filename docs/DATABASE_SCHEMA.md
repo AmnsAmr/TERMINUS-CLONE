@@ -9,7 +9,7 @@ This document details the database architecture, entity relationships, schema de
 Terminus uses **AndroidX Room** (SQLite) as its primary local store.
 - **Database Class**: `TerminusDatabase`
 - **Database File**: `terminus.db`
-- **Current Version**: `23`
+- **Current Version**: `25`
 - **Location**: `app/src/main/java/com/necroware/terminusplayer/data/database/`
 
 ---
@@ -43,6 +43,7 @@ erDiagram
         text navidromeId
         text downloadedUri "Nullable: path to offline copy"
         text genre
+        text artworkUri "Nullable: remote artwork URL or sentinel"
     }
 
     LIKED_SONGS {
@@ -98,6 +99,9 @@ erDiagram
         integer bytesTransferred
         integer totalBytes
         text phase
+        integer forceDownload
+        text partialUri
+        integer maxBitRate "Nullable: target bitrate ceiling (kbps)"
     }
 
     LYRICS_CACHE {
@@ -153,9 +157,42 @@ A key architectural rule in Terminus is the strict separation between **database
 
 ---
 
-## 5. Migration Rules
+## 5. Migration Rules & History
 
 When modifying the database schema in Terminus:
 1. **Never use `fallbackToDestructiveMigration()` in production**: Terminus stores offline user likes, play history, custom playlists, and download queues. Destructive migrations would wipe user data.
 2. **Always write an explicit `Migration(from, to)`**: Test data survival across version jumps.
 3. **Chunk Bulk Operations**: SQLite on Android has parameter binding limits (999 or 32766 depending on API version). Large inserts or `WHERE IN (...)` updates must be batched.
+
+### Recent Migrations
+
+#### `MIGRATION_23_24` (v23 $\to$ v24)
+- **Goal**: Add remote album artwork support for cloud streaming providers (YouTube Music, Jamendo) and cached server sentinel URIs.
+- **DDL Execution**:
+  ```sql
+  ALTER TABLE songs ADD COLUMN artworkUri TEXT DEFAULT NULL
+  ```
+- **Integrity Guarantee**: Existing local MediaStore songs and Navidrome catalog tracks default to `NULL`, falling back to embedded art extraction or server cover art proxies without data loss.
+
+#### `MIGRATION_24_25` (v24 $\to$ v25)
+- **Goal**: Enable per-job download bitrate ceilings on queued transfer jobs.
+- **DDL Execution**:
+  ```sql
+  ALTER TABLE upload_queue ADD COLUMN maxBitRate INTEGER DEFAULT NULL
+  ```
+- **Integrity Guarantee**: In-flight and waiting transfers preserve their state; `maxBitRate` defaults to `NULL` (meaning unlimited/original quality) for pre-existing queue entries.
+
+---
+
+## 6. Remote Track Persistence & Deletion Protection
+
+Terminus supports on-demand remote tracks from providers that are not fully scanned into the library during periodic sync:
+- **YouTube Music** (`providerId = "youtube"`) and **Jamendo** (`providerId = "jamendo"`).
+- When a user interacts with a remote track (plays, likes, adds to playlist, or downloads), `MusicRepository.ensureTrackPersisted()` or `ensureTracksPersisted()` inserts the track into the `songs` table with its canonical `remoteId`.
+- **Sync Deletion Protection**: Inside [MusicRepository.syncLibrary()](file:///home/amns/Projects/Terminus/app/src/main/java/com/necroware/terminusplayer/data/repository/MusicRepository.kt), the catalog reconciliation query specifically excludes these providers:
+  ```kotlin
+  val currentToDelete = currentSongs.values
+      .filter { it.providerId != "jamendo" && it.providerId != "youtube" && it.providerId !in failedProviders && it.remoteId !in scannedIds }
+      .map { it.remoteId }
+  ```
+  This ensures that full-library synchronization of local files or Navidrome servers never purges persisted YouTube or Jamendo favorites, playlist members, or offline downloads.

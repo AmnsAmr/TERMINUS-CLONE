@@ -294,6 +294,7 @@ class PlaybackController @Inject constructor(
     fun playSongNext(song: Song) {
         playbackScope.launch {
             try {
+                musicRepository.ensureTrackPersisted(song)
                 val resolvedUri = musicRepository.getSongUris(listOf(song.id))[song.id] ?: song.uriString
                 val item = withContext(Dispatchers.Default) {
                     song.copy(uriString = resolvedUri).toMediaItem()
@@ -346,12 +347,13 @@ class PlaybackController @Inject constructor(
                 try {
                     val safeStartIndex = startIndex.coerceAtLeast(0)
 
-                    // Fast-path for large queues (e.g. Library with hundreds/thousands of songs):
-                    // Immediately resolve and start the selected track so playback begins instantly (<15ms),
+                    // Fast-path for queues:
+                    // Immediately resolve and start the selected track so playback begins instantly (<300ms),
                     // then populate the surrounding queue asynchronously without interrupting playback.
-                    if (songsForResolution != null && songsForResolution.size > 32) {
+                    if (songsForResolution != null && songsForResolution.isNotEmpty()) {
                         val boundedStartIndex = safeStartIndex.coerceIn(0, songsForResolution.lastIndex)
                         val selectedSong = songsForResolution[boundedStartIndex]
+                        musicRepository.ensureTrackPersisted(selectedSong)
                         val resolvedTargetUri = musicRepository.resolvePlaybackUris(listOf(selectedSong))[selectedSong.id]
                             ?: selectedSong.uriString
                         val targetItem = selectedSong.copy(uriString = resolvedTargetUri).toMediaItem()
@@ -367,9 +369,19 @@ class PlaybackController @Inject constructor(
                             onQueueStarted()
                         }
 
+                        if (songsForResolution.size <= 1) return@launch
+
                         val items = itemsProvider()
                         if (items.isEmpty() || generation != queueRequestGeneration.get()) return@launch
-                        val resolvedUris = musicRepository.resolvePlaybackUris(songsForResolution)
+
+                        // Ensure all tracks in the active queue are persisted in Room
+                        musicRepository.ensureTracksPersisted(songsForResolution)
+
+                        // Prioritize resolving tracks closest to the playing song first
+                        val prioritizedSongs = songsForResolution.mapIndexed { index, song -> index to song }
+                            .sortedBy { (index, _) -> kotlin.math.abs(index - boundedStartIndex) }
+                            .map { it.second }
+                        val resolvedUris = musicRepository.resolvePlaybackUris(prioritizedSongs)
                         val resolvedItems = items.map { item ->
                             resolvedUris[item.mediaId]?.let { item.buildUpon().setUri(Uri.parse(it)).build() } ?: item
                         }
@@ -556,6 +568,7 @@ class PlaybackController @Inject constructor(
             artworkUri = metadata.artworkUri?.toString(),
             sizeBytes = metadata.sizeBytesOrZero(),
             durationMs = when {
+                actualDurationMs > 0L && (knownDurationMs <= 0L || (knownDurationMs < 36_000L && actualDurationMs > 36_000L)) -> actualDurationMs + streamOffsetMs
                 knownDurationMs > 0L -> knownDurationMs
                 actualDurationMs > 0L -> actualDurationMs + streamOffsetMs
                 else -> 0L

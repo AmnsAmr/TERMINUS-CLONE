@@ -28,6 +28,12 @@ class SubsonicApiContractTest {
         assertContract("deletePlaylist", "rest/deletePlaylist", authenticationQueries + "id")
     }
 
+    @Test
+    fun mediaTransferOperationsUseSubsonicQueryParameters() {
+        assertContract("download", "rest/download", authenticationQueries + "id")
+        assertContract("stream", "rest/stream", authenticationQueries + setOf("id", "maxBitRate", "format"))
+    }
+
     private fun assertContract(methodName: String, path: String, expectedQueries: Set<String>) {
         val method = SubsonicApiService::class.java.methods.single { it.name == methodName }
         assertEquals(path, requireNotNull(method.getAnnotation(GET::class.java)).value)

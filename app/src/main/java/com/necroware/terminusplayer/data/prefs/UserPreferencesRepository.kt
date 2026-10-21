@@ -61,6 +61,7 @@ private object Keys {
     val EXCLUDED_FOLDERS = stringSetPreferencesKey("excluded_folders")
     val HAS_SETUP_DEFAULT_EXCLUDES = booleanPreferencesKey("has_setup_default_excludes")
     val MAX_BIT_RATE = intPreferencesKey("max_bit_rate")
+    val DOWNLOAD_MAX_BIT_RATE = intPreferencesKey("download_max_bit_rate")
     val DOWNLOAD_FOLDER_URI = stringPreferencesKey("download_folder_uri")
     val TRANSFERS_PAUSED = booleanPreferencesKey("transfers_paused")
 }
@@ -316,6 +317,7 @@ class UserPreferencesRepository @Inject constructor(
             ?: defaults.visualizerStyle
         val eqBands = List(5) { index -> this[eqBandKey(index)] ?: 0 }
         val maxBitRate = this[Keys.MAX_BIT_RATE]
+        val downloadMaxBitRate = this[Keys.DOWNLOAD_MAX_BIT_RATE]
 
         return UserPreferences(
             themeId = themeId,
@@ -354,6 +356,7 @@ class UserPreferencesRepository @Inject constructor(
             excludedFolders = this[Keys.EXCLUDED_FOLDERS] ?: emptySet(),
             hasSetupDefaultExcludes = this[Keys.HAS_SETUP_DEFAULT_EXCLUDES] ?: false,
             maxBitRate = maxBitRate,
+            downloadMaxBitRate = downloadMaxBitRate,
             downloadFolderUri = this[Keys.DOWNLOAD_FOLDER_URI]
         )
     }
@@ -405,6 +408,16 @@ class UserPreferencesRepository @Inject constructor(
         }
         val currentConfig = awaitServerConnectionConfig()
         _serverConnectionConfig.value = currentConfig.copy(maxBitRate = bitRate)
+    }
+
+    suspend fun setDownloadMaxBitRate(bitRate: Int?) {
+        dataStore.edit { prefs ->
+            if (bitRate != null) {
+                prefs[Keys.DOWNLOAD_MAX_BIT_RATE] = bitRate
+            } else {
+                prefs.remove(Keys.DOWNLOAD_MAX_BIT_RATE)
+            }
+        }
     }
 
     suspend fun setDownloadFolderUri(uri: String?) {

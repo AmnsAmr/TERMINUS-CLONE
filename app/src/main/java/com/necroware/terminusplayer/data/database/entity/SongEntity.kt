@@ -32,5 +32,6 @@ data class SongEntity(
     val sizeBytes: Long = 0L,
     val navidromeId: String? = null,
     @ColumnInfo(defaultValue = "NULL") val downloadedUri: String? = null,
-    @ColumnInfo(defaultValue = "''") val genre: String = ""
+    @ColumnInfo(defaultValue = "''") val genre: String = "",
+    @ColumnInfo(defaultValue = "NULL") val artworkUri: String? = null
 )

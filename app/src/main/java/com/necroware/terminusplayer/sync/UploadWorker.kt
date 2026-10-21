@@ -154,7 +154,7 @@ class UploadWorker @AssistedInject constructor(
                 runTrackedTransfer(item.songId, notificationManager, operation, item.title, queuePosition, total) { reportProgress ->
                     if (isDownload) {
                         val remoteSongId = item.remoteSongId ?: throw IOException("Download is missing its server track ID")
-                        downloadRepository.downloadSong(remoteSongId, item.forceDownload, reportProgress)
+                        downloadRepository.downloadSong(remoteSongId, item.forceDownload, item.maxBitRate, reportProgress)
                     } else {
                         uploadRepository.upload(Uri.parse(item.uriString), reportProgress)
                     }

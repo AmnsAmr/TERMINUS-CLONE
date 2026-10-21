@@ -43,6 +43,9 @@ interface SongDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(songs: List<SongEntity>)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSong(song: SongEntity)
+
 
     @Query("SELECT * FROM songs WHERE remoteId = :id LIMIT 1")
     suspend fun getById(id: String): SongEntity?

@@ -44,7 +44,9 @@ object DatabaseModule {
                 TerminusDatabase.MIGRATION_19_20,
                 TerminusDatabase.MIGRATION_20_21,
                 TerminusDatabase.MIGRATION_21_22,
-                TerminusDatabase.MIGRATION_22_23
+                TerminusDatabase.MIGRATION_22_23,
+                TerminusDatabase.MIGRATION_23_24,
+                TerminusDatabase.MIGRATION_24_25
             )
         return builder.build()
     }

@@ -50,7 +50,8 @@ fun MiniPlayerBar(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            SongArt(uriString = currentSongUri.orEmpty(), size = 34.dp)
+            val artUri = nowPlaying.artworkUri?.takeIf { it.isNotBlank() } ?: currentSongUri.orEmpty()
+            SongArt(uriString = artUri, size = 34.dp)
             Column(modifier = Modifier.padding(start = 8.dp)) {
                 Text(
                     text = nowPlaying.title,
