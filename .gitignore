@@ -26,3 +26,4 @@ navidrome_api_docs.md
 app/release/*.apk
 app/release/baselineProfiles/
 *.dm
+app/release/output-metadata.json
