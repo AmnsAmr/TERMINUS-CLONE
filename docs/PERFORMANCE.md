@@ -258,6 +258,39 @@ The average is a range because the log prints cumulative averages rounded to 0.1
 
 ---
 
+### Phase 3 comparison: journey (b), skip next ×10 then previous ×10 (DEVICE)
+
+Same device and OS as the baseline. All runs on 2026-10-22, `benchmarkRelease`, installed with `adb install-multiple -r <apk> baselineProfiles/0/<dm>` (the profile Gradle installs on API 31+), `PlayerPanelBenchmark` from commit `36984ce`, Macrobenchmark 1.4.1, 5 iterations per run, Wi-Fi off. Values in ms.
+
+**Run 1: Phase 3 build against the morning baseline** (20:35–20:48, start 33.8 °C thermal 0 / battery 49%, end 37.1 °C **thermal 2**):
+
+| Mode | Build | Frames median (min / sd) | CPU p50 | CPU p90 | CPU p95 | CPU p99 | Overrun p50 | Overrun p90 | Overrun p95 | Overrun p99 |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `None` | Baseline (`36984ce`, midday) | 2023 (1947 / 50.5) | 6.02 | 10.04 | 11.60 | 17.53 | -0.07 | 5.51 | 9.01 | 28.63 |
+| `None` | Phase 3 (`08773ef`) | 1878 (1846 / 28.1) | 7.01 | 11.87 | 14.76 | 25.77 | 1.25 | 10.33 | 22.34 | 48.11 |
+| `Partial` | Baseline (`36984ce`, midday) | 1951 (1937 / 32.1) | 6.67 | 11.19 | 13.16 | 20.32 | 0.79 | 7.71 | 15.32 | 38.12 |
+| `Partial` | Phase 3 (`08773ef`) | 1906 (1849 / 35.9) | 7.03 | 11.89 | 14.44 | 23.99 | 1.44 | 9.93 | 20.06 | 43.99 |
+
+The phone heated into thermal status 2 during this run and differed from the baseline in battery level and time of day, so this table alone does not show what caused the difference.
+
+**Run 2: controlled A/B in one session** (`None` only; the runner waited for thermal status 0 before each variant):
+
+| Order | Variant | APK sha1 | Start → end | Frames median (min / sd) | CPU p50 | CPU p90 | CPU p95 | CPU p99 | Overrun p50 | Overrun p90 | Overrun p95 | Overrun p99 |
+| :---: | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| 1 | A: before Phase 3 (`a759c58`) | `ca8f07b1` | 33.4 °C th0 → 35.3 °C th0 | 1960 (1935 / 70.1) | 6.31 | 10.52 | 12.23 | 19.71 | 0.34 | 6.42 | 13.37 | 35.55 |
+| 2 | B: Phase 3 (`08773ef`) | `bee5bb7c` | 35.3 °C th0 → 35.9 °C th1 | 1851 (1817 / 31.9) | 7.14 | 12.23 | 14.86 | 26.51 | 1.77 | 10.20 | 22.55 | 48.30 |
+| 3 | C: Phase 3, neighbour art prefetch disabled (uncommitted) | `33a4c472` | 35.0 °C th0 → 36.1 °C th1 | 1899 (1878 / 16.5) | 7.09 | 11.91 | 14.60 | 26.34 | 1.62 | 9.70 | 21.17 | 48.17 |
+| 4 | A again (`a759c58`) | `ca8f07b1` | 35.0 °C th0 → 36.3 °C th1 | 1286 (1020 / 211.7) | 6.49 | 11.99 | 15.79 | 26.72 | 1.99 | 14.23 | 27.42 | 48.68 |
+
+Reading it:
+- **Neighbour artwork prefetch is not the cause:** C matches B within run-to-run noise.
+- **The p95/p99 tail cannot be attributed to Phase 3:** the unchanged pre-Phase-3 build (run 4) reached the same tail once the phone had warmed up.
+- **The median is the consistent signal:** both Phase 3 builds measured 7.09–7.14 ms CPU p50, both A runs 6.31–6.49 ms. That points to a possible cost of 0.6–0.8 ms per frame from Phase 3. **Open item, cause not identified.**
+- **Run 4 is anomalous:** far fewer frames (one iteration produced 1,020) and iterations about 40–50 s apart instead of about 65–70 s. The cause was not investigated, so it is a weak drift check.
+- The phone dropped off USB briefly during run 1 (detached instrumentation kept running; charging paused).
+
+---
+
 ### Table 4: Compose Stability Overview
 
 Run `./gradlew assembleDebug -PenableComposeCompilerReports=true` to populate.
