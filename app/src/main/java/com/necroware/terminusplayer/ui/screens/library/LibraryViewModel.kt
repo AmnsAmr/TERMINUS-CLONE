@@ -39,6 +39,10 @@ class LibraryViewModel @Inject constructor(
     private val youTubeRepository: YouTubeMusicRepository
 ) : ViewModel() {
 
+    val songsListState = androidx.compose.foundation.lazy.LazyListState()
+    val albumsListState = androidx.compose.foundation.lazy.LazyListState()
+    val artistsListState = androidx.compose.foundation.lazy.LazyListState()
+
     private val _isLibraryLoaded = MutableStateFlow(false)
     val isLibraryLoaded: StateFlow<Boolean> = _isLibraryLoaded.asStateFlow()
 
@@ -288,7 +292,7 @@ class LibraryViewModel @Inject constructor(
 
     @Synchronized
     internal fun cachedPreparedSongList(songs: List<Song>, field: SortField): PreparedSongList? =
-        preparedSongListCache.firstOrNull { it.sourceSongs === songs && it.sortField == field }
+        preparedSongListCache.firstOrNull { it.sortField == field && (it.sourceSongs === songs || it.sourceSongs == songs) }
 
     @Synchronized
     internal fun rememberPreparedSongList(prepared: PreparedSongList) {

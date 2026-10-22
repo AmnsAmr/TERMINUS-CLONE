@@ -12,9 +12,11 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+@Immutable
 data class AlbumDetailUiState(
     val isLoading: Boolean = true,
     val errorMessage: String? = null,

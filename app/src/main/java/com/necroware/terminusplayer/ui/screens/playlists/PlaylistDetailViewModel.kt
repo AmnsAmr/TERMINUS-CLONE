@@ -19,11 +19,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.SharingStarted
+import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /** Route arg is either a [PlaylistKind] name (LIKED/RECENT/MOST_PLAYED) or
  *  "custom:<id>" for a user-imported playlist — see [Destination.PlaylistDetail]. */
+@Immutable
 data class PlaylistDetailUiState(
     val isLoading: Boolean = true,
     val errorMessage: String? = null,
@@ -35,6 +37,7 @@ data class PlaylistDetailUiState(
     val offlineAvailability: PlaylistOfflineAvailability = PlaylistOfflineAvailability.Checking
 )
 
+@Immutable
 data class UploadMatchResolutionState(
     val localSong: Song,
     val candidates: List<Song> = emptyList(),
