@@ -38,6 +38,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import com.necroware.terminusplayer.ui.TestTags
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -125,7 +127,7 @@ fun SettingsScreen(
     }
 
     LazyColumn(
-        modifier = Modifier.fillMaxWidth().padding(20.dp),
+        modifier = Modifier.testTag(TestTags.SETTINGS_LIST).fillMaxWidth().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         item {
@@ -771,6 +773,7 @@ private fun MotionPreferenceSection(
             MotionPreference.entries.forEach { preference ->
                 Column(
                     modifier = Modifier
+                        .testTag(TestTags.motionOption(preference.name))
                         .fillMaxWidth()
                         .clickable { onSelect(preference) }
                         .padding(vertical = 8.dp)
@@ -1014,6 +1017,7 @@ private fun SettingsDropdown(
     Column {
         Row(
             modifier = Modifier
+                .testTag(TestTags.settingsSection(label))
                 .fillMaxWidth()
                 .clickable { onToggle() }
                 .padding(vertical = 8.dp),
@@ -1167,6 +1171,7 @@ private fun CrtAestheticsSection(
                     }
                     Column(
                         modifier = Modifier
+                            .testTag(TestTags.artStyleOption(style.name))
                             .fillMaxWidth()
                             .clickable { onPlaybackArtStyleChange(style) }
                             .padding(vertical = 6.dp)
