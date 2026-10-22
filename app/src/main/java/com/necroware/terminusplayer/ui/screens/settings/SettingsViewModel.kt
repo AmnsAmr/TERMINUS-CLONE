@@ -121,10 +121,6 @@ class SettingsViewModel @Inject constructor(
         preferencesRepository.setCrossfadeDurationMs(durationMs)
     }
 
-    fun setPreferHardwareDecoder(enabled: Boolean) = viewModelScope.launch {
-        preferencesRepository.setPreferHardwareDecoder(enabled)
-    }
-
     private var scanlineIntensityJob: Job? = null
     fun setScanlineIntensity(intensity: Float) {
         scanlineIntensityJob?.cancel()

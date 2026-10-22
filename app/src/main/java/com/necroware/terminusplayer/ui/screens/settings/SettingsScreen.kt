@@ -307,22 +307,6 @@ fun SettingsScreen(
 
         item {
             SettingsDropdown(
-                label = "CODEC",
-                expanded = expandedSections.contains("CODEC"),
-                onToggle = { toggleSection("CODEC") },
-                motionPreference = effectiveMotionPreference
-            ) {
-                ToggleRow(
-                    label = "Prefer hardware decoder",
-                    sublabel = "Falls back to software automatically if unsupported",
-                    checked = prefs.preferHardwareDecoder,
-                    onCheckedChange = viewModel::setPreferHardwareDecoder
-                )
-            }
-        }
-
-        item {
-            SettingsDropdown(
                 label = "STREAMING QUALITY",
                 expanded = expandedSections.contains("STREAMING QUALITY"),
                 onToggle = { toggleSection("STREAMING QUALITY") },
