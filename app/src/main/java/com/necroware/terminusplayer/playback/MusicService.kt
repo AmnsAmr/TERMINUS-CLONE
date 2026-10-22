@@ -19,7 +19,6 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.necroware.terminusplayer.MainActivity
 import com.necroware.terminusplayer.data.prefs.CrossfadeSettings
-import com.necroware.terminusplayer.data.prefs.EqualizerSettings
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.data.repository.StatsRepository
@@ -72,8 +71,7 @@ class MusicService : MediaSessionService() {
     private var serviceDestroying = false
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + exceptionHandler)
 
-    private val equalizerController = EqualizerController()
-    private var equalizerSettings = EqualizerSettings()
+    private val equalizerAudioProcessor = TerminusEqualizerAudioProcessor()
     private var crossfadeSettings = CrossfadeSettings()
     private var fadeInJob: Job? = null
     private var fadeTickerJob: Job? = null
@@ -132,7 +130,7 @@ class MusicService : MediaSessionService() {
             ): AudioSink = DefaultAudioSink.Builder(context)
                 .setEnableFloatOutput(enableFloatOutput)
                 .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                .setAudioProcessors(arrayOf(TeeAudioProcessor(audioSpectrum)))
+                .setAudioProcessors(arrayOf(equalizerAudioProcessor, TeeAudioProcessor(audioSpectrum)))
                 .build()
         }
 
@@ -145,9 +143,6 @@ class MusicService : MediaSessionService() {
         player.addListener(analyticsListener)
         player.addAnalyticsListener(object : AnalyticsListener {
             override fun onAudioSessionIdChanged(eventTime: AnalyticsListener.EventTime, audioSessionId: Int) {
-                equalizerController.attachToSession(audioSessionId)
-                equalizerController.setEnabled(equalizerSettings.enabled)
-                equalizerController.applyBandGains(equalizerSettings.bandGainsDb)
                 mediaSession?.setSessionExtras(android.os.Bundle().apply {
                     putInt("audio_session_id", audioSessionId)
                 })
@@ -190,9 +185,12 @@ class MusicService : MediaSessionService() {
         serviceScope.launch {
             var lastExcludedFolders: Set<String>? = null
             preferencesRepository.preferences.collect { prefs ->
-                equalizerSettings = prefs.equalizer
-                equalizerController.setEnabled(prefs.equalizer.enabled)
-                equalizerController.applyBandGains(prefs.equalizer.bandGainsDb)
+                equalizerAudioProcessor.setParameters(
+                    EqualizerParameters(
+                        enabled = prefs.equalizer.enabled,
+                        gainsDb = prefs.equalizer.bandGainsDb.map { it.toFloat() }
+                    )
+                )
 
                 if (lastExcludedFolders != prefs.excludedFolders) {
                     lastExcludedFolders = prefs.excludedFolders
@@ -263,7 +261,6 @@ class MusicService : MediaSessionService() {
         fadeTickerJob?.cancel()
         savePositionJob?.cancel()
         qualityRefreshJob?.cancel()
-        equalizerController.release()
         mediaSession?.run {
             player.release()
             release()
