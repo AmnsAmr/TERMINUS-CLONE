@@ -14,6 +14,7 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.log10
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -26,8 +27,7 @@ class TerminusEqualizerAudioProcessorTest {
         enabled: Boolean
     ): Double {
         if (!enabled) return 0.0
-        val maxGain = gainsDb.maxOrNull()?.toDouble()?.coerceAtLeast(0.0) ?: 0.0
-        val preGainDb = -0.35 * maxGain
+        val preGainDb = TerminusEqualizerAudioProcessor.autoPreGainDb(enabled, gainsDb)
         var totalMag = 10.0.pow(preGainDb / 20.0)
 
         val freqs = TerminusEqualizerAudioProcessor.BAND_FREQUENCIES
@@ -146,8 +146,8 @@ class TerminusEqualizerAudioProcessorTest {
             val measuredGainDb = 20.0 * log10(rmsOut / rmsIn)
             val expectedGainDb = analyticGainDb(freq, sampleRate, gains, true)
 
-            // 12 dB boost with -4.2 dB pre-gain gives ~ +7.8 dB
-            assertEquals(7.8, expectedGainDb, 0.1)
+            // +12 dB boost with -12.5 dB auto pre-gain (full compensation + 0.5 dB margin) nets -0.5 dB
+            assertEquals(-0.5, expectedGainDb, 0.1)
             assertEquals(expectedGainDb, measuredGainDb, 0.5)
         }
 
@@ -257,7 +257,7 @@ class TerminusEqualizerAudioProcessorTest {
             if (d > maxOutDelta) maxOutDelta = d
         }
 
-        // Max boost multiplier is ~2.45 (+7.8 dB net). A click/glitch would produce a steep spike (> 4x input delta).
+        // Net gain at the boosted band is -0.5 dB after auto pre-gain. A click/glitch would produce a steep spike (> 4x input delta).
         assertTrue("Max out delta $maxOutDelta should be bounded (< 3.5x in delta $maxInDelta)", maxOutDelta <= 3.5f * maxInDelta)
     }
 
@@ -316,9 +316,11 @@ class TerminusEqualizerAudioProcessorTest {
 
         val distEnergy = (totalEnergy - fundEnergy).coerceAtLeast(0.0)
         val thd = sqrt(distEnergy / totalEnergy)
+        println("MULTI-TONE THD [+12 dB band 0, -6 dBFS 60/500/2000 Hz, 48 kHz float]: ${"%.6f".format(java.util.Locale.US, thd * 100)}%")
 
-        // THD must remain < 5% (with waveshaper and pre-attenuation)
-        assertTrue("THD must be < 5%, got ${thd * 100}%", thd < 0.05)
+        // Full compensation keeps this signal out of the limiter, so it stays linear.
+        // Measured 0.000120% (JVM, 2026-10-22); the bound leaves room for float differences only.
+        assertTrue("THD must be < 0.001%, got ${thd * 100}%", thd < 0.00001)
     }
 
     // 4. Flat transparency: with EQ disabled/flat and settled, a signal with peaks at 0.99 comes out bit-identical.
@@ -349,11 +351,11 @@ class TerminusEqualizerAudioProcessorTest {
         procB.setParameters(EqualizerParameters(enabled = true, gainsDb = listOf(12f, 0f, 0f, 0f, 0f)))
         procB.configureAndFlush(AudioProcessor.AudioFormat(sampleRate, 1, C.ENCODING_PCM_FLOAT))
 
-        // Warm up so active pre-gain is -4.2 dB
+        // Warm up so active pre-gain is -12.5 dB
         val warmUp = FloatArray(512) { 0.1f }
         processFloatBuffer(procB, warmUp)
 
-        // Remove boost: target pre-gain becomes 0, but active pre-gain starts gliding up from -4.2 dB
+        // Remove boost: target pre-gain becomes 0, but active pre-gain starts gliding up from -12.5 dB
         procB.setParameters(EqualizerParameters(enabled = false))
 
         // Immediately feed a hot sample > 0.95 (e.g. 1.2f) in the next block
@@ -704,6 +706,98 @@ class TerminusEqualizerAudioProcessorTest {
                 bufferCount++
             }
         }
+    }
+
+    /**
+     * THD+N of a steady tone that spans exactly [cycles] periods: fit the fundamental (and DC) by
+     * single-bin DFT, subtract it, and return residual RMS / fundamental RMS.
+     */
+    private fun thdPlusN(signal: DoubleArray, cycles: Int): Double {
+        val n = signal.size
+        var re = 0.0
+        var im = 0.0
+        var mean = 0.0
+        for (i in 0 until n) {
+            val w = 2.0 * Math.PI * cycles * i / n
+            re += signal[i] * cos(w)
+            im += signal[i] * sin(w)
+            mean += signal[i]
+        }
+        val a = 2.0 * re / n
+        val b = 2.0 * im / n
+        mean /= n
+        var residualSq = 0.0
+        for (i in 0 until n) {
+            val w = 2.0 * Math.PI * cycles * i / n
+            val r = signal[i] - mean - (a * cos(w) + b * sin(w))
+            residualSq += r * r
+        }
+        val fundamentalRms = sqrt((a * a + b * b) / 2.0)
+        return sqrt(residualSq / n) / fundamentalRms
+    }
+
+    // 16. Full compensation: a 0 dBFS sine at each band centre with only that band at +12 dB
+    // never exceeds full scale, never engages the limiter, and stays clean.
+    @Test
+    fun singleBoostedBandAtFullScaleStaysBelowCeilingWithoutLimiter() {
+        for (encoding in listOf(C.ENCODING_PCM_FLOAT, C.ENCODING_PCM_16BIT)) {
+            for (rate in listOf(44100, 48000)) {
+                for (band in 0 until TerminusEqualizerAudioProcessor.BAND_COUNT) {
+                    val freq = TerminusEqualizerAudioProcessor.BAND_FREQUENCIES[band]
+                    val gains = List(TerminusEqualizerAudioProcessor.BAND_COUNT) { if (it == band) 12f else 0f }
+                    val processor = TerminusEqualizerAudioProcessor()
+                    processor.setParameters(EqualizerParameters(enabled = true, gainsDb = gains))
+                    processor.configureAndFlush(AudioProcessor.AudioFormat(rate, 1, encoding))
+
+                    // 0.5 s to settle, then a 100 ms window: every band centre is a whole number of cycles in it.
+                    val window = rate / 10
+                    val total = rate / 2 + window
+                    val cycles = (freq / 10.0).roundToInt()
+                    val output = DoubleArray(total)
+                    if (encoding == C.ENCODING_PCM_FLOAT) {
+                        val input = FloatArray(total) { i -> sin(2.0 * Math.PI * freq * i / rate).toFloat() }
+                        processFloatBuffer(processor, input).forEachIndexed { i, v -> output[i] = v.toDouble() }
+                    } else {
+                        val input = ShortArray(total) { i -> (32767.0 * sin(2.0 * Math.PI * freq * i / rate)).roundToInt().toShort() }
+                        processPcm16Buffer(processor, input).forEachIndexed { i, v -> output[i] = v / 32768.0 }
+                    }
+
+                    val label = "${if (encoding == C.ENCODING_PCM_FLOAT) "float" else "pcm16"} $rate Hz, ${freq.toInt()} Hz band +12 dB"
+                    val peak = output.maxOf { abs(it) }
+                    val thd = thdPlusN(output.copyOfRange(total - window, total), cycles)
+                    println("SINGLE BAND [$label]: peak=${"%.6f".format(java.util.Locale.US, peak)} limiterSamples=${processor.limiterEngagedSamples} THD+N=${"%.6f".format(java.util.Locale.US, thd * 100)}%")
+
+                    assertTrue("Peak $peak must be <= 1.0 ($label)", peak <= 1.0)
+                    assertEquals("Limiter must never engage ($label)", 0L, processor.limiterEngagedSamples)
+                    assertTrue("THD+N ${thd * 100}% must be < 0.1% ($label)", thd < 0.001)
+                }
+            }
+        }
+    }
+
+    // 17. The 0.5 dB margin is fixed, not proportional: a small boost also stays clear of the limiter knee.
+    @Test
+    fun smallBoostAtFullScaleNeverEngagesLimiter() {
+        val rate = 48000
+        val processor = TerminusEqualizerAudioProcessor()
+        processor.setParameters(EqualizerParameters(enabled = true, gainsDb = listOf(0.3f, 0f, 0f, 0f, 0f)))
+        processor.configureAndFlush(AudioProcessor.AudioFormat(rate, 1, C.ENCODING_PCM_FLOAT))
+
+        val input = FloatArray(rate / 2) { i -> sin(2.0 * Math.PI * 60.0 * i / rate).toFloat() }
+        val output = processFloatBuffer(processor, input)
+
+        assertEquals(-0.8, TerminusEqualizerAudioProcessor.autoPreGainDb(true, listOf(0.3f, 0f, 0f, 0f, 0f)), 1e-6)
+        assertTrue("Peak must be <= 1.0", output.maxOf { abs(it) } <= 1.0f)
+        assertEquals("Limiter must never engage", 0L, processor.limiterEngagedSamples)
+    }
+
+    // 18. Cut-only and flat settings need no compensation, so the bit-identical flat bypass stays reachable.
+    @Test
+    fun autoPreGainIsZeroWithoutBoostsAndFullyCompensatesTheLargestBoost() {
+        assertEquals(0.0, TerminusEqualizerAudioProcessor.autoPreGainDb(false, listOf(12f, 0f, 0f, 0f, 0f)), 0.0)
+        assertEquals(0.0, TerminusEqualizerAudioProcessor.autoPreGainDb(true, listOf(0f, 0f, 0f, 0f, 0f)), 0.0)
+        assertEquals(0.0, TerminusEqualizerAudioProcessor.autoPreGainDb(true, listOf(-6f, -3f, 0f, -12f, 0f)), 0.0)
+        assertEquals(-12.5, TerminusEqualizerAudioProcessor.autoPreGainDb(true, listOf(6f, -3f, 12f, -6f, 9f)), 1e-6)
     }
 
     // 15. Lightweight performance benchmark estimating CPU cost per second of stereo audio at 44.1 kHz
