@@ -13,6 +13,9 @@ import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.playback.AudioSpectrum
 import com.necroware.terminusplayer.playback.NowPlayingState
+import com.necroware.terminusplayer.playback.QueueNeighbour
+import com.necroware.terminusplayer.ui.components.SwipeNeighbours
+import com.necroware.terminusplayer.ui.components.SwipeTrack
 import com.necroware.terminusplayer.playback.SpectrumFrame
 import com.necroware.terminusplayer.playback.PlaybackController
 import com.necroware.terminusplayer.data.model.SyncedLyrics
@@ -32,6 +35,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
@@ -126,6 +130,26 @@ class PlaybackViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    /**
+     * Previous and next tracks for swipe-to-skip, in playback order (shuffle and repeat applied), with
+     * artwork resolved the same way as the current track's so the cover that slides in is the one
+     * that will show.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val swipeNeighbours: StateFlow<SwipeNeighbours> = nowPlaying
+        .map { it.previous to it.next }
+        .distinctUntilChanged()
+        .mapLatest { (previous, next) -> SwipeNeighbours(previous?.toSwipeTrack(), next?.toSwipeTrack()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SwipeNeighbours())
+
+    private suspend fun QueueNeighbour.toSwipeTrack(): SwipeTrack {
+        val artUri = artworkUri?.takeIf { it.isNotBlank() }
+            ?: repository.getSong(mediaId)?.uriString?.takeIf { it.isNotBlank() }
+            ?: mediaId.takeIf { it.startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX) }?.removePrefix(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)
+            ?: if (mediaId.startsWith("terminus://")) mediaId else "terminus://$mediaId"
+        return SwipeTrack(id = mediaId, title = title, artist = artist, artUri = artUri)
+    }
+
     val currentLyrics: StateFlow<SyncedLyrics?> = nowPlaying
         .map { it.mediaId }
         .distinctUntilChanged()
@@ -172,18 +196,12 @@ class PlaybackViewModel @Inject constructor(
 
     fun togglePlayPause() = controller.togglePlayPause()
     fun skipToNext() = controller.skipToNext()
-    fun skipToPrevious() {
-        if (controller.willSkipToPreviousItem()) backSkipCount++
-        controller.skipToPrevious()
-    }
+    fun skipToPrevious() = controller.skipToPrevious()
 
-    /**
-     * Counts in-app skips that moved back a track. The UI compares it across a track change to
-     * slide content the right way; it is a display hint only and never affects playback.
-     * Skips from outside the app (notification, headset) are not counted and animate as forward.
-     */
-    var backSkipCount: Int = 0
-        private set
+    /** Skip committed by a swipe: always changes track, since the neighbour's cover is already showing. */
+    fun swipeSkip(toNext: Boolean) {
+        if (toNext) controller.skipToNextItem() else controller.skipToPreviousItem()
+    }
     fun seekTo(positionMs: Long) = controller.seekTo(positionMs)
     fun toggleShuffle() = controller.toggleShuffle()
     fun cycleRepeatMode() = controller.cycleRepeatMode()

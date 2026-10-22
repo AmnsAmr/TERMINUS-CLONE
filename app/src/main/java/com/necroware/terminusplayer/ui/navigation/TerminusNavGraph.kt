@@ -432,6 +432,7 @@ fun TerminusNavGraph(
                 // Collected only while the mini bar is composed; the flow polls every 500 ms while
                 // playing (2 s paused) and stops shortly after the last collector leaves.
                 val miniPosition = playbackViewModel.positionMs.collectAsStateWithLifecycle()
+                val miniNeighbours by playbackViewModel.swipeNeighbours.collectAsStateWithLifecycle()
                 MaterialTheme(colorScheme = miniColorScheme) {
                     MiniPlayerBar(
                         nowPlaying = nowPlaying,
@@ -450,8 +451,9 @@ fun TerminusNavGraph(
                         },
                         onSwipeSkip = { toNext ->
                             haptic(true)
-                            if (toNext) playbackViewModel.skipToNext() else playbackViewModel.skipToPrevious()
+                            playbackViewModel.swipeSkip(toNext)
                         },
+                        neighbours = miniNeighbours,
                         swipeSettleSpec = motion.panel.floatSpec
                     )
                 }
