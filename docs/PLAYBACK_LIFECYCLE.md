@@ -29,13 +29,13 @@ flowchart LR
         MS["MediaSessionService (MusicService)"]
         SESSION["MediaSession"]
         EXO["ExoPlayer"]
-        EQ["EqualizerController"]
+        EQ["TerminusEqualizerAudioProcessor"]
         TRACKER["ActivePlayTracker"]
         
         TOKEN <--> SESSION
         SESSION --> MS
         MS --> EXO
-        EXO -->|"Audio Session ID"| EQ
+        EXO -->|"AudioProcessor chain"| EQ
         EXO -->|"Player.Listener"| TRACKER
     end
 
