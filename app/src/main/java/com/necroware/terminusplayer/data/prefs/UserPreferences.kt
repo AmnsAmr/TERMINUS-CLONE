@@ -1,5 +1,7 @@
 package com.necroware.terminusplayer.data.prefs
 
+import androidx.compose.runtime.Immutable
+
 enum class ThemePresetId {
     TERMINAL,
     VECTOR,
@@ -80,19 +82,22 @@ internal fun parseMotionPreference(value: String?): MotionPreference =
             ?: MotionPreference.FULL
     }
 
+@Immutable
 data class LibrarySortOrder(
     val field: SortField = SortField.TITLE,
     val direction: SortDirection = SortDirection.ASC
 )
 
 /** 5-band graphic EQ, gains in dB clamped to [-12, 12]. Bands correspond to
- *  roughly 60Hz / 230Hz / 910Hz / 3.6kHz / 14kHz, matching a typical Android
- *  android.media.audiofx.Equalizer's 5-band layout. */
+ *  60Hz / 230Hz / 910Hz / 3.6kHz / 14kHz bell peaking filters in
+ *  TerminusEqualizerAudioProcessor. */
+@Immutable
 data class EqualizerSettings(
     val enabled: Boolean = false,
     val bandGainsDb: List<Int> = List(5) { 0 }
 )
 
+@Immutable
 data class CrossfadeSettings(
     val enabled: Boolean = false,
     val durationMs: Int = 4000
@@ -120,13 +125,13 @@ enum class VisualizerStyle(val label: String) {
     VU_METER("DOT-MATRIX VU")
 }
 
+@Immutable
 data class UserPreferences(
     val themeId: ThemePresetId = ThemePresetId.TERMINAL,
     val themeColorOverrides: Map<ThemeColorRole, String> = emptyMap(),
     val librarySortOrder: LibrarySortOrder = LibrarySortOrder(),
     val equalizer: EqualizerSettings = EqualizerSettings(),
     val crossfade: CrossfadeSettings = CrossfadeSettings(),
-    val preferHardwareDecoder: Boolean = true,
     val playbackArtStyle: PlaybackArtStyle = PlaybackArtStyle.STANDARD,
     val motionPreference: MotionPreference = MotionPreference.FULL,
     val performanceMode: PerformanceMode = PerformanceMode.FULL,

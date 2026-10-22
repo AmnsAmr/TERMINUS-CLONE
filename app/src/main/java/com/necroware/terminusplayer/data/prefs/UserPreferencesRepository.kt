@@ -36,7 +36,6 @@ private object Keys {
     val EQ_BAND_PREFIX = "eq_band_"
     val CROSSFADE_ENABLED = booleanPreferencesKey("crossfade_enabled")
     val CROSSFADE_DURATION_MS = intPreferencesKey("crossfade_duration_ms")
-    val PREFER_HW_DECODER = booleanPreferencesKey("prefer_hw_decoder")
     val PLAYBACK_ART_STYLE = stringPreferencesKey("playback_art_style")
     val MOTION_PREFERENCE = stringPreferencesKey("motion_preference")
     val PERFORMANCE_MODE = stringPreferencesKey("performance_mode")
@@ -208,10 +207,6 @@ class UserPreferencesRepository @Inject constructor(
         dataStore.edit { it[Keys.CROSSFADE_DURATION_MS] = durationMs }
     }
 
-    suspend fun setPreferHardwareDecoder(enabled: Boolean) {
-        dataStore.edit { it[Keys.PREFER_HW_DECODER] = enabled }
-    }
-
     suspend fun setScanlineIntensity(intensity: Float) {
         dataStore.edit { it[Keys.SCANLINE_INTENSITY] = intensity.coerceIn(0f, 1f) }
     }
@@ -331,7 +326,6 @@ class UserPreferencesRepository @Inject constructor(
                 enabled = this[Keys.CROSSFADE_ENABLED] ?: defaults.crossfade.enabled,
                 durationMs = this[Keys.CROSSFADE_DURATION_MS] ?: defaults.crossfade.durationMs
             ),
-            preferHardwareDecoder = this[Keys.PREFER_HW_DECODER] ?: defaults.preferHardwareDecoder,
             playbackArtStyle = playbackArtStyle,
             motionPreference = parseMotionPreference(this[Keys.MOTION_PREFERENCE]),
             performanceMode = performanceMode,
