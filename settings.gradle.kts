@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "TerminusPlayer"
 include(":app")
+include(":benchmark")

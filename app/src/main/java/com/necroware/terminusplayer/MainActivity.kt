@@ -37,6 +37,7 @@ import com.necroware.terminusplayer.ui.navigation.TerminusNavGraph
 import com.necroware.terminusplayer.ui.theme.TerminusTheme
 import com.necroware.terminusplayer.ui.theme.themePresetById
 import com.necroware.terminusplayer.ui.theme.withOverrides
+import com.necroware.terminusplayer.util.JankStatsHelper
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -63,6 +64,7 @@ class MainActivity : ComponentActivity() {
                 (!initialContentReady.get() && elapsed < MAX_SPLASH_WAIT_MS)
         }
         super.onCreate(savedInstanceState)
+        JankStatsHelper.initialize(this)
 
         setContent {
             val activityViewModel: MainActivityViewModel = hiltViewModel()

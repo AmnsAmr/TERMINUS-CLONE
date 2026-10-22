@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt.android)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.baselineprofile)
 }
 
 android {
@@ -27,9 +28,18 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            buildConfigField("boolean", "ENABLE_JANK_STATS", "false")
+        }
+        create("benchmark") {
+            initWith(buildTypes.getByName("release"))
+            matchingFallbacks += listOf("release")
+            signingConfig = signingConfigs.getByName("debug")
+            isDebuggable = false
+            buildConfigField("boolean", "ENABLE_JANK_STATS", "true")
         }
         debug {
             isMinifyEnabled = false
+            buildConfigField("boolean", "ENABLE_JANK_STATS", "true")
         }
     }
 
@@ -51,7 +61,20 @@ android {
     }
 }
 
+composeCompiler {
+    val enableReports = project.findProperty("enableComposeCompilerReports") == "true"
+    if (enableReports) {
+        metricsDestination = layout.buildDirectory.dir("compose_metrics")
+        reportsDestination = layout.buildDirectory.dir("compose_reports")
+    }
+    stabilityConfigurationFile = rootProject.layout.projectDirectory.file("compose_compiler_config.conf")
+}
+
 dependencies {
+    baselineProfile(project(":benchmark"))
+    implementation(libs.androidx.profileinstaller)
+    implementation(libs.androidx.metrics.performance)
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.lifecycle.runtime.ktx)
