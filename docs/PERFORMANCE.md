@@ -1,6 +1,9 @@
 # Performance Measurement & Profiling Guide
 
-This document defines the benchmarking and profiling infrastructure for **Terminus Player**, establishing data-driven baselines for cold startup time, frame pacing, jank percentages, and Jetpack Compose compiler stability.
+This document defines the benchmarking and profiling infrastructure for **Terminus Player**: how to measure cold startup time, frame pacing, jank percentages, and Jetpack Compose compiler stability.
+
+> [!IMPORTANT]
+> **Measurement status:** no device (DEVICE) Macrobenchmark or JankStats numbers have been recorded yet. Every device cell below reads **NOT MEASURED** until a real run fills it. Numbers are labelled **DEVICE** (with model, Android version and build type) or **JVM/HOST** (unit tests / compiler reports on the build machine). JVM/HOST numbers say nothing about on-device performance.
 
 ---
 
@@ -109,10 +112,10 @@ To view live frame durations and jank summaries while navigating the app:
 adb logcat -s TerminusJank:I TerminusJank:W
 ```
 
-**Example Logcat Output:**
+**Logcat line format** (placeholders in `<angle brackets>`, not measurements):
 ```text
-W/TerminusJank: Jank frame: 34ms | States: [Screen=Library]
-I/TerminusJank: Summary | Frames: 120 | Jank: 2 (1.7%) | Avg Duration: 7.2ms | States: [Screen=Library]
+W/TerminusJank: Jank frame: <duration>ms | States: [Screen=<route>]
+I/TerminusJank: Summary | Frames: <count> | Jank: <count> (<percent>%) | Avg Duration: <duration>ms | States: [Screen=<route>]
 ```
 
 ---
@@ -143,16 +146,16 @@ Outputs will be generated in:
 
 ---
 
-## 4. Baseline Measurement Records (To Fill Before Phase 5)
+## 4. Baseline Measurement Records
 
-Record the results from physical device test runs below:
+Status: **NOT MEASURED** on a device. Fill these tables only from real physical-device runs, and record the device model, Android version, build type and date with each run.
 
 ### Table 1: Cold Startup Latency (`StartupBenchmark`)
 
 | Mode | Iterations | Median Startup (`timeToInitialDisplayMs`) | Min (ms) | Max (ms) | Speedup vs None |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| `CompilationMode.None` | 5 | _e.g. 420 ms_ | _e.g. 395 ms_ | _e.g. 450 ms_ | Baseline |
-| `CompilationMode.Partial` (Profile) | 5 | _e.g. 260 ms_ | _e.g. 240 ms_ | _e.g. 280 ms_ | _e.g. +38%_ |
+| `CompilationMode.None` | 5 | NOT MEASURED | NOT MEASURED | NOT MEASURED | Baseline |
+| `CompilationMode.Partial` (Profile) | 5 | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
 
 ---
 
@@ -160,10 +163,10 @@ Record the results from physical device test runs below:
 
 | User Journey | Compilation Mode | Frame Time P50 (ms) | Frame Time P90 (ms) | Frame Time P99 (ms) | Missed Frame Deadlines (%) |
 | :--- | :--- | :---: | :---: | :---: | :---: |
-| **Tab Switching** (5 tabs) | `None` | | | | |
-| **Tab Switching** (5 tabs) | `Partial` (Profile) | | | | |
-| **Library List Fling** | `None` | | | | |
-| **Library List Fling** | `Partial` (Profile) | | | | |
+| **Tab Switching** (5 tabs) | `None` | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| **Tab Switching** (5 tabs) | `Partial` (Profile) | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| **Library List Fling** | `None` | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| **Library List Fling** | `Partial` (Profile) | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
 
 ---
 
@@ -171,26 +174,41 @@ Record the results from physical device test runs below:
 
 | Screen Name | Test Duration / Action | Total Frames Rendered | Janky Frames Count | Jank Percentage (%) | Avg Frame Duration (ms) |
 | :--- | :--- | :---: | :---: | :---: | :---: |
-| `Library` | Continuous Fling (10s) | | | | |
-| `NowPlaying` | Player open + visualizer (10s) | | | | |
-| `Home` | Fling smart mixes | | | | |
-| `Playlists` | Scroll playlist cards | | | | |
-| `Settings` | Expand dropdowns | | | | |
+| `Library` | Continuous Fling (10s) | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| `NowPlaying` | Player open + visualizer (10s) | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| `Home` | Fling smart mixes | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| `Playlists` | Scroll playlist cards | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| `Settings` | Expand dropdowns | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
 
 ---
 
 ### Table 4: Compose Stability Overview
 
-Run `./gradlew assembleDebug -PenableComposeCompilerReports=true` to populate:
+Run `./gradlew assembleDebug -PenableComposeCompilerReports=true` to populate.
 
-| Metric | Before Phase 5 | After Phase 5 | Notes / Resolution |
+**JVM/HOST** (Compose compiler report, static analysis; not a runtime measurement). The "Before Phase 5" column was never saved as a compiler report, so it is NOT RECORDED. The "After Phase 5" values were copied from an earlier report and have not been regenerated since.
+
+| Metric | Before Phase 5 | After Phase 5 (JVM/HOST) | Notes / Resolution |
 | :--- | :---: | :---: | :--- |
-| **Total Composables** | 295 | 295 | Restartable: 294, Readonly: 0 |
-| **Skippable Composables** | 131 (Strong Skipping: 294) | 131 (Strong Skipping: 294) | Kotlin 2.0 Strong Skipping active across all composables |
-| **Non-Skippable Composables** | 0 | 0 | 100% of restartable composables are skippable |
-| **Effectively Stable Classes** | 1 | 17 | Marked: 16, Inferred: 1 |
-| **Unstable Classes (Domain/UI)** | 16+ (All UI States & Models) | 0 | 7 remaining are Hilt ViewModels (expected) |
-| **Known Stable Arguments** | ~3,100 | 5,186 (99.0%) | Unstable args reduced to 1.0% |
+| **Total Composables** | NOT RECORDED | 295 | Restartable: 294, Readonly: 0 |
+| **Skippable Composables** | NOT RECORDED | 131 (Strong Skipping: 294) | Kotlin 2.0 Strong Skipping active across all composables |
+| **Non-Skippable Composables** | NOT RECORDED | 0 | 100% of restartable composables are skippable |
+| **Effectively Stable Classes** | NOT RECORDED | 17 | Marked: 16, Inferred: 1 |
+| **Unstable Classes (Domain/UI)** | NOT RECORDED | 0 | 7 remaining are Hilt ViewModels (expected) |
+| **Known Stable Arguments** | NOT RECORDED | 5,186 (99.0%) | Unstable args 1.0% |
+
+---
+
+### Table 5: EQ DSP Cost (`TerminusEqualizerAudioProcessorTest.benchmarkCpuCostPerSecondOfStereoAudio`)
+
+**JVM/HOST only.** The unit test times 5 s of 44.1 kHz stereo audio through the 5-band EQ (gains +6/−3/+12/−6/+9 dB) on the build machine's JVM, using wall-clock `System.nanoTime()`. It does not measure CPU time on an Android device. DEVICE DSP cost is NOT MEASURED.
+
+| Encoding | Run | Host | ms per 1 s of audio | % of one core |
+| :--- | :--- | :--- | :---: | :---: |
+| `PCM_FLOAT` | 2026-10-22, JDK 21.0.4 | Intel Core i5-7300U @ 2.60 GHz (Windows 10) | 22.923 | 2.292% |
+| `PCM_16BIT` | 2026-10-22, JDK 21.0.4 | Intel Core i5-7300U @ 2.60 GHz (Windows 10) | 23.975 | 2.398% |
+
+Earlier quoted figures of **1.42%** and **2.98%** were JVM/HOST measurements, not device numbers. The run, host and encoding behind them were not recorded.
 
 ---
 
@@ -200,7 +218,7 @@ Run `./gradlew assembleDebug -PenableComposeCompilerReports=true` to populate:
 - **Top-Level Navigation Scoping**: In `TerminusNavGraph.kt`, all 5 primary bottom-navigation ViewModels (`HomeViewModel`, `LibraryViewModel`, `PlaylistsViewModel`, `StatsViewModel`, `SettingsViewModel`) are scoped at the top-level navigation graph. Switching tabs preserves ViewModel instances, avoiding re-instantiation, re-subscription overhead, and Room query restarts.
 - **State Flow Sharing**: UI state flows are backed by `stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ...)` so upstream database emissions do not tear down during transient transitions.
 - **Navigation State Restoration**: All bottom-nav tabs enforce `launchSingleTop = true`, `restoreState = true`, and `popUpTo { saveState = true }`.
-- **Scroll State Persistence**: In `LibraryViewModel`, `songsListState`, `albumsListState`, and `artistsListState` are held inside the ViewModel and retained across tab switches. Returning to the Library screen instantly restores exact scroll position with zero layout jumps or empty frame flashes.
+- **Scroll State Persistence**: In `LibraryViewModel`, `songsListState`, `albumsListState`, and `artistsListState` are held inside the ViewModel and retained across tab switches, so returning to the Library screen restores the scroll position. Frame cost of the restore is NOT MEASURED; the behaviour is covered by manual check UI-2 in `DEVICE_TEST_CHECKLIST.md`.
 
 ### 2. LazyList Recycling & Allocation Hoisting
 - **Unique Stable Keys & Content Types**: Added unique `key` lambdas and explicit `contentType` tags across every `LazyColumn`, `LazyRow`, `items`, and `itemsIndexed` block across all screens:
@@ -225,10 +243,10 @@ Run `./gradlew assembleDebug -PenableComposeCompilerReports=true` to populate:
   - `StatsUiState`
   - `AlbumDetailUiState`
   - `MotionTokens`, `PanelMotionSpec`, `MotionTransitionSpec`
-- **Results**: `effectivelyStableClasses` increased from 1 to 17. 99% of composable arguments are statically known to be stable.
+- **Results (JVM/HOST, compiler report)**: `effectivelyStableClasses` is 17 and 99% of composable arguments are statically known to be stable. No saved pre-change report exists to compare against. This is static analysis, not a measured runtime improvement.
 
 ### 4. Tab Navigation Transitions
-- **Refined Tab Motion Spec**: Tab switches previously performed an expensive 100% full-screen slide (`slideFraction = 1f`), causing heavy recomposition and layout thrashing across the entire display viewport.
+- **Refined Tab Motion Spec**: Tab switches previously used a 100% full-screen slide (`slideFraction = 1f`). The change was made from code inspection; its frame-time effect is NOT MEASURED (no before/after device run exists).
 - **Short 10% Slide + Fade**: Added `tabTransitionSpec` in `MotionTransitionPolicy.kt` with a subtle 10% horizontal slide and a 220 ms fade for bottom-nav navigation.
 - **Preserved Detail Screen Motion**: Full-width hierarchy pushes and pops (`detailEnter` / `detailExit`) are preserved for drill-downs into albums, playlists, and settings sub-screens.
 
