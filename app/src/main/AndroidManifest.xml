@@ -41,7 +41,7 @@
             android:excludeFromRecents="true"
             android:launchMode="singleTop"
             android:theme="@style/Theme.TerminusPlayer.ExternalPlayback">
-            <intent-filter>
+            <intent-filter tools:ignore="AppLinkUrlError">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="audio/*" />
