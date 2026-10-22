@@ -14,11 +14,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
+import com.necroware.terminusplayer.ui.TestTags
 
 /**
  * Plain bracketed ASCII transport glyphs, each in a bordered box, matching
@@ -44,11 +46,13 @@ private fun GlyphButton(
     boxWidth: Dp,
     boxHeight: Dp,
     fontSizeSp: Int,
+    testTag: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true
 ) {
     Box(
         modifier = modifier
+            .testTag(testTag)
             .width(boxWidth)
             .height(boxHeight)
             .border(1.dp, color.copy(alpha = 0.5f))
@@ -87,10 +91,10 @@ fun FullTransportControls(
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        GlyphButton(Glyph.SHUFFLE, onToggleShuffle, if (shuffleEnabled) accent else dim, 56.dp, 40.dp, 11, enabled = enabled)
-        GlyphButton(Glyph.PREVIOUS, onSkipPrevious, accent, 56.dp, 56.dp, 16, enabled = enabled)
-        GlyphButton(if (isPlaying) Glyph.PAUSE else Glyph.PLAY, onTogglePlayPause, accent, 68.dp, 68.dp, 19, enabled = enabled)
-        GlyphButton(Glyph.NEXT, onSkipNext, accent, 56.dp, 56.dp, 16, enabled = enabled)
+        GlyphButton(Glyph.SHUFFLE, onToggleShuffle, if (shuffleEnabled) accent else dim, 56.dp, 40.dp, 11, testTag = TestTags.TRANSPORT_SHUFFLE, enabled = enabled)
+        GlyphButton(Glyph.PREVIOUS, onSkipPrevious, accent, 56.dp, 56.dp, 16, testTag = TestTags.TRANSPORT_PREVIOUS, enabled = enabled)
+        GlyphButton(if (isPlaying) Glyph.PAUSE else Glyph.PLAY, onTogglePlayPause, accent, 68.dp, 68.dp, 19, testTag = TestTags.TRANSPORT_PLAY_PAUSE, enabled = enabled)
+        GlyphButton(Glyph.NEXT, onSkipNext, accent, 56.dp, 56.dp, 16, testTag = TestTags.TRANSPORT_NEXT, enabled = enabled)
         GlyphButton(
             if (repeatMode == Player.REPEAT_MODE_ONE) Glyph.REPEAT_ONE else Glyph.REPEAT_OFF,
             onCycleRepeat,
@@ -98,6 +102,7 @@ fun FullTransportControls(
             56.dp,
             40.dp,
             10,
+            testTag = TestTags.TRANSPORT_REPEAT,
             enabled = enabled
         )
     }
@@ -119,8 +124,8 @@ fun CompactTransportControls(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        GlyphButton(Glyph.PREVIOUS, onSkipPrevious, accent, 28.dp, 28.dp, 9)
-        GlyphButton(if (isPlaying) Glyph.PAUSE else Glyph.PLAY, onTogglePlayPause, accent, 32.dp, 32.dp, 11)
-        GlyphButton(Glyph.NEXT, onSkipNext, accent, 28.dp, 28.dp, 9)
+        GlyphButton(Glyph.PREVIOUS, onSkipPrevious, accent, 28.dp, 28.dp, 9, testTag = TestTags.MINI_PREVIOUS)
+        GlyphButton(if (isPlaying) Glyph.PAUSE else Glyph.PLAY, onTogglePlayPause, accent, 32.dp, 32.dp, 11, testTag = TestTags.MINI_PLAY_PAUSE)
+        GlyphButton(Glyph.NEXT, onSkipNext, accent, 28.dp, 28.dp, 9, testTag = TestTags.MINI_NEXT)
     }
 }

@@ -29,10 +29,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.necroware.terminusplayer.playback.NowPlayingState
+import com.necroware.terminusplayer.ui.TestTags
 import kotlin.math.abs
 
 /** Fixed bar height. The bottom bar reserves exactly this much space for the player panel. */
@@ -99,6 +101,7 @@ fun MiniPlayerBar(
 
     Row(
         modifier = modifier
+            .testTag(TestTags.MINI_PLAYER)
             .fillMaxWidth()
             .height(MiniPlayerHeight)
             .background(MaterialTheme.colorScheme.surfaceVariant)

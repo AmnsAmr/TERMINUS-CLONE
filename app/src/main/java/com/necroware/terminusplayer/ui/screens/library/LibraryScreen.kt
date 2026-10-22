@@ -67,6 +67,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import com.necroware.terminusplayer.ui.TestTags
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
@@ -1107,6 +1109,7 @@ fun LibrarySongRow(
 
     Box(
         modifier = Modifier
+            .testTag(TestTags.SONG_ROW)
             .fillMaxWidth()
             .clipToBounds()
     ) {

@@ -40,6 +40,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import com.necroware.terminusplayer.ui.TestTags
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -425,13 +427,13 @@ internal fun NowPlayingScreen(
                     active = visualizerActive,
                     accent = activeAccent,
                     size = 300.dp,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art)
+                    modifier = Modifier.testTag(TestTags.NOW_PLAYING_ART).padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art)
                 )
             } else AnimatedContent(
                 targetState = trackDisplay,
                 contentKey = { it.id },
                 transitionSpec = { trackSwapTransform(motion.transition, targetState.direction) },
-                modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art),
+                modifier = Modifier.testTag(TestTags.NOW_PLAYING_ART).padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art),
                 label = "trackArt"
             ) { track ->
                 if (artStyle == com.necroware.terminusplayer.data.prefs.PlaybackArtStyle.STANDARD) {
