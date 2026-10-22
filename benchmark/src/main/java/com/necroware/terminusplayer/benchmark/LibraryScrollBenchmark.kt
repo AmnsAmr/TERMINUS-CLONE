@@ -3,16 +3,24 @@ package com.necroware.terminusplayer.benchmark
 import androidx.benchmark.macro.BaselineProfileMode
 import androidx.benchmark.macro.CompilationMode
 import androidx.benchmark.macro.FrameTimingMetric
+import androidx.benchmark.macro.MacrobenchmarkScope
 import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.uiautomator.By
-import androidx.test.uiautomator.Direction
+import androidx.test.uiautomator.BySelector
+import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
+/**
+ * Flings the Library SONGS list down and back up once per iteration.
+ *
+ * The list is found as the scrollable that contains song rows: the first scrollable on the screen
+ * is the horizontal tab row, which the earlier By.scrollable(true) lookup sometimes flung instead.
+ */
 @RunWith(AndroidJUnit4::class)
 class LibraryScrollBenchmark {
 
@@ -36,26 +44,35 @@ class LibraryScrollBenchmark {
             setupBlock = {
                 pressHome()
                 startActivityAndWait()
-                device.wait(Until.findObject(By.text("LIBRARY")), 3000L)?.click()
+                requireObject(By.text("LIBRARY")).click()
+                // The selected Library tab is remembered; always measure the full SONGS list.
+                requireObject(By.text(SONGS_TAB)).click()
+                songList()
                 device.waitForIdle()
             }
         ) {
-            val scrollable = device.wait(Until.findObject(By.scrollable(true)), 3000L)
-            if (scrollable != null) {
-                scrollable.setGestureMargin(device.displayWidth / 5)
-                scrollable.fling(Direction.DOWN)
-                device.waitForIdle()
-                scrollable.fling(Direction.UP)
-                device.waitForIdle()
-            } else {
-                val centerX = device.displayWidth / 2
-                val startY = (device.displayHeight * 0.75).toInt()
-                val endY = (device.displayHeight * 0.25).toInt()
-                device.swipe(centerX, startY, centerX, endY, 10)
-                device.waitForIdle()
-                device.swipe(centerX, endY, centerX, startY, 10)
-                device.waitForIdle()
-            }
+            val list = songList().visibleBounds
+            val x = list.centerX()
+            val low = list.top + list.height() * 4 / 5
+            val high = list.top + list.height() / 5
+            device.swipe(x, low, x, high, FLING_STEPS)
+            device.waitForIdle()
+            device.swipe(x, high, x, low, FLING_STEPS)
+            device.waitForIdle()
         }
+    }
+
+    private fun MacrobenchmarkScope.songList(): UiObject2 =
+        requireObject(By.scrollable(true).hasDescendant(By.res(SONG_ROW)))
+
+    private fun MacrobenchmarkScope.requireObject(selector: BySelector): UiObject2 =
+        device.wait(Until.findObject(selector), WAIT_MS) ?: error("Not found within $WAIT_MS ms: $selector")
+
+    private companion object {
+        const val SONGS_TAB = "[ SONGS ]"
+        const val SONG_ROW = "song_row"
+        const val WAIT_MS = 5_000L
+        /** About 5 ms per step: a quick flick, so the list flings rather than drags. */
+        const val FLING_STEPS = 8
     }
 }

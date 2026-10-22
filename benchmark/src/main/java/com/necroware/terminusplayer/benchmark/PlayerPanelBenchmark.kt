@@ -16,7 +16,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Frame timing for the persistent player panel. Needs at least one song in the Library.
+ * Frame timing for the persistent player panel. Needs at least one on-device track
+ * (Library -> [ LOCAL MUSIC ]); playback always starts from there so no journey depends on the network.
  *
  * Journeys (each iteration):
  *  (a) tap mini bar -> panel fully open -> swipe down on the art -> panel collapsed, x10
@@ -90,6 +91,7 @@ class PlayerPanelBenchmark {
                 collapseIfExpanded()
                 if (!configured) {
                     configureSettings(artStyle)
+                    startLocalPlayback()
                     configured = true
                 }
                 ensureTrackLoaded()
@@ -144,6 +146,17 @@ class PlayerPanelBenchmark {
             }
         }
         return requireObject(selector)
+    }
+
+    /**
+     * Plays the first on-device track so the queue (and every skip) stays local: results must not
+     * depend on the network or the Navidrome server being reachable.
+     */
+    private fun MacrobenchmarkScope.startLocalPlayback() {
+        requireObject(By.text("LIBRARY")).click()
+        requireObject(By.text(LOCAL_MUSIC_TAB)).click()
+        requireObject(By.res(SONG_ROW).hasDescendant(By.textStartsWith(LOCAL_ROW_STATUS))).click()
+        requireObject(By.res(MINI_PLAYER))
     }
 
     private fun MacrobenchmarkScope.ensureTrackLoaded() {
@@ -226,6 +239,9 @@ class PlayerPanelBenchmark {
         const val ART_ALBUM = "STANDARD"
         const val ART_VISUALIZER = "VISUALIZER"
         const val GLYPH_PAUSE = "||"
+        const val LOCAL_MUSIC_TAB = "[ LOCAL MUSIC ]"
+        /** Source line of an on-device row ("LOCAL · LOCAL ONLY · ..."). */
+        const val LOCAL_ROW_STATUS = "LOCAL ·"
         const val SECTION_COLLAPSED = "[ + ]"
         const val SECTION_EXPANDED = "[ - ]"
 
