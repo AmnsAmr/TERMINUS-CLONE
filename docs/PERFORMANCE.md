@@ -3,7 +3,7 @@
 This document defines the benchmarking and profiling infrastructure for **Terminus Player**: how to measure cold startup time, frame pacing, jank percentages, and Jetpack Compose compiler stability.
 
 > [!IMPORTANT]
-> **Measurement status:** no device (DEVICE) Macrobenchmark or JankStats numbers have been recorded yet. Every device cell below reads **NOT MEASURED** until a real run fills it. Numbers are labelled **DEVICE** (with model, Android version and build type) or **JVM/HOST** (unit tests / compiler reports on the build machine). JVM/HOST numbers say nothing about on-device performance.
+> **Measurement status:** the first DEVICE baseline was recorded on 2026-10-22 (section 4). It is the reference that later work compares against. Cells without a real run read **NOT MEASURED**. Numbers are labelled **DEVICE** (with model, Android version and build type) or **JVM/HOST** (unit tests / compiler reports on the build machine). JVM/HOST numbers say nothing about on-device performance.
 
 ---
 
@@ -31,11 +31,14 @@ The performance toolkit consists of 4 complementary layers:
 
 ## 2. Benchmark Variant Setup
 
-Terminus has a dedicated `benchmark` build type in `:app` configured specifically for Macrobenchmarks:
-- `initWith(buildTypes.release)` (R8 minification enabled, resource shrinking enabled).
-- Signed with the debug signing key (`signingConfig = signingConfigs.debug`).
-- `isDebuggable = false` (accurate release-like performance).
-- `ENABLE_JANK_STATS = true`.
+There are two release-like variants, and they differ in one way that matters:
+
+| Variant | Created by | Used for | `ENABLE_JANK_STATS` |
+| :--- | :--- | :--- | :---: |
+| `benchmarkRelease` | `androidx.baselineprofile` plugin, copied from `release` | Every `:benchmark` Macrobenchmark (`installBenchmarkRelease`) | `false` |
+| `benchmark` | `:app` build type (`initWith(release)`, debug-signed, `isDebuggable = false`) | JankStats logcat sessions (`assembleBenchmark`) | `true` |
+
+Both are R8-minified with resource shrinking and debug-signed, so either can be installed over the other with `adb install -r` without losing app data. Macrobenchmark runs therefore have JankStats compiled out; JankStats numbers come from a separate session on the `benchmark` build type.
 
 ---
 
@@ -68,7 +71,22 @@ The resulting baseline profile rules are automatically deposited into `app/src/m
 
 ### Step 2: Run Macrobenchmarks
 
-Run the macrobenchmarks across all critical user journeys:
+> [!WARNING]
+> `connected…AndroidTest` tasks **uninstall the app when they finish**, which deletes its library, playlists and settings on a personal device. The 2026-10-22 baseline was run without them: install with Gradle, then start the instrumentation on the device, detached from adb so a USB reset cannot kill the run:
+>
+> ```bash
+> ./gradlew :app:installBenchmarkRelease :benchmark:installBenchmarkRelease
+> P=com.necroware.terminusplayer.benchmark
+> adb shell "nohup am instrument -w -r \
+>   -e class $P.StartupBenchmark,$P.TabSwitchFrameTimingBenchmark,$P.LibraryScrollBenchmark,$P.PlayerPanelBenchmark \
+>   $P/androidx.test.runner.AndroidJUnitRunner > /data/local/tmp/bench.txt 2>&1 &"
+> # when /data/local/tmp/bench.txt contains INSTRUMENTATION_CODE:
+> adb pull /data/local/tmp/bench.txt
+> ```
+>
+> On Git Bash for Windows, `export MSYS_NO_PATHCONV=1` first so `/data/...` paths are not rewritten. Keep the screen awake for the whole run (`adb shell svc power stayon usb`, and `stayon false` afterwards).
+
+The Gradle commands below still work on a device whose app data you do not need:
 
 #### A. Startup Benchmark
 Measures cold start latency (`timeToInitialDisplayMs`):
@@ -94,7 +112,20 @@ Measures frame durations, p50/p90/p99 frame times, and frame deadline misses whi
   -Pandroid.testInstrumentationRunnerArguments.class=com.necroware.terminusplayer.benchmark.LibraryScrollBenchmark
 ```
 
-#### D. Run All Benchmarks at Once
+#### D. Player Panel Benchmark
+`PlayerPanelBenchmark` (`FrameTimingMetric`), three journeys, 5 iterations each. Setup selects ALBUM ART (journeys a, b) or WARP VISUALIZER (journey c) with FULL motion through the Settings UI, then plays the first track from Library → `[ LOCAL MUSIC ]` so nothing depends on the network:
+- **(a) open/close**: tap the mini bar, wait until fully open, swipe down on the art, wait until collapsed; ×10.
+- **(b) skip**: in the expanded player, `>>|` ×10 then `|<<` ×10, 800 ms apart.
+- **(c) visualizer**: expanded and playing for 20 s.
+
+Needs at least one on-device track. Setup leaves the art style changed; reset it in Settings afterwards.
+
+```bash
+./gradlew :benchmark:connectedBenchmarkReleaseAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.necroware.terminusplayer.benchmark.PlayerPanelBenchmark
+```
+
+#### E. Run All Benchmarks at Once
 ```bash
 ./gradlew :benchmark:connectedBenchmarkReleaseAndroidTest
 ```
@@ -109,8 +140,12 @@ Benchmark output reports (JSON + markdown metrics) are saved to:
 To view live frame durations and jank summaries while navigating the app:
 
 ```bash
-adb logcat -s TerminusJank:I TerminusJank:W
+adb logcat -s TerminusJank:I
 ```
+
+`TerminusJank:I` already includes warnings. Do not add a second `TerminusJank:W` filter: the later spec overrides the first and hides every `Summary` line.
+
+The `Summary` line is **cumulative since the activity was created**, not per screen; `States` only names the screen of the frame that triggered it. To get one screen's numbers, take the difference between two `Summary` lines logged while that screen was showing.
 
 **Logcat line format** (placeholders in `<angle brackets>`, not measurements):
 ```text
@@ -148,37 +183,78 @@ Outputs will be generated in:
 
 ## 4. Baseline Measurement Records
 
-Status: **NOT MEASURED** on a device. Fill these tables only from real physical-device runs, and record the device model, Android version, build type and date with each run.
+### Baseline run: 2026-10-22 (DEVICE)
 
-### Table 1: Cold Startup Latency (`StartupBenchmark`)
+| | |
+| :--- | :--- |
+| Device | Samsung Galaxy S21 FE, `SM-G990E`, 120 Hz display |
+| OS | Android 16 (API 36), build `G990EXXSOHZH4` (`user/release-keys`) |
+| App build | `benchmarkRelease` (R8, debug-signed, not debuggable) from commit `36984ce` on `poweramp-polish` |
+| Macrobenchmark | `androidx.benchmark:benchmark-macro-junit4` 1.4.1, 5 iterations per test, run with `am instrument` (section 3) |
+| Conditions | Wi-Fi off, mobile data on; battery 85% and charging over USB; 33.1 °C; thermal status 0; power saver off; screen kept on with `svc power stayon usb` |
+| Result | `OK (12 tests)` in 3,586.8 s |
 
-| Mode | Iterations | Median Startup (`timeToInitialDisplayMs`) | Min (ms) | Max (ms) | Speedup vs None |
+**`Partial` compiles with library-shipped profiles only.** The repo has no app baseline profile (`app/src/release/generated/baselineProfiles` is empty), so `CompilationMode.Partial` here does not measure an app-specific profile.
+
+`StartupBenchmark`, `TabSwitchFrameTimingBenchmark` and `LibraryScrollBenchmark` touch the network only for whatever the screens load on their own (with Wi-Fi off, server artwork and lists come from cache or fail). `PlayerPanelBenchmark` plays on-device files only.
+
+### Table 1: Cold Startup Latency (`StartupBenchmark`), DEVICE
+
+| Mode | Iterations | Median `timeToInitialDisplay` (ms) | Min (ms) | Std dev (ms) | Max (ms) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| `CompilationMode.None` | 5 | NOT MEASURED | NOT MEASURED | NOT MEASURED | Baseline |
-| `CompilationMode.Partial` (Profile) | 5 | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| `CompilationMode.None` | 5 | 877.4 | 868.8 | 23.3 | NOT RECORDED |
+| `CompilationMode.Partial` | 5 | 881.3 | 859.6 | 24.7 | NOT RECORDED |
+
+- The two modes differ by 3.9 ms at the median, less than one standard deviation: no measurable difference.
+- `MainActivity` keeps the splash screen up for at least `MIN_SPLASH_DURATION_MS = 650` ms, so this metric cannot show startup gains below that floor.
+- The instrumentation output reports median, min and standard deviation only, so max is NOT RECORDED.
 
 ---
 
-### Table 2: Frame Timing & Pacing (`FrameTimingMetric`)
+### Table 2: Frame Timing (`FrameTimingMetric`), DEVICE
 
-| User Journey | Compilation Mode | Frame Time P50 (ms) | Frame Time P90 (ms) | Frame Time P99 (ms) | Missed Frame Deadlines (%) |
-| :--- | :--- | :---: | :---: | :---: | :---: |
-| **Tab Switching** (5 tabs) | `None` | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
-| **Tab Switching** (5 tabs) | `Partial` (Profile) | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
-| **Library List Fling** | `None` | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
-| **Library List Fling** | `Partial` (Profile) | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+`frameDurationCpuMs` is CPU time per frame. `frameOverrunMs` is how far a frame missed its deadline; negative means it finished early. Percentiles are over all frames of all 5 iterations. "Frames" is the median frame count per iteration (min / std dev).
+
+| Journey | Mode | Frames (min / sd) | CPU p50 | CPU p90 | CPU p95 | CPU p99 | Overrun p50 | Overrun p90 | Overrun p95 | Overrun p99 |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Tab switch (5 tabs) | `None` | 156 (154 / 1.1) | 4.2 | 16.9 | 21.0 | 29.0 | -0.7 | 12.9 | 19.9 | 38.3 |
+| Tab switch (5 tabs) | `Partial` | 156 (150 / 4.3) | 4.3 | 15.6 | 17.7 | 25.3 | -0.2 | 11.4 | 14.1 | 28.8 |
+| Library SONGS fling down + up | `None` | 63 (59 / 1.9) | 10.8 | 18.3 | 20.8 | 27.3 | 5.7 | 13.6 | 16.1 | 22.0 |
+| Library SONGS fling down + up | `Partial` | 63 (61 / 1.3) | 12.0 | 17.8 | 19.7 | 24.0 | 6.3 | 12.9 | 14.9 | 19.5 |
+| Player (a) open/close ×10 | `None` | 2044 (2012 / 15.8) | 6.2 | 11.5 | 13.7 | 21.7 | 1.3 | 6.7 | 9.2 | 23.5 |
+| Player (a) open/close ×10 | `Partial` | 2113 (2082 / 52.6) | 5.2 | 8.9 | 11.7 | 16.6 | -0.0 | 3.9 | 7.0 | 14.8 |
+| Player (b) skip next ×10, prev ×10 | `None` | 2023 (1947 / 50.5) | 6.0 | 10.0 | 11.6 | 17.5 | -0.1 | 5.5 | 9.0 | 28.6 |
+| Player (b) skip next ×10, prev ×10 | `Partial` | 1951 (1937 / 32.1) | 6.7 | 11.2 | 13.2 | 20.3 | 0.8 | 7.7 | 15.3 | 38.1 |
+| Player (c) Visualizer, FULL, 20 s | `None` | 1732 (1668 / 39.7) | 7.3 | 11.3 | 12.6 | 16.6 | 0.6 | 4.8 | 6.4 | 11.6 |
+| Player (c) Visualizer, FULL, 20 s | `Partial` | 1685 (1338 / 164.1) | 7.3 | 11.3 | 12.8 | 17.6 | 0.6 | 4.8 | 6.7 | 14.1 |
+
+All values in ms. Notes for reading them:
+- Journeys (a) and (b) include idle time (1 s settle pauses, 800 ms between skips), and frames keep coming while idle because the terminal title cursor blinks and the playing track's progress updates. Per-frame percentiles are still valid; total frame count is not a measure of animation length.
+- Visualizer `Partial` has one low iteration (1,338 frames against a 1,685 median). The cause was not investigated.
+- `None` vs `Partial` differences in this table are not evidence of a profile benefit (see the note above Table 1).
 
 ---
 
-### Table 3: JankStats Summary per Screen
+### Table 3: JankStats NowPlaying session, DEVICE
 
-| Screen Name | Test Duration / Action | Total Frames Rendered | Janky Frames Count | Jank Percentage (%) | Avg Frame Duration (ms) |
+Build: `:app` `benchmark` build type (JankStats on), installed with `adb install -r` over the run above; ART compilation state not controlled. Same device, OS and conditions as the baseline run. Session: WARP VISUALIZER art, FULL motion, first Library → `[ LOCAL MUSIC ]` track playing, full player open for 60 s (15:12:43.8 → 15:13:44.0).
+
+The window is the difference between two cumulative `Summary` lines, both tagged `Screen=NowPlaying`:
+
+```text
+15:12:43.813 I/TerminusJank( 6865): Summary | Frames: 1200 | Jank: 8 (0.7%) | Avg Duration: 3.2ms | States: [Screen=NowPlaying]
+15:13:44.028 I/TerminusJank( 6865): Summary | Frames: 7440 | Jank: 10 (0.2%) | Avg Duration: 2.5ms | States: [Screen=NowPlaying]
+```
+
+| Screen | Window | Frames | Janky frames | Jank % | Avg frame duration (ms) |
 | :--- | :--- | :---: | :---: | :---: | :---: |
-| `Library` | Continuous Fling (10s) | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
-| `NowPlaying` | Player open + visualizer (10s) | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
-| `Home` | Fling smart mixes | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
-| `Playlists` | Scroll playlist cards | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
-| `Settings` | Expand dropdowns | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| `NowPlaying` | Visualizer playing, 60.2 s | 6,240 | 2 (42 ms, 18 ms) | 0.03% | 2.30–2.44 |
+| `Library` | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| `Home` | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| `Playlists` | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+| `Settings` | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED | NOT MEASURED |
+
+The average is a range because the log prints cumulative averages rounded to 0.1 ms; the range is the full window average implied by those rounding bounds. The two janky frames are the `Jank frame: 42ms` (15:13:02.800) and `Jank frame: 18ms` (15:13:18.092) warnings inside the window.
 
 ---
 
