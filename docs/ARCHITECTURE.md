@@ -35,7 +35,7 @@ flowchart TD
         MS["MusicService (MediaSessionService)"]
         EXO["ExoPlayer (Audio Engine)"]
         SES["MediaSession & System Notification"]
-        EQ["EqualizerController"]
+        EQ["TerminusEqualizerAudioProcessor"]
         TRK["ActivePlayTracker"]
 
         PC <-->|"MediaBrowser IPC (SessionToken)"| MS
@@ -125,7 +125,7 @@ flowchart TD
   - `MusicService`: Runs as a bound/foreground `MediaSessionService`. Manages the `ExoPlayer` instance, media notifications, lockscreen playback controls, audio focus loss/ducking, and crossfading.
   - `PlaybackController`: Singleton controller injected into UI ViewModels. Communicates with `MusicService` via AndroidX `MediaController` across process/thread boundaries. Exposes observable `nowPlaying: StateFlow<NowPlayingState>`.
   - `ActivePlayTracker`: Granular listening session timer that tracks elapsed milliseconds and flushes play events to `StatsRepository` when qualification thresholds are met.
-  - `EqualizerController`: Direct interface with system audio session bands and gains.
+  - `TerminusEqualizerAudioProcessor`: 5-band biquad DSP equalizer AudioProcessor positioned in the ExoPlayer AudioSink chain.
 
 ### Data & Provider Layer (`data`)
 - **Key Components**:

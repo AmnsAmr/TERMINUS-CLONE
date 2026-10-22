@@ -14,8 +14,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
+import androidx.compose.runtime.Immutable
 import javax.inject.Inject
 
+@Immutable
 data class PlaylistDownloadDialogState(
     val playlistId: String? = null,
     val isLoading: Boolean = false,

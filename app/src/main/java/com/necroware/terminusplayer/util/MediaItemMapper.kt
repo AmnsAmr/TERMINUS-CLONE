@@ -2,8 +2,10 @@ package com.necroware.terminusplayer.util
 
 import android.net.Uri
 import android.os.Bundle
+import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.util.UnstableApi
 import com.necroware.terminusplayer.data.model.Song
 
 const val EXTERNAL_AUDIO_MEDIA_ID_PREFIX = "external-audio:"
@@ -14,6 +16,7 @@ private const val EXTRA_PROVIDER_ID = "com.necroware.terminusplayer.PROVIDER_ID"
 private const val EXTRA_FOLDER_PATH = "com.necroware.terminusplayer.FOLDER_PATH"
 private const val EXTRA_STREAM_OFFSET_MS = "com.necroware.terminusplayer.STREAM_OFFSET_MS"
 
+@OptIn(UnstableApi::class)
 fun Song.toMediaItem(): MediaItem {
     val extras = Bundle().apply {
         putString(EXTRA_ALBUM_ID, albumId)

@@ -561,7 +561,6 @@ internal fun NowPlayingScreen(
                 channelCount = if (preparingSelection) 2 else nowPlaying.channelCount,
                 bufferRemainingSec = bufferAheadSec,
                 serverPingMs = if (preparingSelection) null else serverPingMs,
-                preferHardwareDecoder = prefs.preferHardwareDecoder,
                 visualizerStyle = prefs.visualizerStyle,
                 spectrum = spectrum,
                 visualizerActive = visualizerActive,

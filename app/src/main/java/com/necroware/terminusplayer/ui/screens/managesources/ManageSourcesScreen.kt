@@ -72,7 +72,11 @@ fun ManageSourcesScreen(
         }
 
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(folders) { folder ->
+            items(
+                items = folders,
+                key = { it },
+                contentType = { "folder_source" }
+            ) { folder ->
                 val isIncluded = !excludedFolders.contains(folder)
                 TerminalBorder(modifier = Modifier.fillMaxWidth()) {
                     Row(

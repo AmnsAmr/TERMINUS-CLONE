@@ -138,12 +138,13 @@ class AudioSpectrum internal constructor(
                 sum += if (bytesPerSample == 2) {
                     ((buffer.get(at + 1).toInt() shl 8) or (buffer.get(at).toInt() and 0xFF)) / 32768f
                 } else {
-                    java.lang.Float.intBitsToFloat(
+                    val f = java.lang.Float.intBitsToFloat(
                         (buffer.get(at).toInt() and 0xFF) or
                             ((buffer.get(at + 1).toInt() and 0xFF) shl 8) or
                             ((buffer.get(at + 2).toInt() and 0xFF) shl 16) or
-                            (buffer.get(at + 3).toInt() shl 24)
+                            ((buffer.get(at + 3).toInt() and 0xFF) shl 24)
                     )
+                    if (f.isNaN() || f.isInfinite()) 0f else f
                 }
             }
             ring[(written and RING_MASK).toInt()] = sum / channels

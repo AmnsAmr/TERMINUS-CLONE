@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -118,7 +119,11 @@ fun HomeScreen(
                         contentPadding = PaddingValues(horizontal = 20.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        items(state.genreMixes, key = { it.genre }) { mix ->
+                        items(
+                            items = state.genreMixes,
+                            key = { it.genre },
+                            contentType = { "genre_mix" }
+                        ) { mix ->
                             GenreMixCard(mix) {
                                 val queue = mix.songs.shuffled()
                                 queue.firstOrNull()?.let { onSongClick(it, queue) }
@@ -200,7 +205,11 @@ fun HomeScreen(
                     contentPadding = PaddingValues(horizontal = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(state.recentlyPlayed, key = { it.id }) { song ->
+                    items(
+                        items = state.recentlyPlayed,
+                        key = { it.id },
+                        contentType = { "recently_played_song" }
+                    ) { song ->
                         RecentlyPlayedChip(
                             song = song,
                             onClick = { onSongClick(song, state.recentlyPlayed) }
@@ -307,9 +316,14 @@ private fun YourMixCard(mix: List<Song>, onPlayMix: () -> Unit) {
                 }
             }
 
-            if (mix.isNotEmpty()) {
+            val topSongs = remember(mix) { mix.take(10) }
+            if (topSongs.isNotEmpty()) {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(mix.take(10), key = { it.id }) { song ->
+                    items(
+                        items = topSongs,
+                        key = { it.id },
+                        contentType = { "your_mix_song" }
+                    ) { song ->
                         SongArt(uriString = song.artworkUri?.takeIf { it.isNotBlank() } ?: song.uriString, size = 72.dp)
                     }
                 }
