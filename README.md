@@ -419,6 +419,17 @@ This includes:
 
 Audio focus handling was specifically addressed during the 1.4.0 finalization pass.
 
+### 5-Band Peaking DSP Equalizer
+
+Terminus features a custom, high-fidelity digital signal processing (DSP) equalizer implemented as a Media3 `AudioProcessor` (`TerminusEqualizerAudioProcessor`):
+
+* **Filter Design**: 5 peaking bell filters derived from Robert Bristow-Johnson's Audio EQ Cookbook centered at **60 Hz**, **230 Hz**, **910 Hz**, **3.6 kHz**, and **14 kHz** with quality factors ($Q$) `[0.8, 1.0, 1.0, 1.0, 0.8]`. Filters execute in **Direct Form II Transposed** with all coefficients and delay registers computed in 64-bit IEEE `Double` precision to eliminate low-frequency quantization noise.
+* **Rate Guard**: Frequencies $\ge 0.40 \times \text{sampleRate}$ are automatically guarded against Nyquist warping and pass through untouched.
+* **Headroom Pre-attenuation**: Boosting audio frequencies consumes dynamic range. To protect against inter-band overshoot without making single-band boosts sound quiet, Terminus applies a smoothed partial pre-cut of $-0.35 \times \max(\text{boost}, 0\text{ dB})$.
+* **Soft Waveshaping**: For extreme signal peaks on aggressively mastered tracks, an asymptotic tanh soft-clipper engages smoothly above $0.95$ amplitude ($|x| > 0.95$), preserving audio transparency without harsh DAC clipping.
+* **Always-Active Design & Seamless Toggling**: Media3 pipelines cannot dynamically add or remove audio processors mid-stream without flushing or reconfiguring the audio sink. `TerminusEqualizerAudioProcessor` remains permanently active in the audio chain. When disabled, band gains and pre-attenuation smoothly glide to 0 dB across 32-sample blocks ($25\text{ ms}$ time constant) without audible clicks or gaps. Once filter registers settle below $10^{-7}$, a bit-identical flat-skip bypass activates with zero DSP overhead.
+* **Real Audio Monitor**: The playback HUD displays real stream metrics from the active track format (actual MIME/codec, sample rate, bit depth, and channel count).
+
 ---
 
 # Animations and Motion
@@ -588,6 +599,28 @@ The guiding rule is:
 > **Animate what communicates information. Do not animate everything simply because it can move.**
 
 The motion modes provide another layer of control for devices or users that prefer reduced visual activity.
+
+### Benchmarking & Performance Profiling
+
+Terminus includes an automated Macrobenchmark suite (`:benchmark`) and Compose compiler metrics tooling:
+
+* **Startup & Frame Timing Benchmarks**:
+  ```bash
+  # Cold startup latency (timeToInitialDisplayMs)
+  ./gradlew :benchmark:connectedBenchmarkReleaseAndroidTest \
+    -Pandroid.testInstrumentationRunnerArguments.class=com.necroware.terminusplayer.benchmark.StartupBenchmark
+
+  # Frame timing & tab switch jank
+  ./gradlew :benchmark:connectedBenchmarkReleaseAndroidTest \
+    -Pandroid.testInstrumentationRunnerArguments.class=com.necroware.terminusplayer.benchmark.TabSwitchFrameTimingBenchmark
+  ```
+* **Compose Compiler Stability Metrics**:
+  ```bash
+  ./gradlew assembleDebug -PenableComposeCompilerReports=true
+  ```
+* **Detailed Guides**:
+  * [Performance Measurement & Profiling Guide](docs/PERFORMANCE.md)
+  * [Manual Device Test Checklist](docs/DEVICE_TEST_CHECKLIST.md)
 
 ---
 

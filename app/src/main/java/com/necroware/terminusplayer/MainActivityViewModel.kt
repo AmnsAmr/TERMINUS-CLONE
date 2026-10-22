@@ -1,5 +1,6 @@
 package com.necroware.terminusplayer
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.necroware.terminusplayer.data.prefs.ThemePresetId
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+@Immutable
 data class MainActivityThemeState(
     val themeId: ThemePresetId = ThemePresetId.TERMINAL,
     val colorOverrides: Map<ThemeColorRole, String> = emptyMap(),

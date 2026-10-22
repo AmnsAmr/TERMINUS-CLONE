@@ -14,6 +14,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.runtime.Immutable
 import com.necroware.terminusplayer.data.prefs.MotionPreference
 
 /** Shared easing curves. Every motion surface should pick one of these instead of a local curve. */
@@ -23,6 +24,7 @@ internal object MotionEasing {
 }
 
 /** Resolved transition values keep the four user choices behaviorally distinct. */
+@Immutable
 internal data class MotionTransitionSpec(
     val durationMs: Int,
     val slideFraction: Float,
@@ -39,6 +41,7 @@ internal data class MotionTransitionSpec(
  * Settling behavior for the persistent player panel. When [animated] is false the
  * panel jumps straight to its target, which is what OFF and disabled system animations need.
  */
+@Immutable
 internal data class PanelMotionSpec(
     val animated: Boolean,
     val dampingRatio: Float,
@@ -50,6 +53,7 @@ internal data class PanelMotionSpec(
 }
 
 /** Every motion value one preference level resolves to. */
+@Immutable
 internal data class MotionTokens(
     val transition: MotionTransitionSpec,
     /** Duration for content swaps such as artwork or track metadata. 0 means swap immediately. */
@@ -70,6 +74,24 @@ internal fun motionTransitionSpec(
     MotionPreference.OFF -> MotionTransitionSpec(durationMs = 55, slideFraction = 0f, fade = true)
     MotionPreference.SYSTEM -> if (systemAnimationsEnabled) {
         MotionTransitionSpec(durationMs = 200, slideFraction = 0.045f, fade = true)
+    } else {
+        MotionTransitionSpec(durationMs = 0, slideFraction = 0f, fade = false)
+    }
+}
+
+/**
+ * Short, responsive transition specifically tuned for bottom-nav tab switches:
+ * a subtle slide (8-12%) combined with a smooth fade (200-220ms).
+ */
+internal fun tabTransitionSpec(
+    preference: MotionPreference,
+    systemAnimationsEnabled: Boolean
+): MotionTransitionSpec = when (preference) {
+    MotionPreference.FULL -> MotionTransitionSpec(durationMs = 220, slideFraction = 0.10f, fade = true)
+    MotionPreference.MEDIUM -> MotionTransitionSpec(durationMs = 160, slideFraction = 0.06f, fade = true)
+    MotionPreference.OFF -> MotionTransitionSpec(durationMs = 55, slideFraction = 0f, fade = true)
+    MotionPreference.SYSTEM -> if (systemAnimationsEnabled) {
+        MotionTransitionSpec(durationMs = 200, slideFraction = 0.08f, fade = true)
     } else {
         MotionTransitionSpec(durationMs = 0, slideFraction = 0f, fade = false)
     }

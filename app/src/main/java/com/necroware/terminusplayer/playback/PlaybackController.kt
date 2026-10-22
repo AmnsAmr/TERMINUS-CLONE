@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -77,6 +78,7 @@ data class NowPlayingState(
  * Position is NOT polled continuously here — screens should poll on their
  * own coroutine while visible to avoid unnecessary background work.
  */
+@OptIn(UnstableApi::class)
 @Singleton
 class PlaybackController @Inject constructor(
     @ApplicationContext private val context: Context,

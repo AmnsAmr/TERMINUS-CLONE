@@ -54,6 +54,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -233,7 +234,7 @@ fun LibraryScreen(
                 modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(LibraryTab.entries, key = { it.name }) { tab ->
+                items(LibraryTab.entries, key = { it.name }, contentType = { "library_tab" }) { tab ->
                     val selected = tab == selectedTab
                     TerminalActionText(
                         text = "[ ${tab.label} ]",
@@ -300,7 +301,8 @@ fun LibraryScreen(
                         getCachedPreparedSongList = viewModel::cachedPreparedSongList,
                         rememberPreparedSongList = viewModel::rememberPreparedSongList,
                         currentlyPlayingSongId = currentPlayingSongId,
-                        onListPrepared = { initialSongListPrepared = true }
+                        onListPrepared = { initialSongListPrepared = true },
+                        listState = viewModel.songsListState
                     )
                 }
                 LibraryTab.LOCAL_MUSIC -> {
@@ -317,7 +319,8 @@ fun LibraryScreen(
                             onPlayNext = viewModel::playNext,
                             getCachedPreparedSongList = viewModel::cachedPreparedSongList,
                             rememberPreparedSongList = viewModel::rememberPreparedSongList,
-                            currentlyPlayingSongId = currentPlayingSongId
+                            currentlyPlayingSongId = currentPlayingSongId,
+                            listState = viewModel.songsListState
                         )
                     }
                 }
@@ -325,14 +328,14 @@ fun LibraryScreen(
                     if (albums.isEmpty()) {
                         TerminalState(title = "NO ALBUMS FOUND", detail = "Albums will appear after your library is indexed.")
                     } else {
-                        val listState = rememberLazyListState()
+                        val listState = viewModel.albumsListState
                         Box(Modifier.weight(1f)) {
                             LazyColumn(
                                 state = listState,
                                 modifier = Modifier.fillMaxSize(),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                items(sortedAlbums, key = { it.title }) { album ->
+                                items(sortedAlbums, key = { it.title }, contentType = { "album_card" }) { album ->
                                     TerminalBorder(
                                         modifier = Modifier.fillMaxWidth().clickable { onAlbumClick(album.title) }
                                     ) {
@@ -363,14 +366,14 @@ fun LibraryScreen(
                     if (artists.isEmpty()) {
                         TerminalState(title = "NO ARTISTS FOUND", detail = "Artists will appear after your library is indexed.")
                     } else {
-                        val listState = rememberLazyListState()
+                        val listState = viewModel.artistsListState
                         Box(Modifier.weight(1f)) {
                             LazyColumn(
                                 state = listState,
                                 modifier = Modifier.fillMaxSize(),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                items(sortedArtists, key = { it.name }) { artist ->
+                                items(sortedArtists, key = { it.name }, contentType = { "artist_card" }) { artist ->
                                     TerminalBorder(
                                         modifier = Modifier.fillMaxWidth().clickable { onArtistClick(artist.name) }
                                     ) {
@@ -627,7 +630,7 @@ fun LibraryScreen(
                                     modifier = Modifier.fillMaxSize(),
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    items(youTubeTracks, key = { it.id }) { song ->
+                                    items(youTubeTracks, key = { it.id }, contentType = { "youtube_track" }) { song ->
                                         LibrarySongRow(
                                             song = song,
                                             isSelected = selectedSongs.contains(song),
@@ -812,7 +815,7 @@ fun LibraryScreen(
                         Text("ADD ${selectedSongs.size} SONGS TO PLAYLIST", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                         
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.height(200.dp)) {
-                            items(playlists, key = { it.id }) { playlist ->
+                            items(playlists, key = { it.id }, contentType = { "playlist_picker_item" }) { playlist ->
                                 TerminalActionText(
                                     "[ ${playlist.name} ]",
                                     color = MaterialTheme.colorScheme.primary,
@@ -867,7 +870,7 @@ fun LibraryScreen(
                                 verticalArrangement = Arrangement.spacedBy(4.dp),
                                 modifier = Modifier.height(240.dp)
                             ) {
-                                items(playlists, key = { it.id }) { playlist ->
+                                items(playlists, key = { it.id }, contentType = { "batch_playlist_picker_item" }) { playlist ->
                                     TerminalActionText(
                                         text = "[ ${playlist.name} ]",
                                         color = MaterialTheme.colorScheme.primary,
@@ -907,9 +910,9 @@ private fun SongList(
     getCachedPreparedSongList: (List<Song>, SortField) -> PreparedSongList?,
     rememberPreparedSongList: (PreparedSongList) -> Unit,
     currentlyPlayingSongId: String? = null,
-    onListPrepared: () -> Unit = {}
+    onListPrepared: () -> Unit = {},
+    listState: LazyListState = rememberLazyListState()
 ) {
-    val listState = rememberLazyListState()
     val haptic = LocalHapticFeedback.current
     val preparedData by produceState(
         getCachedPreparedSongList(songs, sortOrder.field), songs, sortOrder.field
@@ -945,7 +948,7 @@ private fun SongList(
         value = prepared
         rememberPreparedSongList(prepared)
     }
-    val prepared = preparedData?.takeIf { it.sourceSongs === songs && it.sortField == sortOrder.field }
+    val prepared = preparedData?.takeIf { (it.sourceSongs === songs || it.sourceSongs == songs) && it.sortField == sortOrder.field }
     LaunchedEffect(prepared, songs.isEmpty()) {
         if (prepared != null || songs.isEmpty()) onListPrepared()
     }
@@ -980,7 +983,7 @@ private fun SongList(
             ) {
                 prepared.sections.forEach { section ->
                     section.label?.let { label ->
-                        stickyHeader(key = "section:$label") {
+                        stickyHeader(key = "section:$label", contentType = "section_header") {
                             Text(
                                 text = "> $label",
                                 style = MaterialTheme.typography.labelSmall,
@@ -991,7 +994,7 @@ private fun SongList(
                             )
                         }
                     }
-                    items(section.songs, key = { it.id }) { song ->
+                    items(section.songs, key = { it.id }, contentType = { "library_song_row" }) { song ->
                         LibrarySongRow(
                             song = song,
                             isSelected = selectedSongs.contains(song),
@@ -1025,8 +1028,10 @@ private fun SongList(
     }
 }
 
+@Immutable
 internal data class SongListSection(val label: String?, val songs: List<Song>)
 
+@Immutable
 internal data class PreparedSongList(
     val sourceSongs: List<Song>,
     val sortField: SortField,

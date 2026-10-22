@@ -54,6 +54,8 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
         state.downloadQueue.filter { it.state in setOf("WAITING", "FAILED", "DOWNLOADING") }
             .mapIndexed { index, item -> item.songId to index + 1 }.toMap()
     }
+    val uploadQueueDisplay = remember(state.uploadQueue) { state.uploadQueue.asReversed().take(50) }
+    val downloadQueueDisplay = remember(state.downloadQueue) { state.downloadQueue.asReversed().take(50) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
@@ -76,7 +78,7 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
         }
 
         if (state.insights.isNotEmpty()) {
-            items(state.insights) { insight ->
+            items(state.insights, key = { it }, contentType = { "insight" }) { insight ->
                 TerminalBorder(modifier = Modifier.fillMaxWidth()) {
                     Text(
                         text = insight,
@@ -223,7 +225,11 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
         }
         if (showDownloadEvents && state.downloadQueue.isNotEmpty()) {
             item { TransferQueueActions(state.downloadQueue, state.transfersPaused, viewModel::pauseTransfers, viewModel::resumeTransfers, viewModel::cancelAllTransfers, viewModel::retryAllFailedUploads) }
-            itemsIndexed(state.downloadQueue.asReversed().take(50), key = { _, row -> "download-${row.songId}" }) { index, event ->
+            itemsIndexed(
+                items = downloadQueueDisplay,
+                key = { _, row -> "download-${row.songId}" },
+                contentType = { _, _ -> "download_queue_item" }
+            ) { index, event ->
                 TransferQueueRow(event, downloadPositions[event.songId] ?: 0, state.transferWorkerState, "DOWNLOAD", onRetry = { viewModel.retryFailedDownload(event.songId) }, onRemove = { viewModel.removeTransfer(event.songId) })
             }
         }
@@ -241,7 +247,11 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
         }
         if (showUploadEvents && state.uploadQueue.isNotEmpty()) {
             item { TransferQueueActions(state.uploadQueue, state.transfersPaused, viewModel::pauseTransfers, viewModel::resumeTransfers, viewModel::cancelAllTransfers, viewModel::retryAllFailedUploads) }
-            itemsIndexed(state.uploadQueue.asReversed().take(50), key = { _, row -> "upload-${row.songId}" }) { index, event ->
+            itemsIndexed(
+                items = uploadQueueDisplay,
+                key = { _, row -> "upload-${row.songId}" },
+                contentType = { _, _ -> "upload_queue_item" }
+            ) { index, event ->
                 TransferQueueRow(event, uploadPositions[event.songId] ?: 0, state.transferWorkerState, "UPLOAD", onRetry = { viewModel.retryFailedUpload(event.songId) }, onRemove = { viewModel.removeTransfer(event.songId) })
             }
         }
@@ -275,7 +285,11 @@ fun StatsScreen(viewModel: StatsViewModel = hiltViewModel()) {
             }
         }
 
-        itemsIndexed(state.topCategoryItems, key = { _, item -> item.id }) { index, item ->
+        itemsIndexed(
+            items = state.topCategoryItems,
+            key = { _, item -> item.id },
+            contentType = { _, _ -> "top_category_item" }
+        ) { index, item ->
             TopCategoryRow(item, index + 1, state.topCategoryItems.firstOrNull()?.playCount ?: 0)
         }
     }

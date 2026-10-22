@@ -27,6 +27,7 @@ import com.necroware.terminusplayer.data.prefs.HudTelemetryMode
 import com.necroware.terminusplayer.data.prefs.VisualizerStyle
 import com.necroware.terminusplayer.playback.SpectrumFrame
 import com.necroware.terminusplayer.ui.components.visualizer.SpectrumVisualizer
+import com.necroware.terminusplayer.util.buildFormatString
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
@@ -50,7 +51,6 @@ fun AudioMonitorCard(
     channelCount: Int = 2,
     bufferRemainingSec: Long = 0L,
     serverPingMs: Long? = null,
-    preferHardwareDecoder: Boolean = true,
     visualizerStyle: VisualizerStyle = VisualizerStyle.BARS,
     /** Live spectrum; read only while [visualizerActive]. */
     spectrum: State<SpectrumFrame> = remember { mutableStateOf(SpectrumFrame.Silent) },
@@ -107,22 +107,35 @@ fun AudioMonitorCard(
             }
 
             if (telemetryMode == HudTelemetryMode.EXPANDED) {
-                val decoderName = if (preferHardwareDecoder) "HW.DSP ($codecLabel)" else "c2.android.${codecLabel.lowercase()}.decoder"
+                val streamInfo = buildFormatString(
+                    codec = codecLabel,
+                    sampleRate = sampleRateLabel,
+                    channelCount = channelCount,
+                    bitDepth = bitDepthLabel
+                )
                 val channelLabel = when (channelCount) {
                     1 -> "1ch (MONO)"
                     2 -> "2ch (STEREO)"
                     6 -> "5.1 SURROUND"
                     else -> if (channelCount > 0) "${channelCount}ch" else "—"
                 }
-                MonitorRow("decoder", decoderName, "")
-                MonitorRow("fmt", codecLabel, "bit: $bitDepthLabel-bit")
+                val bitDepthText = if (bitDepthLabel.isBlank() || bitDepthLabel == "—") {
+                    "bit: —"
+                } else if (bitDepthLabel.endsWith("-bit", ignoreCase = true) || bitDepthLabel.endsWith("bit", ignoreCase = true)) {
+                    "bit: $bitDepthLabel"
+                } else {
+                    "bit: $bitDepthLabel-bit"
+                }
+                MonitorRow("stream", streamInfo, "")
+                MonitorRow("fmt", codecLabel, bitDepthText)
                 MonitorRow("rate", sampleRateLabel, "kbps: $kbpsLabel")
                 MonitorRow("session", if (audioSessionId > 0) "#$audioSessionId" else "—", channelLabel)
                 MonitorRow("buffer", "+${bufferRemainingSec}s", "size: $sizeLabel")
                 MonitorRow("server ping", serverPingMs?.let { "${it}ms" } ?: "OFFLINE / LOCAL", "VOL ${readout.volumePercent}%")
                 MonitorRow("device", readout.audioDevice, "CPU: ${readout.cpuPercent}%")
             } else {
-                MonitorRow("fmt", codecLabel, "bit: $bitDepthLabel")
+                val bitDepthText = if (bitDepthLabel.isBlank() || bitDepthLabel == "—") "bit: —" else "bit: $bitDepthLabel"
+                MonitorRow("fmt", codecLabel, bitDepthText)
                 MonitorRow("kbps", kbpsLabel, "size: $sizeLabel")
 
                 Box(

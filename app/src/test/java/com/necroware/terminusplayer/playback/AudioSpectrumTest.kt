@@ -1,6 +1,7 @@
 package com.necroware.terminusplayer.playback
 
 import androidx.media3.common.C
+import androidx.media3.common.audio.AudioProcessor
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -79,12 +80,39 @@ class AudioSpectrumTest {
         }
 
     /** 5 ms of stereo PCM16 sine, little-endian like Android's audio pipeline. */
-    private fun pcmChunk(): ByteBuffer {
-        val frames = 220
-        val buffer = ByteBuffer.allocate(frames * 4).order(ByteOrder.LITTLE_ENDIAN)
+    private fun pcmChunk(): ByteBuffer = pcm16Chunk()
+
+    private fun pcm16Chunk(
+        freq: Double = 440.0,
+        rate: Int = 44_100,
+        amp: Float = 0.5f,
+        channels: Int = 2,
+        frames: Int = 220
+    ): ByteBuffer {
+        val buffer = ByteBuffer.allocate(frames * channels * 2).order(ByteOrder.LITTLE_ENDIAN)
         for (i in 0 until frames) {
-            val sample = (16_000 * sin(2 * PI * 440 * i / 44_100)).toInt().toShort()
-            buffer.putShort(sample).putShort(sample)
+            val sample = (amp * 32_767f * sin(2 * PI * freq * i / rate)).toInt().toShort()
+            for (c in 0 until channels) {
+                buffer.putShort(sample)
+            }
+        }
+        buffer.flip()
+        return buffer
+    }
+
+    private fun pcmFloatChunk(
+        freq: Double = 440.0,
+        rate: Int = 44_100,
+        amp: Float = 0.5f,
+        channels: Int = 2,
+        frames: Int = 220
+    ): ByteBuffer {
+        val buffer = ByteBuffer.allocate(frames * channels * 4).order(ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until frames) {
+            val sample = (amp * sin(2 * PI * freq * i / rate)).toFloat()
+            for (c in 0 until channels) {
+                buffer.putFloat(sample)
+            }
         }
         buffer.flip()
         return buffer
@@ -173,5 +201,146 @@ class AudioSpectrumTest {
         // Still loud on the next frames: inside the cooldown.
         assertFalse(detector.update(loud))
         assertFalse(detector.update(loud))
+    }
+
+    // ---- float PCM and equalizer pipeline integration ----
+
+    @Test
+    fun sine440HzLandsInSameBandForPcm16AndFloatWithSimilarLevel() = runTest {
+        // Run 16-bit PCM test
+        val spec16 = AudioSpectrum(backgroundScope, AudioSpectrum.FRAME_INTERVAL_MS).also {
+            it.flush(44_100, 2, C.ENCODING_PCM_16BIT)
+            it.setPlaying(true)
+        }
+        val frames16 = mutableListOf<SpectrumFrame>()
+        backgroundScope.launch { spec16.frames.toList(frames16) }
+        runCurrent()
+
+        val chunk16 = pcm16Chunk(freq = 440.0, amp = 0.5f, channels = 2)
+        repeat(30) {
+            spec16.handleBuffer(chunk16.duplicate())
+            advanceTimeBy(5)
+        }
+        runCurrent()
+        val frame16 = frames16.last { it.sequence > 0 }
+        val band16 = frame16.bands.indices.maxBy { frame16.bands[it] }
+        val level16 = frame16.level
+
+        // Run Float PCM test (stereo)
+        val specFloat = AudioSpectrum(backgroundScope, AudioSpectrum.FRAME_INTERVAL_MS).also {
+            it.flush(44_100, 2, C.ENCODING_PCM_FLOAT)
+            it.setPlaying(true)
+        }
+        val framesFloat = mutableListOf<SpectrumFrame>()
+        backgroundScope.launch { specFloat.frames.toList(framesFloat) }
+        runCurrent()
+
+        val chunkFloat = pcmFloatChunk(freq = 440.0, amp = 0.5f, channels = 2)
+        repeat(30) {
+            specFloat.handleBuffer(chunkFloat.duplicate())
+            advanceTimeBy(5)
+        }
+        runCurrent()
+        val frameFloat = framesFloat.last { it.sequence > 0 }
+        val bandFloat = frameFloat.bands.indices.maxBy { frameFloat.bands[it] }
+        val levelFloat = frameFloat.level
+
+        assertEquals("Loudest band index must match between 16-bit and float PCM", band16, bandFloat)
+        assertEquals("RMS level must be similar between 16-bit and float PCM", level16, levelFloat, 0.05f)
+        assertTrue("RMS level should be non-zero", levelFloat > 0.1f)
+    }
+
+    @Test
+    fun monoAndMultichannelFloatBuffersDoNotCrash() = runTest {
+        // Mono float
+        val specMono = AudioSpectrum(backgroundScope, AudioSpectrum.FRAME_INTERVAL_MS).also {
+            it.flush(44_100, 1, C.ENCODING_PCM_FLOAT)
+            it.setPlaying(true)
+        }
+        val framesMono = mutableListOf<SpectrumFrame>()
+        backgroundScope.launch { specMono.frames.toList(framesMono) }
+        runCurrent()
+
+        val chunkMono = pcmFloatChunk(freq = 440.0, channels = 1)
+        repeat(20) {
+            specMono.handleBuffer(chunkMono.duplicate())
+            advanceTimeBy(5)
+        }
+        runCurrent()
+        val frameMono = framesMono.last { it.sequence > 0 }
+        assertTrue("Mono published valid level", frameMono.level > 0f)
+
+        // 6-channel 5.1 surround float
+        val specSurround = AudioSpectrum(backgroundScope, AudioSpectrum.FRAME_INTERVAL_MS).also {
+            it.flush(44_100, 6, C.ENCODING_PCM_FLOAT)
+            it.setPlaying(true)
+        }
+        val framesSurround = mutableListOf<SpectrumFrame>()
+        backgroundScope.launch { specSurround.frames.toList(framesSurround) }
+        runCurrent()
+
+        val chunkSurround = pcmFloatChunk(freq = 440.0, channels = 6)
+        repeat(20) {
+            specSurround.handleBuffer(chunkSurround.duplicate())
+            advanceTimeBy(5)
+        }
+        runCurrent()
+        val frameSurround = framesSurround.last { it.sequence > 0 }
+        assertTrue("Multichannel published valid level", frameSurround.level > 0f)
+    }
+
+    @Test
+    fun equalizerChainedIntoSpectrumSinkReflectsBoostedBand() = runTest {
+        val rate = 44_100
+        val channels = 2
+        val eq = TerminusEqualizerAudioProcessor()
+        eq.configure(AudioProcessor.AudioFormat(rate, channels, C.ENCODING_PCM_FLOAT))
+        eq.flush()
+
+        val spectrum = AudioSpectrum(backgroundScope, AudioSpectrum.FRAME_INTERVAL_MS).also {
+            it.flush(rate, channels, C.ENCODING_PCM_FLOAT)
+            it.setPlaying(true)
+        }
+        val frames = mutableListOf<SpectrumFrame>()
+        backgroundScope.launch { spectrum.frames.toList(frames) }
+        runCurrent()
+
+        var sampleIndex = 0L
+        fun feedContinuousChunk(freq: Double = 60.0, amp: Float = 0.2f) {
+            val framesCount = 220
+            val buffer = ByteBuffer.allocate(framesCount * channels * 4).order(ByteOrder.LITTLE_ENDIAN)
+            for (i in 0 until framesCount) {
+                val sample = (amp * sin(2.0 * Math.PI * freq * (sampleIndex++) / rate)).toFloat()
+                for (c in 0 until channels) buffer.putFloat(sample)
+            }
+            buffer.flip()
+            eq.queueInput(buffer)
+            val output = eq.output
+            spectrum.handleBuffer(output)
+        }
+
+        // Part 1: Feed continuous 60 Hz with EQ flat
+        repeat(50) {
+            feedContinuousChunk(60.0, 0.2f)
+            advanceTimeBy(5)
+        }
+        runCurrent()
+        val flatFrame = frames.last { it.sequence > 0 }
+        val flatLevel = flatFrame.level
+
+        // Part 2: Boost Band 0 (60 Hz) by +12 dB
+        eq.setParameters(EqualizerParameters(enabled = true, gainsDb = listOf(12f, 0f, 0f, 0f, 0f)))
+        repeat(50) {
+            feedContinuousChunk(60.0, 0.2f)
+            advanceTimeBy(5)
+        }
+        runCurrent()
+        val boostedFrame = frames.last { it.sequence > 0 }
+        val boostedLevel = boostedFrame.level
+
+        assertTrue(
+            "Spectrum level with +12 dB boost ($boostedLevel) must be higher than flat ($flatLevel)",
+            boostedLevel > flatLevel * 1.5f
+        )
     }
 }
