@@ -122,7 +122,7 @@ fun AlbumDetailScreen(
             }
         }
 
-        items(state.songs, key = { it.id }) { song ->
+        items(state.songs, key = { it.id }, contentType = { "album_track_row" }) { song ->
             AlbumTrackRow(
                 song = song,
                 isTopTrack = song.title == state.topSongTitle,

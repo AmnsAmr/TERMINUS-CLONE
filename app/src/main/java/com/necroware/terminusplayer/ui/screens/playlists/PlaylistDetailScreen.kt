@@ -331,7 +331,11 @@ fun PlaylistDetailScreen(
             }
         }
 
-        itemsIndexed(filteredSongs, key = { index, song -> "track-$index-${song.id}" }) { index, song ->
+        itemsIndexed(
+            items = filteredSongs,
+            key = { index, song -> "track-$index-${song.id}" },
+            contentType = { _, _ -> "playlist_song_row" }
+        ) { index, song ->
             LibrarySongRow(
                         song = song,
                         isSelected = song.id in selectedIds,
@@ -404,7 +408,7 @@ fun PlaylistDetailScreen(
                             Text("No other playlists are available.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         } else {
                             LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.height(240.dp)) {
-                                items(availablePlaylists, key = { it.id }) { playlist ->
+                                items(availablePlaylists, key = { it.id }, contentType = { "available_playlist" }) { playlist ->
                                     TerminalActionText(
                                         "[ ${playlist.name} ]",
                                         color = MaterialTheme.colorScheme.primary,
@@ -523,7 +527,7 @@ fun PlaylistDetailScreen(
                             Text("No other playlists are available.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         } else {
                             LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.height(240.dp)) {
-                                items(availablePlaylists, key = { it.id }) { playlist ->
+                                items(availablePlaylists, key = { it.id }, contentType = { "available_playlist" }) { playlist ->
                                     TerminalActionText(
                                         "[ ${playlist.name} ]",
                                         color = MaterialTheme.colorScheme.primary,
@@ -623,7 +627,7 @@ fun PlaylistDetailScreen(
                             Text(resolution.errorMessage ?: "No unlinked candidates found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         } else {
                             LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.height(240.dp)) {
-                                items(resolution.candidates, key = { it.id }) { candidate ->
+                                items(resolution.candidates, key = { it.id }, contentType = { "resolution_candidate" }) { candidate ->
                                     TerminalActionText(
                                         "[ ${candidate.title} · ${candidate.artist} · ${candidate.album} ]",
                                         color = MaterialTheme.colorScheme.primary,

@@ -1,6 +1,8 @@
 package com.necroware.terminusplayer.ui.navigation
 
+import android.app.Activity
 import android.animation.ValueAnimator
+import com.necroware.terminusplayer.util.JankStatsHelper
 import android.database.ContentObserver
 import android.os.Handler
 import android.os.Looper
@@ -45,6 +47,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -69,14 +72,19 @@ import com.necroware.terminusplayer.ui.components.rememberTerminalHaptics
 import com.necroware.terminusplayer.ui.screens.albumdetail.AlbumDetailScreen
 import com.necroware.terminusplayer.ui.screens.artistdetail.ArtistDetailScreen
 import com.necroware.terminusplayer.ui.screens.home.HomeScreen
+import com.necroware.terminusplayer.ui.screens.home.HomeViewModel
 import com.necroware.terminusplayer.ui.screens.library.LibraryScreen
+import com.necroware.terminusplayer.ui.screens.library.LibraryViewModel
 import com.necroware.terminusplayer.ui.screens.nowplaying.NowPlayingScreen
 import com.necroware.terminusplayer.ui.screens.nowplaying.PlaybackViewModel
 import com.necroware.terminusplayer.ui.screens.playlists.PlaylistDetailScreen
 import com.necroware.terminusplayer.ui.screens.playlists.PlaylistsScreen
+import com.necroware.terminusplayer.ui.screens.playlists.PlaylistsViewModel
 import com.necroware.terminusplayer.ui.screens.search.SearchScreen
 import com.necroware.terminusplayer.ui.screens.settings.SettingsScreen
+import com.necroware.terminusplayer.ui.screens.settings.SettingsViewModel
 import com.necroware.terminusplayer.ui.screens.stats.StatsScreen
+import com.necroware.terminusplayer.ui.screens.stats.StatsViewModel
 import com.necroware.terminusplayer.ui.theme.LocalAppPalette
 import com.necroware.terminusplayer.ui.theme.rememberAnimatedAdaptiveAccent
 
@@ -92,14 +100,14 @@ private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabDirection(): In
 private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabSlideEnter(
     motion: MotionPreference,
     systemAnimationsEnabled: Boolean
-): EnterTransition = motionTransitionSpec(motion, systemAnimationsEnabled).let { spec ->
+): EnterTransition = tabTransitionSpec(motion, systemAnimationsEnabled).let { spec ->
     spec.slideInHorizontallyOrNone(direction = tabDirection()) + spec.fadeInOrNone()
 }
 
 private fun AnimatedContentTransitionScope<NavBackStackEntry>.tabSlideExit(
     motion: MotionPreference,
     systemAnimationsEnabled: Boolean
-): ExitTransition = motionTransitionSpec(motion, systemAnimationsEnabled).let { spec ->
+): ExitTransition = tabTransitionSpec(motion, systemAnimationsEnabled).let { spec ->
     spec.slideOutHorizontallyOrNone(direction = -tabDirection()) + spec.fadeOutOrNone()
 }
 
@@ -159,6 +167,11 @@ fun TerminusNavGraph(
     // requested at this top-level composable) shared by the mini bar and the
     // full Now Playing screen so both reflect the same MediaController state.
     val playbackViewModel: PlaybackViewModel = hiltViewModel()
+    val homeViewModel: HomeViewModel = hiltViewModel()
+    val libraryViewModel: LibraryViewModel = hiltViewModel()
+    val playlistsViewModel: PlaylistsViewModel = hiltViewModel()
+    val statsViewModel: StatsViewModel = hiltViewModel()
+    val settingsViewModel: SettingsViewModel = hiltViewModel()
     val nowPlaying by playbackViewModel.nowPlaying.collectAsStateWithLifecycle()
     val currentSongUri by playbackViewModel.currentSongUri.collectAsStateWithLifecycle()
     val prefs by playbackViewModel.preferences.collectAsStateWithLifecycle()
@@ -222,6 +235,15 @@ fun TerminusNavGraph(
     // so the blend does not recompose the Scaffold.
     val routeBackgroundSpec = remember(motion) { motion.transition.tweenSpec<Color>() }
     val animatedRouteBackground = animateColorAsState(routeBackground, routeBackgroundSpec, label = "routeBackground")
+
+    val currentActivity = LocalContext.current as? Activity
+    LaunchedEffect(currentRoute, panelOpen, currentActivity) {
+        currentActivity?.window?.let { window ->
+            val screen = if (panelOpen) "NowPlaying" else (currentRoute ?: "Home")
+            JankStatsHelper.setScreen(window, screen)
+        }
+    }
+
     Scaffold(
         modifier = Modifier.drawBehind { drawRect(animatedRouteBackground.value) },
         containerColor = Color.Transparent,
@@ -305,11 +327,13 @@ fun TerminusNavGraph(
         ) {
             composable(Destination.Home.route) {
                 HomeScreen(
+                    viewModel = homeViewModel,
                     onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, openPlayer, prefs.openPlayerOnLibraryTrackSelect) }
                 )
             }
             composable(Destination.Library.route) {
                 LibraryScreen(
+                    viewModel = libraryViewModel,
                     onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, openPlayer, prefs.openPlayerOnLibraryTrackSelect) },
                     onAlbumClick = { albumTitle -> navController.navigate(Destination.AlbumDetail.createRoute(albumTitle)) },
                     onArtistClick = { artist -> navController.navigate(Destination.ArtistDetail.createRoute(artist)) },
@@ -319,6 +343,7 @@ fun TerminusNavGraph(
             }
             composable(Destination.Playlists.route) {
                 PlaylistsScreen(
+                    viewModel = playlistsViewModel,
                     onPlaylistClick = { kind -> navController.navigate(Destination.PlaylistDetail.createRoute(kind.name)) },
                     onCustomPlaylistClick = { id ->
                         val routeId = if (id.startsWith("server:")) {
@@ -330,9 +355,10 @@ fun TerminusNavGraph(
                     }
                 )
             }
-            composable(Destination.Stats.route) { StatsScreen() }
+            composable(Destination.Stats.route) { StatsScreen(viewModel = statsViewModel) }
             composable(Destination.Settings.route) {
                 SettingsScreen(
+                    viewModel = settingsViewModel,
                     onNavigateToUpload = { navController.navigate(Destination.Upload.route) },
                     onNavigateToGapFinder = { navController.navigate(Destination.GapFinder.route) },
                     onNavigateToManageSources = { navController.navigate(Destination.ManageSources.route) }

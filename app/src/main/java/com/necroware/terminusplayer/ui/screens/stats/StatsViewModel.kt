@@ -23,8 +23,10 @@ import com.necroware.terminusplayer.data.database.entity.UploadQueueEntity
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import android.content.Context
+import androidx.compose.runtime.Immutable
 import dagger.hilt.android.qualifiers.ApplicationContext
 
+@Immutable
 data class StatsUiState(
     val range: StatsRange = StatsRange.WEEK,
     val isLoading: Boolean = true,

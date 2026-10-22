@@ -90,8 +90,9 @@ fun PlaylistsScreen(
             }
         )
     }
+    val quickMixPairs = remember { PlaylistKind.entries.chunked(2) }
     val listState = rememberLazyListState()
-    val leadingPlaylistItems = 3 + (if (actionMessage != null) 1 else 0) + PlaylistKind.entries.chunked(2).size
+    val leadingPlaylistItems = 3 + (if (actionMessage != null) 1 else 0) + quickMixPairs.size
     val firstVisiblePlaylistIndex = listState.layoutInfo.visibleItemsInfo
         .firstNotNullOfOrNull { info -> sortedPlaylists.indexOfFirst { it.id == info.key }.takeIf { it >= 0 } }
         ?: 0
@@ -133,7 +134,11 @@ fun PlaylistsScreen(
         item {
             Text("QUICK MIXES", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        items(PlaylistKind.entries.chunked(2)) { pair ->
+        items(
+            items = quickMixPairs,
+            key = { pair -> pair.joinToString("-") { it.name } },
+            contentType = { "quick_mix_row" }
+        ) { pair ->
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 pair.forEach { kind ->
                     TerminalBorder(
@@ -195,7 +200,7 @@ fun PlaylistsScreen(
                 )
             }
         } else {
-            items(sortedPlaylists, key = { it.id }) { playlist ->
+            items(sortedPlaylists, key = { it.id }, contentType = { "playlist_item" }) { playlist ->
                 val belongsToOtherUser = isOtherUserPlaylist(playlist)
                 var expanded by remember(playlist.id) { mutableStateOf(false) }
                 TerminalBorder(
