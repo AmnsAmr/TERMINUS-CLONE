@@ -2,7 +2,6 @@ package com.necroware.terminusplayer.ui.components.visualizer
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -110,18 +109,5 @@ class WarpPresetsTest {
         assertEquals(5, c.index)
         assertTrue(c.next(100f))
         assertEquals(0, c.index) // wraps around
-    }
-
-    @Test
-    fun boundedCacheDropsTheLeastRecentlyUsed() {
-        val cache = BoundedCache<Long, String>(2)
-        cache[1L] = "a"
-        cache[2L] = "b"
-        cache[1L] // touch 1, so 2 is now the eldest
-        cache[3L] = "c"
-        assertEquals(2, cache.size)
-        assertNull(cache[2L])
-        assertEquals("a", cache[1L])
-        assertEquals("c", cache[3L])
     }
 }

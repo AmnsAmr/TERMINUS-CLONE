@@ -3,14 +3,12 @@ package com.necroware.terminusplayer.ui.components.visualizer
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.ColorSpace
-import android.graphics.HardwareRenderer
-import android.graphics.PixelFormat
+import android.graphics.HardwareBufferRenderer
 import android.graphics.RenderNode
 import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.hardware.HardwareBuffer
-import android.media.Image
-import android.media.ImageReader
+import android.hardware.SyncFence
 import android.os.Build
 import android.os.SystemClock
 import androidx.annotation.RequiresApi
@@ -56,7 +54,10 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Executor
+import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.function.Consumer
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -76,7 +77,7 @@ data class WarpPresetSettings(
  * MilkDrop-style audio-reactive art: each frame re-draws the previous one zoomed, rotated,
  * warped, hue-shifted and decayed, then draws the current audio on top. The look comes from
  * [WarpPresets], blended over [PRESET_BLEND_SECONDS] when it changes; a tap shows the next preset.
- * API 33+ does the feedback on the GPU with an AGSL shader; older devices (or a GPU setup failure)
+ * API 34+ does the feedback on the GPU with an AGSL shader; older devices (or a GPU setup failure)
  * get a reduced Canvas echo-trail version of the same presets.
  *
  * Renders only while [active]; pass false unless it is visible, playing, motion is FULL and
@@ -117,7 +118,7 @@ fun WarpVisualizer(
             .background(Color.Black)
             .pointerInput(Unit) { detectTapGestures { taps.incrementAndGet() } }
     ) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !gpuUnavailable) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && !gpuUnavailable) {
             GpuWarp(spectrum, active, accent, cycler, presetSettings, taps, shownIndex, onUnavailable = { gpuUnavailable = true })
         } else {
             CanvasEchoWarp(spectrum, active, accent, cycler, presetSettings, taps, shownIndex)
@@ -206,7 +207,7 @@ private const val RENDER_SCALE = 0.5f
 @OptIn(ExperimentalCoroutinesApi::class)
 private val warpRenderDispatcher = Dispatchers.IO.limitedParallelism(1)
 
-@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+@RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 @Composable
 private fun GpuWarp(
     spectrum: State<SpectrumFrame>,
@@ -218,7 +219,7 @@ private fun GpuWarp(
     shownIndex: AtomicInteger,
     onUnavailable: () -> Unit
 ) {
-    // The renderer hands out a few recycled images, so the same instance can come back: never skip a write.
+    // The renderer rotates through a few reused images, so the same instance comes back: never skip a write.
     val latest = remember { mutableStateOf<ImageBitmap?>(null, neverEqualPolicy()) }
     var sizePx by remember { mutableStateOf(IntSize.Zero) }
     val accentArgb by rememberUpdatedState(accent.toArgb())
@@ -298,61 +299,68 @@ private fun Double.toFloatClock(): Float = (this % CLOCK_WINDOW_SECONDS).toFloat
  */
 private const val CLOCK_WINDOW_SECONDS = 1_000_000.0
 
-/**
- * Wrappers for one ImageReader buffer. Created the first time a buffer is seen and reused every
- * time the reader hands it out again, instead of wrapping it anew each frame.
- */
-@RequiresApi(Build.VERSION_CODES.TIRAMISU)
-private class BufferTarget(val bitmap: Bitmap, val shader: BitmapShader, val image: ImageBitmap)
+/** One render target: a GPU buffer, its renderer, and the wrappers that read it. Made once, reused every frame. */
+@RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+private class WarpTarget(
+    val buffer: HardwareBuffer,
+    val renderer: HardwareBufferRenderer,
+    val bitmap: Bitmap,
+    val shader: BitmapShader,
+    val image: ImageBitmap
+)
 
 /**
- * Offscreen GPU feedback loop: a RenderNode drawn by HardwareRenderer into an ImageReader, whose
- * newest image becomes the shader input for the next frame. Single-threaded use only.
+ * Offscreen GPU feedback loop. A RenderNode is drawn by [HardwareBufferRenderer] straight into
+ * one of [TARGET_COUNT] buffers in rotation; the buffer drawn last frame is the shader input, and
+ * the one before that may still be on screen, so a buffer is only redrawn three frames later.
+ * All buffers and wrappers are made once. Single-threaded use only.
+ *
+ * Replaces a HardwareRenderer -> ImageReader loop that, on the S21 FE (Android 16), reported every
+ * frame as drawn while the images stayed empty (all pixels 0x00000000), so the visualizer was black.
  */
-@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+@RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
 private class GpuWarpRenderer private constructor(
     private val width: Int,
     private val height: Int,
-    private val reader: ImageReader,
-    private val renderer: HardwareRenderer,
+    private val node: RenderNode,
+    private val targets: Array<WarpTarget>,
     private val shader: RuntimeShader
 ) {
-    private val node = RenderNode("WarpVisualizer").apply { setPosition(0, 0, width, height) }
     private val feedbackPaint = android.graphics.Paint().apply { shader = this@GpuWarpRenderer.shader }
     private val wavePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         style = android.graphics.Paint.Style.STROKE
         strokeJoin = android.graphics.Paint.Join.ROUND
     }
     private val path = android.graphics.Path()
+    private val srgb = ColorSpace.get(ColorSpace.Named.SRGB)
+    private val directExecutor = Executor { it.run() }
 
-    // The newest image feeds the next frame and is on screen; the one before may still be
-    // drawing in the UI, so it is closed one frame later.
-    private var newest: Image? = null
-    private var previous: Image? = null
-    private var newestTarget: BufferTarget? = null
-
-    /**
-     * Keyed by HardwareBuffer id (API 34+). The reader cycles through [READER_IMAGES] buffers, so
-     * this normally holds that many; it is bounded in case the reader ever reallocates.
-     */
-    private val targets = BoundedCache<Long, BufferTarget>(READER_IMAGES + 1)
-
-    init {
-        renderer.setContentRoot(node)
+    // Set by the draw callback (on HWUI's thread), read here after [drawDone] is released.
+    private val drawDone = Semaphore(0)
+    @Volatile private var lastStatus = HardwareBufferRenderer.RenderResult.SUCCESS
+    @Volatile private var lastFence: SyncFence? = null
+    private val onDrawn = Consumer<HardwareBufferRenderer.RenderResult> { result ->
+        lastStatus = result.status
+        lastFence = result.fence
+        drawDone.release()
     }
+
+    private var frame = 0
+    private var shown: WarpTarget? = null
 
     fun render(
         params: WarpParams,
-        frame: SpectrumFrame,
+        frameData: SpectrumFrame,
         color: Int,
         dt: Float,
         fromShape: WaveShape,
         toShape: WaveShape,
         blend: Float
     ): ImageBitmap? {
+        val target = targets[frame % TARGET_COUNT]
+        val input = shown
         val canvas = node.beginRecording(width, height)
         try {
-            val input = newestTarget
             if (input == null) {
                 canvas.drawColor(android.graphics.Color.BLACK)
             } else {
@@ -371,34 +379,34 @@ private class GpuWarpRenderer private constructor(
             wavePaint.color = color
             wavePaint.strokeWidth = min(width, height) * 0.006f * (1f + params.strokeBoost)
             if (fromShape == toShape || blend >= 1f) {
-                drawShape(canvas, if (blend >= 1f) toShape else fromShape, frame, base, 255)
+                drawShape(canvas, if (blend >= 1f) toShape else fromShape, frameData, base, 255)
             } else {
-                drawShape(canvas, fromShape, frame, base, ((1f - blend) * 255).toInt())
-                drawShape(canvas, toShape, frame, base, (blend * 255).toInt())
+                drawShape(canvas, fromShape, frameData, base, ((1f - blend) * 255).toInt())
+                drawShape(canvas, toShape, frameData, base, (blend * 255).toInt())
             }
         } finally {
             node.endRecording()
         }
-        renderer.createRenderRequest().setWaitForPresent(true).syncAndDraw()
 
-        val image = reader.acquireLatestImage() ?: return newestTarget?.image
-        val target = targetFor(image)
-        if (target == null) {
-            image.close()
-            return newestTarget?.image
+        target.renderer.obtainRenderRequest().setColorSpace(srgb).draw(directExecutor, onDrawn)
+        drawDone.acquire()
+        // The UI and the next frame's shader read this buffer, so the GPU must be done with it first.
+        lastFence?.let { fence ->
+            fence.awaitForever()
+            fence.close()
         }
-        previous?.close()
-        previous = newest
-        newest = image
-        newestTarget = target
+        lastFence = null
+        if (lastStatus != HardwareBufferRenderer.RenderResult.SUCCESS) return shown?.image
+        frame++
+        shown = target
         return target.image
     }
 
-    private fun drawShape(canvas: android.graphics.Canvas, shape: WaveShape, frame: SpectrumFrame, base: Float, alpha: Int) {
+    private fun drawShape(canvas: android.graphics.Canvas, shape: WaveShape, frameData: SpectrumFrame, base: Float, alpha: Int) {
         if (alpha <= 2) return
         path.rewind()
         traceWave(
-            shape, frame.waveform, frame.bands, frame.level, width / 2f, height / 2f, base,
+            shape, frameData.waveform, frameData.bands, frameData.level, width / 2f, height / 2f, base,
             moveTo = { x, y -> path.moveTo(x, y) },
             lineTo = { x, y -> path.lineTo(x, y) },
             close = { path.close() }
@@ -407,46 +415,19 @@ private class GpuWarpRenderer private constructor(
         canvas.drawPath(path, wavePaint)
     }
 
-    /** Cached wrappers for [image]'s buffer, or new ones; null if the buffer cannot be wrapped. */
-    private fun targetFor(image: Image): BufferTarget? {
-        val buffer = image.hardwareBuffer ?: return null
-        try {
-            val id = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) buffer.id else null
-            id?.let { targets[it] }?.let { return it }
-            // The wrapping Bitmap keeps its own reference to the buffer, so the Java handle can close.
-            val bitmap = Bitmap.wrapHardwareBuffer(buffer, ColorSpace.get(ColorSpace.Named.SRGB)) ?: return null
-            val target = BufferTarget(
-                bitmap = bitmap,
-                shader = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP),
-                image = bitmap.asImageBitmap()
-            )
-            // API 33 has no stable buffer id: wrappers are then made per frame, as before.
-            if (id != null) targets[id] = target
-            return target
-        } finally {
-            buffer.close()
+    fun release() {
+        node.discardDisplayList()
+        // Bitmaps are not recycled: the UI may still be drawing the last frame. They keep their own
+        // reference to the buffer and go with that frame.
+        targets.forEach { t ->
+            t.renderer.close()
+            t.buffer.close()
         }
     }
 
-    fun release() {
-        renderer.destroy()
-        node.discardDisplayList()
-        newest?.close()
-        previous?.close()
-        reader.close()
-        // Bitmaps are not recycled: the UI may still be drawing the last frame. Dropping the
-        // references lets them go with that frame.
-        targets.clear()
-        newestTarget = null
-    }
-
     companion object {
-        /**
-         * Two images stay open (on screen, and the one before it), and acquireLatestImage needs two
-         * more free slots than that. With 3, most acquires failed ("more than maxImages") and the
-         * visualizer stayed black at 11-17 fps on the S21 FE.
-         */
-        private const val READER_IMAGES = 4
+        /** Drawing, shader input, and possibly still on screen. */
+        private const val TARGET_COUNT = 3
 
         /** Null when this device rejects the offscreen GPU setup; callers fall back to Canvas. */
         fun createOrNull(width: Int, height: Int): GpuWarpRenderer? {
@@ -457,39 +438,33 @@ private class GpuWarpRenderer private constructor(
                 android.util.Log.w("WarpVisualizer", "Warp shader rejected, using Canvas renderer", e)
                 return null
             }
-            val reader = try {
-                ImageReader.newInstance(
-                    width,
-                    height,
-                    PixelFormat.RGBA_8888,
-                    READER_IMAGES,
-                    HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
-                )
+            val node = RenderNode("WarpVisualizer").apply { setPosition(0, 0, width, height) }
+            val made = ArrayList<WarpTarget>(TARGET_COUNT)
+            try {
+                repeat(TARGET_COUNT) {
+                    val buffer = HardwareBuffer.create(
+                        width, height, HardwareBuffer.RGBA_8888, 1,
+                        HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
+                    )
+                    val renderer = HardwareBufferRenderer(buffer).apply { setContentRoot(node) }
+                    val bitmap = Bitmap.wrapHardwareBuffer(buffer, ColorSpace.get(ColorSpace.Named.SRGB))
+                        ?: throw IllegalArgumentException("Buffer cannot be wrapped")
+                    made += WarpTarget(
+                        buffer = buffer,
+                        renderer = renderer,
+                        bitmap = bitmap,
+                        shader = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP),
+                        image = bitmap.asImageBitmap()
+                    )
+                }
             } catch (e: IllegalArgumentException) {
                 android.util.Log.w("WarpVisualizer", "GPU feedback unavailable, using Canvas renderer", e)
+                made.forEach { it.renderer.close(); it.buffer.close() }
                 return null
             }
-            val renderer = HardwareRenderer().apply {
-                setSurface(reader.surface)
-                isOpaque = true
-            }
-            return GpuWarpRenderer(width, height, reader, renderer, shader)
+            return GpuWarpRenderer(width, height, node, made.toTypedArray(), shader)
         }
     }
-}
-
-/** Small least-recently-used map; the eldest entry is dropped beyond [capacity]. Not thread-safe. */
-internal class BoundedCache<K, V>(private val capacity: Int) {
-    private val map = object : LinkedHashMap<K, V>(capacity + 1, 1f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean = size > capacity
-    }
-
-    operator fun get(key: K): V? = map[key]
-    operator fun set(key: K, value: V) {
-        map[key] = value
-    }
-    val size: Int get() = map.size
-    fun clear() = map.clear()
 }
 
 /**
@@ -574,7 +549,7 @@ private class EchoTrail {
 }
 
 /**
- * Reduced presets for API 29-32: no feedback buffer, so a preset sets how fast the echoes spin
+ * Reduced presets for API 29-33: no feedback buffer, so a preset sets how fast the echoes spin
  * (rotation), how far apart they scale (zoom), how quickly they fade (decay), how far their hue
  * drifts (hue speed) and the wave shape. Blends like the GPU version.
  */
