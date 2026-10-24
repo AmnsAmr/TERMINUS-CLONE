@@ -58,7 +58,9 @@ internal data class MotionTokens(
     val transition: MotionTransitionSpec,
     /** Duration for content swaps such as artwork or track metadata. 0 means swap immediately. */
     val crossfadeMs: Int,
-    val panel: PanelMotionSpec
+    val panel: PanelMotionSpec,
+    /** Play/pause glyph morph. 0 swaps the glyph immediately; OFF has no blend here at all. */
+    val glyphMorphMs: Int = crossfadeMs
 ) {
     fun <T> crossfadeSpec(): FiniteAnimationSpec<T> = tween(crossfadeMs, easing = transition.easing)
 }
@@ -116,7 +118,7 @@ internal fun motionTokens(
             panel = PanelMotionSpec(animated = true, dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
         )
         // Opacity may still blend briefly, matching the OFF screen transition; the panel never travels.
-        MotionPreference.OFF -> MotionTokens(transition = transition, crossfadeMs = 55, panel = SnapPanel)
+        MotionPreference.OFF -> MotionTokens(transition = transition, crossfadeMs = 55, panel = SnapPanel, glyphMorphMs = 0)
         MotionPreference.SYSTEM -> if (systemAnimationsEnabled) {
             MotionTokens(
                 transition = transition,
