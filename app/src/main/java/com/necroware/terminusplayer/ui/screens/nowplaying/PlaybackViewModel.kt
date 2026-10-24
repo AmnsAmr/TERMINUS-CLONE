@@ -13,6 +13,11 @@ import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.playback.AudioSpectrum
 import com.necroware.terminusplayer.playback.NowPlayingState
+import com.necroware.terminusplayer.playback.QueueNeighbour
+import com.necroware.terminusplayer.playback.QueueState
+import com.necroware.terminusplayer.playback.RemovedQueueItem
+import com.necroware.terminusplayer.ui.components.SwipeNeighbours
+import com.necroware.terminusplayer.ui.components.SwipeTrack
 import com.necroware.terminusplayer.playback.SpectrumFrame
 import com.necroware.terminusplayer.playback.PlaybackController
 import com.necroware.terminusplayer.data.model.SyncedLyrics
@@ -23,6 +28,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +41,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
@@ -126,6 +136,26 @@ class PlaybackViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    /**
+     * Previous and next tracks for swipe-to-skip, in playback order (shuffle and repeat applied), with
+     * artwork resolved the same way as the current track's so the cover that slides in is the one
+     * that will show.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val swipeNeighbours: StateFlow<SwipeNeighbours> = nowPlaying
+        .map { it.previous to it.next }
+        .distinctUntilChanged()
+        .mapLatest { (previous, next) -> SwipeNeighbours(previous?.toSwipeTrack(), next?.toSwipeTrack()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SwipeNeighbours())
+
+    private suspend fun QueueNeighbour.toSwipeTrack(): SwipeTrack {
+        val artUri = artworkUri?.takeIf { it.isNotBlank() }
+            ?: repository.getSong(mediaId)?.uriString?.takeIf { it.isNotBlank() }
+            ?: mediaId.takeIf { it.startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX) }?.removePrefix(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)
+            ?: if (mediaId.startsWith("terminus://")) mediaId else "terminus://$mediaId"
+        return SwipeTrack(id = mediaId, title = title, artist = artist, artUri = artUri)
+    }
+
     val currentLyrics: StateFlow<SyncedLyrics?> = nowPlaying
         .map { it.mediaId }
         .distinctUntilChanged()
@@ -171,19 +201,57 @@ class PlaybackViewModel @Inject constructor(
     }
 
     fun togglePlayPause() = controller.togglePlayPause()
-    fun skipToNext() = controller.skipToNext()
-    fun skipToPrevious() {
-        if (controller.willSkipToPreviousItem()) backSkipCount++
-        controller.skipToPrevious()
-    }
 
     /**
-     * Counts in-app skips that moved back a track. The UI compares it across a track change to
-     * slide content the right way; it is a display hint only and never affects playback.
-     * Skips from outside the app (notification, headset) are not counted and animate as forward.
+     * The queue for the queue sheet, in playback order. Built from the controller only while the
+     * sheet collects it, and rebuilt when the queue, the current item or shuffle changes.
      */
-    var backSkipCount: Int = 0
-        private set
+    @OptIn(FlowPreview::class)
+    val queue: StateFlow<QueueState> = controller.queueVersion
+        // One change (e.g. a removal) reports several player events; rebuild once per burst.
+        .debounce(QUEUE_REBUILD_DEBOUNCE_MS)
+        .mapLatest { controller.queueSource() }
+        .mapLatest { source -> withContext(Dispatchers.Default) { source?.toState() ?: QueueState() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), QueueState())
+
+    private val _lastRemoved = MutableStateFlow<RemovedQueueItem?>(null)
+
+    /** The item a swipe just removed, while its UNDO is offered; null otherwise. */
+    val lastRemoved: StateFlow<RemovedQueueItem?> = _lastRemoved
+    private var undoTimeout: Job? = null
+
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) = controller.moveQueueItem(fromIndex, toIndex)
+
+    fun playQueueItem(index: Int) = controller.playQueueItem(index)
+
+    fun removeQueueItem(index: Int) {
+        val removed = controller.removeQueueItem(index) ?: return
+        _lastRemoved.value = removed
+        undoTimeout?.cancel()
+        undoTimeout = viewModelScope.launch {
+            delay(UNDO_WINDOW_MS)
+            if (_lastRemoved.value === removed) _lastRemoved.value = null
+        }
+    }
+
+    fun undoQueueRemoval() {
+        val removed = _lastRemoved.value ?: return
+        undoTimeout?.cancel()
+        _lastRemoved.value = null
+        controller.restoreQueueItem(removed)
+    }
+
+    /** Remembers the warp visualizer preset last shown; written only when it changed. */
+    fun setWarpPresetId(id: String) {
+        viewModelScope.launch { preferencesRepository.setWarpPresetId(id) }
+    }
+    fun skipToNext() = controller.skipToNext()
+    fun skipToPrevious() = controller.skipToPrevious()
+
+    /** Skip committed by a swipe: always changes track, since the neighbour's cover is already showing. */
+    fun swipeSkip(toNext: Boolean) {
+        if (toNext) controller.skipToNextItem() else controller.skipToPreviousItem()
+    }
     fun seekTo(positionMs: Long) = controller.seekTo(positionMs)
     fun toggleShuffle() = controller.toggleShuffle()
     fun cycleRepeatMode() = controller.cycleRepeatMode()
@@ -293,3 +361,9 @@ class PlaybackViewModel @Inject constructor(
 
     fun playExternalAudio(uri: Uri) = controller.playExternalAudio(uri)
 }
+
+/** How long a swipe-removed queue item can be restored. */
+private const val UNDO_WINDOW_MS = 4_000L
+
+/** Groups the player events of one queue change into one rebuild. */
+private const val QUEUE_REBUILD_DEBOUNCE_MS = 32L

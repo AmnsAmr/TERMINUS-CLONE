@@ -12,7 +12,12 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -29,6 +34,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +51,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.activity.ComponentActivity
@@ -86,6 +96,7 @@ import com.necroware.terminusplayer.ui.screens.settings.SettingsViewModel
 import com.necroware.terminusplayer.ui.screens.stats.StatsScreen
 import com.necroware.terminusplayer.ui.screens.stats.StatsViewModel
 import com.necroware.terminusplayer.ui.theme.LocalAppPalette
+import com.necroware.terminusplayer.ui.theme.PrecomputeAdaptiveAccents
 import com.necroware.terminusplayer.ui.theme.rememberAnimatedAdaptiveAccent
 
 /** Index within the bottom-nav tab order, used to pick left/right slide direction. -1 if not a tab route. */
@@ -190,6 +201,15 @@ fun TerminusNavGraph(
         performanceMode = prefs.performanceMode,
         animationSpec = accentSpec
     )
+    // Gated here as well so nothing collects the neighbours while the feature is off.
+    if (prefs.adaptiveArtAccent) {
+        val accentNeighbours by playbackViewModel.swipeNeighbours.collectAsStateWithLifecycle()
+        PrecomputeAdaptiveAccents(
+            artworkUris = listOfNotNull(accentNeighbours.previous?.artUri, accentNeighbours.next?.artUri),
+            enabled = true,
+            performanceMode = prefs.performanceMode
+        )
+    }
     val haptic = rememberTerminalHaptics(prefs.terminalHaptics)
     var soundControlOpen by remember { mutableStateOf(false) }
     var soundControlOnLeft by remember { mutableStateOf(true) }
@@ -205,10 +225,11 @@ fun TerminusNavGraph(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
 
-    // Mini player + bottom nav are hidden on the detail screens (they push
-    // their own back affordance instead). The full player is a panel above
-    // the NavHost, not a route; it slides the chrome away instead.
-    val hideChromeRoutes = setOf(
+    // On detail screens (they push their own back affordance) the bottom nav slides away
+    // and the mini player moves down into its place, as in Poweramp. Both stay composed, so
+    // nothing is added to or removed from the layout mid-transition. The full player is a panel
+    // above the NavHost, not a route; it slides the chrome away the same way.
+    val hideNavRoutes = setOf(
         Destination.AlbumDetail.route,
         Destination.ArtistDetail.route,
         Destination.Search.route,
@@ -218,8 +239,20 @@ fun TerminusNavGraph(
     )
 
     val appPalette = LocalAppPalette.current
-    val showChrome = currentRoute !in hideChromeRoutes
-    val miniVisible = showChrome && nowPlaying.title.isNotBlank()
+    val navHidden = currentRoute in hideNavRoutes
+    val miniVisible = nowPlaying.title.isNotBlank()
+    // 0 = bottom nav shown, 1 = slid away. Read only in graphicsLayer blocks.
+    val navHide = remember { Animatable(if (navHidden) 1f else 0f) }
+    LaunchedEffect(navHidden, motion) {
+        val target = if (navHidden) 1f else 0f
+        val spec = motion.transition
+        // OFF and disabled system animations: no movement, the bar is simply gone.
+        if (spec.isInstant || spec.slideFraction == 0f) navHide.snapTo(target)
+        else navHide.animateTo(target, spec.tweenSpec())
+    }
+    var navBarHeightPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    val systemNavBottomPx = WindowInsets.navigationBars.getBottom(density)
     val currentScheme = MaterialTheme.colorScheme
     val miniColorScheme = remember(currentScheme, playerAccent) {
         currentScheme.copy(
@@ -249,53 +282,54 @@ fun TerminusNavGraph(
         containerColor = Color.Transparent,
         contentColor = contentColorFor(routeBackground),
         bottomBar = {
-            if (showChrome) {
-                Column {
-                    // Transparent room for the mini bar, which the player panel draws
-                    // underneath. Reserving it here keeps content padding fixed while the panel moves.
-                    if (miniVisible) {
-                        Spacer(Modifier.fillMaxWidth().height(MiniPlayerHeight))
-                    }
-                    NavigationBar(
-                        containerColor = appPalette.navigationBackground,
-                        modifier = Modifier
-                            .graphicsLayer { translationY = size.height * panelState.fraction }
-                            .then(if (panelFullyOpen) Modifier.clearAndSetSemantics { } else Modifier)
-                    ) {
-                        bottomNavItems.forEach { destination ->
-                            NavigationBarItem(
-                                selected = currentRoute == destination.route,
-                                onClick = {
-                                    navController.navigate(destination.route) {
-                                        popUpTo(navController.graph.findStartDestination().id) {
-                                            saveState = true
-                                        }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
-                                },
-                                icon = {
-                                    TerminalNavIcon(
-                                        destination = destination,
-                                        tint = if (currentRoute == destination.route) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                        }
-                                    )
-                                },
-                                label = {
-                                    Text(
-                                        text = destination.label,
-                                        fontSize = androidx.compose.ui.unit.TextUnit(9f, androidx.compose.ui.unit.TextUnitType.Sp),
-                                        letterSpacing = androidx.compose.ui.unit.TextUnit(0f, androidx.compose.ui.unit.TextUnitType.Sp),
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        overflow = androidx.compose.ui.text.style.TextOverflow.Clip
-                                    )
-                                }
-                            )
+            Column {
+                // Transparent room for the mini bar, which the player panel draws
+                // underneath. Reserving it here keeps content padding fixed while the panel moves.
+                if (miniVisible) {
+                    Spacer(Modifier.fillMaxWidth().height(MiniPlayerHeight))
+                }
+                NavigationBar(
+                    containerColor = appPalette.navigationBackground,
+                    modifier = Modifier
+                        .onSizeChanged { navBarHeightPx = it.height }
+                        .graphicsLayer {
+                            translationY = size.height * maxOf(panelState.fraction, navHide.value)
                         }
+                        .then(if (panelFullyOpen || navHidden) Modifier.clearAndSetSemantics { } else Modifier)
+                ) {
+                    bottomNavItems.forEach { destination ->
+                        NavigationBarItem(
+                            selected = currentRoute == destination.route,
+                            onClick = {
+                                navController.navigate(destination.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            icon = {
+                                TerminalNavIcon(
+                                    destination = destination,
+                                    tint = if (currentRoute == destination.route) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = destination.label,
+                                    fontSize = androidx.compose.ui.unit.TextUnit(9f, androidx.compose.ui.unit.TextUnitType.Sp),
+                                    letterSpacing = androidx.compose.ui.unit.TextUnit(0f, androidx.compose.ui.unit.TextUnitType.Sp),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Clip
+                                )
+                            }
+                        )
                     }
                 }
             }
@@ -308,10 +342,21 @@ fun TerminusNavGraph(
                 soundControlOpen = true
             })
         }) {
+        // Bottom padding is per route (see RouteContent), so a screen keeps one size for its
+        // whole life: no relayout when the nav bar hides or returns.
+        val layoutDirection = LocalLayoutDirection.current
+        val tabBottom = innerPadding.calculateBottomPadding()
+        val detailBottom = with(density) { systemNavBottomPx.toDp() } + if (miniVisible) MiniPlayerHeight else 0.dp
         Box(
             Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .padding(
+                    PaddingValues(
+                        start = innerPadding.calculateStartPadding(layoutDirection),
+                        top = innerPadding.calculateTopPadding(),
+                        end = innerPadding.calculateEndPadding(layoutDirection)
+                    )
+                )
                 // Fully covered by the open player: skip drawing it and hide it from accessibility.
                 .graphicsLayer { alpha = if (panelState.fraction >= 1f) 0f else 1f }
                 .then(if (panelFullyOpen) Modifier.clearAndSetSemantics { } else Modifier)
@@ -326,52 +371,68 @@ fun TerminusNavGraph(
             popExitTransition = { tabSlideExit(motionPreference, systemAnimationsEnabled) }
         ) {
             composable(Destination.Home.route) {
-                HomeScreen(
-                    viewModel = homeViewModel,
-                    onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, openPlayer, prefs.openPlayerOnLibraryTrackSelect) }
-                )
+                RouteContent(tabBottom) {
+                    HomeScreen(
+                        viewModel = homeViewModel,
+                        onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, openPlayer, prefs.openPlayerOnLibraryTrackSelect) }
+                    )
+                }
             }
             composable(Destination.Library.route) {
-                LibraryScreen(
-                    viewModel = libraryViewModel,
-                    onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, openPlayer, prefs.openPlayerOnLibraryTrackSelect) },
-                    onAlbumClick = { albumTitle -> navController.navigate(Destination.AlbumDetail.createRoute(albumTitle)) },
-                    onArtistClick = { artist -> navController.navigate(Destination.ArtistDetail.createRoute(artist)) },
-                    onSearchClick = { navController.navigate(Destination.Search.route) },
-                    onInitialContentReady = onInitialContentReady
-                )
+                RouteContent(tabBottom) {
+                    LibraryScreen(
+                        viewModel = libraryViewModel,
+                        onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, openPlayer, prefs.openPlayerOnLibraryTrackSelect) },
+                        onAlbumClick = { albumTitle -> navController.navigate(Destination.AlbumDetail.createRoute(albumTitle)) },
+                        onArtistClick = { artist -> navController.navigate(Destination.ArtistDetail.createRoute(artist)) },
+                        onSearchClick = { navController.navigate(Destination.Search.route) },
+                        onInitialContentReady = onInitialContentReady
+                    )
+                }
             }
             composable(Destination.Playlists.route) {
-                PlaylistsScreen(
-                    viewModel = playlistsViewModel,
-                    onPlaylistClick = { kind -> navController.navigate(Destination.PlaylistDetail.createRoute(kind.name)) },
-                    onCustomPlaylistClick = { id ->
-                        val routeId = if (id.startsWith("server:")) {
-                            "remote:${id.removePrefix("server:")}"
-                        } else {
-                            "custom:$id"
+                RouteContent(tabBottom) {
+                    PlaylistsScreen(
+                        viewModel = playlistsViewModel,
+                        onPlaylistClick = { kind -> navController.navigate(Destination.PlaylistDetail.createRoute(kind.name)) },
+                        onCustomPlaylistClick = { id ->
+                            val routeId = if (id.startsWith("server:")) {
+                                "remote:${id.removePrefix("server:")}"
+                            } else {
+                                "custom:$id"
+                            }
+                            navController.navigate(Destination.PlaylistDetail.createRoute(routeId))
                         }
-                        navController.navigate(Destination.PlaylistDetail.createRoute(routeId))
-                    }
-                )
+                    )
+                }
             }
-            composable(Destination.Stats.route) { StatsScreen(viewModel = statsViewModel) }
+            composable(Destination.Stats.route) {
+                RouteContent(tabBottom) { StatsScreen(viewModel = statsViewModel) }
+            }
             composable(Destination.Settings.route) {
-                SettingsScreen(
-                    viewModel = settingsViewModel,
-                    onNavigateToUpload = { navController.navigate(Destination.Upload.route) },
-                    onNavigateToGapFinder = { navController.navigate(Destination.GapFinder.route) },
-                    onNavigateToManageSources = { navController.navigate(Destination.ManageSources.route) }
-                )
+                RouteContent(tabBottom) {
+                    SettingsScreen(
+                        viewModel = settingsViewModel,
+                        onNavigateToUpload = { navController.navigate(Destination.Upload.route) },
+                        onNavigateToGapFinder = { navController.navigate(Destination.GapFinder.route) },
+                        onNavigateToManageSources = { navController.navigate(Destination.ManageSources.route) }
+                    )
+                }
             }
             composable(Destination.Upload.route) {
-                com.necroware.terminusplayer.ui.screens.upload.UploadScreen(onBack = { navController.popBackStack() })
+                RouteContent(detailBottom) {
+                    com.necroware.terminusplayer.ui.screens.upload.UploadScreen(onBack = { navController.popBackStack() })
+                }
             }
             composable(Destination.GapFinder.route) {
-                com.necroware.terminusplayer.ui.screens.gapfinder.GapFinderScreen(onBack = { navController.popBackStack() })
+                RouteContent(detailBottom) {
+                    com.necroware.terminusplayer.ui.screens.gapfinder.GapFinderScreen(onBack = { navController.popBackStack() })
+                }
             }
             composable(Destination.ManageSources.route) {
-                com.necroware.terminusplayer.ui.screens.managesources.ManageSourcesScreen(onBack = { navController.popBackStack() })
+                RouteContent(detailBottom) {
+                    com.necroware.terminusplayer.ui.screens.managesources.ManageSourcesScreen(onBack = { navController.popBackStack() })
+                }
             }
             composable(
                 route = Destination.AlbumDetail.route,
@@ -381,7 +442,9 @@ fun TerminusNavGraph(
                 popEnterTransition = { detailPopEnter(motionPreference, systemAnimationsEnabled) },
                 popExitTransition = { detailPopExit(motionPreference, systemAnimationsEnabled) }
             ) {
-                AlbumDetailScreen(onBack = { navController.popBackStack() })
+                RouteContent(detailBottom) {
+                    AlbumDetailScreen(onBack = { navController.popBackStack() })
+                }
             }
             composable(
                 route = Destination.ArtistDetail.route,
@@ -391,7 +454,9 @@ fun TerminusNavGraph(
                 popEnterTransition = { detailPopEnter(motionPreference, systemAnimationsEnabled) },
                 popExitTransition = { detailPopExit(motionPreference, systemAnimationsEnabled) }
             ) {
-                ArtistDetailScreen(onBack = { navController.popBackStack() })
+                RouteContent(detailBottom) {
+                    ArtistDetailScreen(onBack = { navController.popBackStack() })
+                }
             }
             composable(
                 route = Destination.PlaylistDetail.route,
@@ -401,12 +466,14 @@ fun TerminusNavGraph(
                 popEnterTransition = { detailPopEnter(motionPreference, systemAnimationsEnabled) },
                 popExitTransition = { detailPopExit(motionPreference, systemAnimationsEnabled) }
             ) {
-                PlaylistDetailScreen(
-                    onBack = { navController.popBackStack() },
-                    onOpenPlayer = {
-                        if (prefs.openPlayerOnPlaylistTrackSelect) openPlayer()
-                    }
-                )
+                RouteContent(tabBottom) {
+                    PlaylistDetailScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenPlayer = {
+                            if (prefs.openPlayerOnPlaylistTrackSelect) openPlayer()
+                        }
+                    )
+                }
             }
             composable(
                 route = Destination.Search.route,
@@ -415,10 +482,12 @@ fun TerminusNavGraph(
                 popEnterTransition = { detailPopEnter(motionPreference, systemAnimationsEnabled) },
                 popExitTransition = { detailExit(motionPreference, systemAnimationsEnabled) }
             ) {
-                SearchScreen(
-                    onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, openPlayer, prefs.openPlayerOnLibraryTrackSelect) },
-                    onBack = { navController.popBackStack() }
-                )
+                RouteContent(detailBottom) {
+                    SearchScreen(
+                        onSongClick = { song, queue -> handleSongClick(song, queue, playbackViewModel, openPlayer, prefs.openPlayerOnLibraryTrackSelect) },
+                        onBack = { navController.popBackStack() }
+                    )
+                }
             }
         }
         }
@@ -426,12 +495,16 @@ fun TerminusNavGraph(
             state = panelState,
             bottomBarHeight = innerPadding.calculateBottomPadding(),
             miniVisible = miniVisible,
+            // Where the nav bar slid away, the collapsed mini bar moves down into its place
+            // (keeping clear of the system navigation bar).
+            collapsedShiftPx = { (navBarHeightPx - systemNavBottomPx).coerceAtLeast(0) * navHide.value },
             background = appPalette.playerBackground,
             onCollapsed = { playbackViewModel.clearPendingPlaybackSelection() },
             mini = { artModifier, titleModifier, rowModifier ->
                 // Collected only while the mini bar is composed; the flow polls every 500 ms while
                 // playing (2 s paused) and stops shortly after the last collector leaves.
                 val miniPosition = playbackViewModel.positionMs.collectAsStateWithLifecycle()
+                val miniNeighbours by playbackViewModel.swipeNeighbours.collectAsStateWithLifecycle()
                 MaterialTheme(colorScheme = miniColorScheme) {
                     MiniPlayerBar(
                         nowPlaying = nowPlaying,
@@ -450,9 +523,11 @@ fun TerminusNavGraph(
                         },
                         onSwipeSkip = { toNext ->
                             haptic(true)
-                            if (toNext) playbackViewModel.skipToNext() else playbackViewModel.skipToPrevious()
+                            playbackViewModel.swipeSkip(toNext)
                         },
-                        swipeSettleSpec = motion.panel.floatSpec
+                        neighbours = miniNeighbours,
+                        swipeSettleSpec = motion.panel.floatSpec,
+                        playPauseMorphMs = motion.glyphMorphMs
                     )
                 }
             },
@@ -510,6 +585,12 @@ fun TerminusNavGraph(
         }
         }
     }
+}
+
+/** One route's screen with its own fixed bottom padding (room for the chrome it shows). */
+@Composable
+private fun RouteContent(bottom: Dp, content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxSize().padding(bottom = bottom)) { content() }
 }
 
 private fun handleSongClick(

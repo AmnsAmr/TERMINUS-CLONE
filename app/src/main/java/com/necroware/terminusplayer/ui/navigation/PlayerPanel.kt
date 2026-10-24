@@ -175,8 +175,9 @@ private fun GraphicsLayerScope.applySharedBounds(from: Rect, to: Rect, startScal
  * it covers the screen. The mini bar and full player are its two faces.
  *
  * @param bottomBarHeight Scaffold bottom padding: reserved mini-bar room plus the navigation bar.
- * @param miniVisible False on routes without bottom chrome or when nothing is loaded; the
- *   collapsed panel then rests fully off-screen.
+ * @param miniVisible False when nothing is loaded; the collapsed panel then rests fully off-screen.
+ * @param collapsedShiftPx Extra downward shift of the collapsed panel, applied in proportion to how
+ *   collapsed it is (none when open). Used while the bottom nav is slid away. Read while drawing.
  * @param mini Mini bar; receives modifiers for its artwork, title and whole row.
  * @param full Full player; composed only while the panel is at least partly open.
  */
@@ -186,6 +187,7 @@ internal fun PlayerPanel(
     state: PlayerPanelState,
     bottomBarHeight: Dp,
     miniVisible: Boolean,
+    collapsedShiftPx: () -> Float,
     background: Color,
     onCollapsed: () -> Unit,
     mini: @Composable (artModifier: Modifier, titleModifier: Modifier, rowModifier: Modifier) -> Unit,
@@ -226,7 +228,7 @@ internal fun PlayerPanel(
             .graphicsLayer {
                 val offset = state.draggable.offset
                 translationY = when {
-                    !offset.isNaN() -> offset
+                    !offset.isNaN() -> offset + collapsedShiftPx() * (1f - state.fraction)
                     state.draggable.currentValue == PlayerPanelValue.Expanded -> 0f
                     else -> size.height
                 }

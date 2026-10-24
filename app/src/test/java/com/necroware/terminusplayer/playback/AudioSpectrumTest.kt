@@ -338,9 +338,19 @@ class AudioSpectrumTest {
         val boostedFrame = frames.last { it.sequence > 0 }
         val boostedLevel = boostedFrame.level
 
+        // Part 3: Same boost, same input level, but a tone outside band 0
+        repeat(50) {
+            feedContinuousChunk(3600.0, 0.2f)
+            advanceTimeBy(5)
+        }
+        runCurrent()
+        val outsideLevel = frames.last { it.sequence > 0 }.level
+
+        // Auto pre-gain fully compensates the boost, so the boosted band keeps roughly its flat level
+        // while everything else drops by ~12.5 dB. The spectrum must show that relative difference.
         assertTrue(
-            "Spectrum level with +12 dB boost ($boostedLevel) must be higher than flat ($flatLevel)",
-            boostedLevel > flatLevel * 1.5f
+            "With +12 dB on band 0, 60 Hz ($boostedLevel, flat was $flatLevel) must read higher than 3600 Hz ($outsideLevel)",
+            boostedLevel > outsideLevel * 1.5f
         )
     }
 }

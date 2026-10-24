@@ -67,6 +67,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import com.necroware.terminusplayer.ui.TestTags
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
@@ -337,7 +339,7 @@ fun LibraryScreen(
                             ) {
                                 items(sortedAlbums, key = { it.title }, contentType = { "album_card" }) { album ->
                                     TerminalBorder(
-                                        modifier = Modifier.fillMaxWidth().clickable { onAlbumClick(album.title) }
+                                        modifier = Modifier.fillMaxWidth().testTag(TestTags.ALBUM_ROW).clickable { onAlbumClick(album.title) }
                                     ) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             SongArt(uriString = album.representativeUriString, size = 48.dp)
@@ -1107,6 +1109,7 @@ fun LibrarySongRow(
 
     Box(
         modifier = Modifier
+            .testTag(TestTags.SONG_ROW)
             .fillMaxWidth()
             .clipToBounds()
     ) {

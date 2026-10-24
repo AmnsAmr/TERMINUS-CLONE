@@ -77,6 +77,7 @@ class MotionTransitionPolicyTest {
         assertFalse(off.panel.animated)
         assertTrue(off.panel.floatSpec is SnapSpec<*>)
         assertEquals(55, off.crossfadeMs)
+        assertEquals(0, off.glyphMorphMs)
     }
 
     @Test
@@ -84,6 +85,7 @@ class MotionTransitionPolicyTest {
         val tokens = motionTokens(MotionPreference.SYSTEM, systemAnimationsEnabled = false)
         assertTrue(tokens.transition.isInstant)
         assertEquals(0, tokens.crossfadeMs)
+        assertEquals(0, tokens.glyphMorphMs)
         assertTrue(tokens.panel.floatSpec is SnapSpec<*>)
     }
 
@@ -103,5 +105,8 @@ class MotionTransitionPolicyTest {
         assertTrue(system.panel.stiffness < medium.panel.stiffness)
         assertTrue(full.crossfadeMs > system.crossfadeMs)
         assertTrue(system.crossfadeMs > medium.crossfadeMs)
+        assertTrue(full.glyphMorphMs > system.glyphMorphMs)
+        assertTrue(system.glyphMorphMs > medium.glyphMorphMs)
+        assertTrue(medium.glyphMorphMs > 0)
     }
 }

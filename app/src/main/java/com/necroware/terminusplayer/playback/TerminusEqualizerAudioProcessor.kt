@@ -1,6 +1,7 @@
 package com.necroware.terminusplayer.playback
 
 import androidx.annotation.OptIn
+import androidx.annotation.VisibleForTesting
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
@@ -54,7 +55,34 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
         const val FLAT_SKIP_STATE_EPSILON = 1e-7
         const val WAVESHAPER_THRESHOLD_DB = -0.01
         const val NYQUIST_GUARD_RATIO = 0.40
+
+        /**
+         * Extra cut on top of full compensation whenever any band is boosted. A single boosted band
+         * driven by a full-scale sine at its centre then peaks at 10^(-0.5/20) = 0.944, below
+         * [LIMITER_KNEE], so the limiter never touches it.
+         */
+        const val AUTO_PREAMP_MARGIN_DB = 0.5
+
+        /** The safety limiter is transparent below this level and rounds off to a ceiling of 1.0 above it. */
+        const val LIMITER_KNEE = 0.95
+        private const val LIMITER_RANGE = 1.0 - LIMITER_KNEE
+
         private val FLAT_GAINS = List(BAND_COUNT) { 0f }
+
+        /**
+         * Auto pre-gain: fully compensates the largest boost, plus [AUTO_PREAMP_MARGIN_DB].
+         * Cuts alone need no compensation, so flat or cut-only settings return exactly 0.0 and keep
+         * the bit-identical flat bypass reachable.
+         */
+        fun autoPreGainDb(enabled: Boolean, gainsDb: List<Float>): Double {
+            if (!enabled) return 0.0
+            var maxBoost = 0.0
+            for (k in 0 until BAND_COUNT) {
+                val g = gainsDb.getOrElse(k) { 0f }.toDouble()
+                if (g > maxBoost) maxBoost = g
+            }
+            return if (maxBoost > 0.0) -(maxBoost + AUTO_PREAMP_MARGIN_DB) else 0.0
+        }
     }
 
     @Volatile
@@ -92,6 +120,14 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
     // Block smoothing factor
     private var alphaBlock = 0.0
     private var sampleInBlock = 0
+
+    /**
+     * Samples the safety limiter has reshaped since construction. Written only by the audio thread and
+     * only on the rare samples above [LIMITER_KNEE]; tests read it to prove the limiter stayed idle.
+     */
+    @VisibleForTesting
+    internal var limiterEngagedSamples = 0L
+        private set
 
     /**
      * Updates equalizer parameters. Thread-safe: writes an immutable reference read
@@ -148,16 +184,7 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
             recomputeCoefficientsForBand(k, activeGainsDb[k])
         }
 
-        val maxGain = if (enabled) {
-            var m = 0.0
-            for (k in 0 until BAND_COUNT) {
-                val g = activeGainsDb[k]
-                if (g > m) m = g
-            }
-            m
-        } else 0.0
-
-        activePreGainDb = if (enabled) -0.35 * maxGain else 0.0
+        activePreGainDb = autoPreGainDb(enabled, p.gainsDb)
         linPreEnd = 10.0.pow(activePreGainDb / 20.0)
         linPreStart = linPreEnd
         sampleInBlock = 0
@@ -287,15 +314,7 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
 
         val enabled = p.enabled
         val targetGains = if (enabled) p.gainsDb else FLAT_GAINS
-        val maxTargetGain = if (enabled) {
-            var m = 0.0
-            for (k in 0 until BAND_COUNT) {
-                val g = targetGains.getOrElse(k) { 0f }.toDouble()
-                if (g > m) m = g
-            }
-            m
-        } else 0.0
-        val targetPreGainDb = if (enabled) -0.35 * maxTargetGain else 0.0
+        val targetPreGainDb = autoPreGainDb(enabled, p.gainsDb)
 
         for (frame in 0 until frameCount) {
             if (sampleInBlock == 0) {
@@ -332,9 +351,12 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
                     x = 0.0
                 }
 
-                // Asymptotic tanh waveshaper applied only while active pre-gain < -0.01 dB
-                if (applyWaveshaper && Math.abs(x) > 0.95) {
-                    x = Math.signum(x) * (0.95 + 0.05 * tanh((Math.abs(x) - 0.95) / 0.05))
+                // Safety limiter for residual overshoot (neighbouring boosted bands, phase-shifted
+                // peaks). Applied only while the pre-gain is active; a single boosted band stays
+                // below the knee because of AUTO_PREAMP_MARGIN_DB.
+                if (applyWaveshaper && Math.abs(x) > LIMITER_KNEE) {
+                    x = Math.signum(x) * (LIMITER_KNEE + LIMITER_RANGE * tanh((Math.abs(x) - LIMITER_KNEE) / LIMITER_RANGE))
+                    limiterEngagedSamples++
                 }
 
                 if (isFloat) {

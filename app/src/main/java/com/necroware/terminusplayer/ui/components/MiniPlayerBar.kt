@@ -1,14 +1,10 @@
 package com.necroware.terminusplayer.ui.components
 
 import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,16 +20,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.necroware.terminusplayer.playback.NowPlayingState
-import kotlin.math.abs
+import com.necroware.terminusplayer.ui.TestTags
 
 /** Fixed bar height. The bottom bar reserves exactly this much space for the player panel. */
 val MiniPlayerHeight: Dp = 52.dp
@@ -41,17 +39,9 @@ val MiniPlayerHeight: Dp = 52.dp
 /** Horizontal travel that commits a swipe-to-skip. */
 private val SwipeSkipDistance = 64.dp
 
-/** A fling at least this fast in the swipe direction commits it with less travel. */
-private val SwipeSkipFlingVelocity = 900.dp
-
 private val ProgressLineHeight = 2.dp
 
-/** Whether a released horizontal swipe should skip. Negative offsets are leftward (next track). */
-internal fun shouldCommitSwipeSkip(offsetPx: Float, velocityPx: Float, distancePx: Float, flingVelocityPx: Float): Boolean {
-    if (abs(offsetPx) >= distancePx) return true
-    val sameDirection = offsetPx != 0f && (offsetPx < 0f) == (velocityPx < 0f)
-    return sameDirection && abs(velocityPx) >= flingVelocityPx && abs(offsetPx) >= distancePx / 3f
-}
+private val MiniArtSize = 34.dp
 
 /**
  * Edge-to-edge mini player bar sitting directly above the bottom nav — NOT
@@ -74,31 +64,38 @@ fun MiniPlayerBar(
     artCrossfadeMs: Int = 0,
     /** Playback progress 0..1, read while drawing so position updates only redraw the line. */
     progress: (() -> Float)? = null,
-    /** Called with true for a leftward swipe (next) and false for a rightward one (previous). */
+    /**
+     * Called with true for a leftward swipe (next) and false for a rightward one (previous), after the
+     * outgoing track has slid out and the incoming one has slid in.
+     */
     onSwipeSkip: ((toNext: Boolean) -> Unit)? = null,
-    swipeSettleSpec: AnimationSpec<Float> = spring()
+    /** Tracks a swipe would reach; a side without one rubber-bands instead of skipping. */
+    neighbours: SwipeNeighbours = SwipeNeighbours(),
+    swipeSettleSpec: AnimationSpec<Float> = spring(),
+    /** Play/pause morph duration from the motion tokens; 0 swaps immediately. */
+    playPauseMorphMs: Int = 0
 ) {
     if (nowPlaying.title.isBlank()) return
 
-    val density = LocalDensity.current
-    val distancePx = with(density) { SwipeSkipDistance.toPx() }
-    val flingVelocityPx = with(density) { SwipeSkipFlingVelocity.toPx() }
-    var swipeOffsetPx by remember { mutableFloatStateOf(0f) }
-    val swipeState = rememberDraggableState { delta -> swipeOffsetPx += delta }
-    val swipeModifier = if (onSwipeSkip == null) Modifier else Modifier.draggable(
+    val distancePx = with(LocalDensity.current) { SwipeSkipDistance.toPx() }
+    val swipeState = rememberSwipeSkipState()
+    // Art + title area width: the outgoing track slides this far out while the next one slides in.
+    var pageWidthPx by remember { mutableFloatStateOf(0f) }
+    val swipeModifier = if (onSwipeSkip == null) Modifier else Modifier.swipeToSkip(
         state = swipeState,
-        orientation = Orientation.Horizontal,
-        onDragStopped = { velocity ->
-            if (shouldCommitSwipeSkip(swipeOffsetPx, velocity, distancePx, flingVelocityPx)) {
-                onSwipeSkip(swipeOffsetPx < 0f)
-            }
-            animate(swipeOffsetPx, 0f, animationSpec = swipeSettleSpec) { value, _ -> swipeOffsetPx = value }
-        }
+        enabled = pageWidthPx > 0f,
+        neighbours = neighbours,
+        pageDistancePx = pageWidthPx,
+        commitDistancePx = distancePx,
+        settleSpec = swipeSettleSpec,
+        onCommit = onSwipeSkip
     )
+    if (onSwipeSkip != null) PrefetchSwipeArt(neighbours, MiniArtSize)
     val progressColor = MaterialTheme.colorScheme.primary
 
     Row(
         modifier = modifier
+            .testTag(TestTags.MINI_PLAYER)
             .fillMaxWidth()
             .height(MiniPlayerHeight)
             .background(MaterialTheme.colorScheme.surfaceVariant)
@@ -122,35 +119,65 @@ fun MiniPlayerBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Row(
-            modifier = Modifier.weight(1f).graphicsLayer { translationX = swipeOffsetPx },
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            val artUri = nowPlaying.artworkUri?.takeIf { it.isNotBlank() } ?: currentSongUri.orEmpty()
-            SongArt(uriString = artUri, size = 34.dp, modifier = artModifier, crossfadeMs = artCrossfadeMs)
-            Column(modifier = Modifier.padding(start = 8.dp)) {
-                Text(
-                    text = nowPlaying.title,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = titleModifier
-                )
-                Text(
-                    text = nowPlaying.artist,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+        SwipeSkipPager(
+            state = swipeState,
+            currentId = nowPlaying.mediaId,
+            pageDistancePx = pageWidthPx,
+            modifier = Modifier
+                .weight(1f)
+                .clipToBounds()
+                .onSizeChanged { pageWidthPx = it.width.toFloat() },
+            neighbour = { track ->
+                MiniTrackInfo(artUri = track.artUri, title = track.title, artist = track.artist)
             }
+        ) {
+            MiniTrackInfo(
+                artUri = nowPlaying.artworkUri?.takeIf { it.isNotBlank() } ?: currentSongUri.orEmpty(),
+                title = nowPlaying.title,
+                artist = nowPlaying.artist,
+                artModifier = artModifier,
+                titleModifier = titleModifier,
+                artCrossfadeMs = artCrossfadeMs
+            )
         }
         CompactTransportControls(
-            isPlaying = nowPlaying.isPlaying,
+            isPlaying = !nowPlaying.showPlayButton,
             onTogglePlayPause = onTogglePlayPause,
             onSkipNext = onSkipNext,
-            onSkipPrevious = onSkipPrevious
+            onSkipPrevious = onSkipPrevious,
+            morphMs = playPauseMorphMs
         )
+    }
+}
+
+/** Art, title and artist of one track: the mini bar's swipeable page. */
+@Composable
+private fun MiniTrackInfo(
+    artUri: String,
+    title: String,
+    artist: String,
+    artModifier: Modifier = Modifier,
+    titleModifier: Modifier = Modifier,
+    artCrossfadeMs: Int = 0
+) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        SongArt(uriString = artUri, size = MiniArtSize, modifier = artModifier, crossfadeMs = artCrossfadeMs)
+        Column(modifier = Modifier.padding(start = 8.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = titleModifier
+            )
+            Text(
+                text = artist,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }

@@ -50,6 +50,10 @@ private object Keys {
     val OPEN_PLAYER_ON_LIBRARY_TRACK_SELECT = booleanPreferencesKey("open_player_on_library_track_select")
     val OPEN_PLAYER_ON_PLAYLIST_TRACK_SELECT = booleanPreferencesKey("open_player_on_playlist_track_select")
     val REACTIVE_HUD_FLASH = booleanPreferencesKey("reactive_hud_flash")
+    val WARP_PRESET_ID = stringPreferencesKey("warp_preset_id")
+    val WARP_AUTO_CYCLE = booleanPreferencesKey("warp_auto_cycle")
+    val WARP_CYCLE_SECONDS = intPreferencesKey("warp_cycle_seconds")
+    val WARP_PRESET_LOCKED = booleanPreferencesKey("warp_preset_locked")
     val VISUALIZER_STYLE = stringPreferencesKey("visualizer_style")
     val HUD_TELEMETRY_MODE = stringPreferencesKey("hud_telemetry_mode")
     val LAST_PLAYED_SONG_ID = stringPreferencesKey("last_played_song_id_v2")
@@ -253,6 +257,22 @@ class UserPreferencesRepository @Inject constructor(
         dataStore.edit { it[Keys.OPEN_PLAYER_ON_PLAYLIST_TRACK_SELECT] = enabled }
     }
 
+    suspend fun setWarpPresetId(id: String) {
+        dataStore.edit { if (it[Keys.WARP_PRESET_ID] != id) it[Keys.WARP_PRESET_ID] = id }
+    }
+
+    suspend fun setWarpAutoCycle(enabled: Boolean) {
+        dataStore.edit { it[Keys.WARP_AUTO_CYCLE] = enabled }
+    }
+
+    suspend fun setWarpCycleSeconds(seconds: Int) {
+        dataStore.edit { it[Keys.WARP_CYCLE_SECONDS] = seconds }
+    }
+
+    suspend fun setWarpPresetLocked(locked: Boolean) {
+        dataStore.edit { it[Keys.WARP_PRESET_LOCKED] = locked }
+    }
+
     suspend fun setReactiveHudFlash(enabled: Boolean) {
         dataStore.edit { it[Keys.REACTIVE_HUD_FLASH] = enabled }
     }
@@ -308,6 +328,7 @@ class UserPreferencesRepository @Inject constructor(
         val openPlayerOnLibraryTrackSelect = this[Keys.OPEN_PLAYER_ON_LIBRARY_TRACK_SELECT] ?: defaults.openPlayerOnLibraryTrackSelect
         val openPlayerOnPlaylistTrackSelect = this[Keys.OPEN_PLAYER_ON_PLAYLIST_TRACK_SELECT] ?: defaults.openPlayerOnPlaylistTrackSelect
         val reactiveHudFlash = this[Keys.REACTIVE_HUD_FLASH] ?: defaults.reactiveHudFlash
+        val warpCycleSeconds = this[Keys.WARP_CYCLE_SECONDS]?.takeIf { it in setOf(15, 30, 60) } ?: defaults.warpCycleSeconds
         val visualizerStyle = this[Keys.VISUALIZER_STYLE]?.let { runCatching { VisualizerStyle.valueOf(it) }.getOrNull() }
             ?: defaults.visualizerStyle
         val eqBands = List(5) { index -> this[eqBandKey(index)] ?: 0 }
@@ -340,6 +361,10 @@ class UserPreferencesRepository @Inject constructor(
             openPlayerOnLibraryTrackSelect = openPlayerOnLibraryTrackSelect,
             openPlayerOnPlaylistTrackSelect = openPlayerOnPlaylistTrackSelect,
             reactiveHudFlash = reactiveHudFlash,
+            warpPresetId = this[Keys.WARP_PRESET_ID] ?: defaults.warpPresetId,
+            warpAutoCycle = this[Keys.WARP_AUTO_CYCLE] ?: defaults.warpAutoCycle,
+            warpCycleSeconds = warpCycleSeconds,
+            warpPresetLocked = this[Keys.WARP_PRESET_LOCKED] ?: defaults.warpPresetLocked,
             visualizerStyle = visualizerStyle,
             hudTelemetryMode = hudTelemetryMode,
             lastPlayedSongId = this[Keys.LAST_PLAYED_SONG_ID],
