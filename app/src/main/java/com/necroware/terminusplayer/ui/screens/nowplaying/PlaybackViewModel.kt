@@ -195,6 +195,11 @@ class PlaybackViewModel @Inject constructor(
     }
 
     fun togglePlayPause() = controller.togglePlayPause()
+
+    /** Remembers the warp visualizer preset last shown; written only when it changed. */
+    fun setWarpPresetId(id: String) {
+        viewModelScope.launch { preferencesRepository.setWarpPresetId(id) }
+    }
     fun skipToNext() = controller.skipToNext()
     fun skipToPrevious() = controller.skipToPrevious()
 
