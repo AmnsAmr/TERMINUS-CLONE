@@ -8,6 +8,7 @@ import android.util.LruCache
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -88,6 +89,32 @@ fun rememberAdaptiveAccent(
         activeUri == null -> defaultAccent
         cached != null -> cached
         else -> lastAccent ?: defaultAccent
+    }
+}
+
+/**
+ * Reads the accent of each cover in [artworkUris] into the cache ahead of time. Pass the
+ * previous and next tracks' covers so that, after a skip or swipe, the new colour is ready at
+ * once instead of only after the new cover is read. Same gates as [rememberAdaptiveAccent].
+ */
+@Composable
+fun PrecomputeAdaptiveAccents(
+    artworkUris: List<String>,
+    enabled: Boolean,
+    performanceMode: PerformanceMode
+) {
+    val context = LocalContext.current
+    val powerManager = remember(context) { context.getSystemService(Context.POWER_SERVICE) as? PowerManager }
+    val isSystemPowerSaving = powerManager?.isPowerSaveMode == true
+    val allowed = enabled && !shouldDeferOptionalWork(performanceMode, isSystemPowerSaving)
+    val pending = if (allowed) artworkUris.filter { it.isNotBlank() } else emptyList()
+
+    LaunchedEffect(pending) {
+        for (uri in pending) {
+            if (accentCache.get(uri) != null) continue
+            val extracted = withContext(Dispatchers.IO) { extractDominantAccent(context, uri) } ?: continue
+            accentCache.put(uri, extracted)
+        }
     }
 }
 
