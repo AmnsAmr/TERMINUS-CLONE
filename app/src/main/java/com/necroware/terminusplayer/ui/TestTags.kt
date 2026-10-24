@@ -20,6 +20,8 @@ object TestTags {
     const val TRANSPORT_REPEAT = "transport_repeat"
 
     const val SONG_ROW = "song_row"
+    const val ALBUM_ROW = "album_row"
+    const val ALBUM_DETAIL_LIST = "album_detail_list"
     const val SETTINGS_LIST = "settings_list"
 
     fun motionOption(name: String) = "motion_option_$name"
