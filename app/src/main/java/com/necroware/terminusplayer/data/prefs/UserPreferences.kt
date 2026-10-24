@@ -146,6 +146,14 @@ data class UserPreferences(
     val openPlayerOnLibraryTrackSelect: Boolean = false,
     val openPlayerOnPlaylistTrackSelect: Boolean = false,
     val reactiveHudFlash: Boolean = true,
+    /** Warp visualizer: preset last shown (WarpPreset.id). */
+    val warpPresetId: String = "NEBULA",
+    /** Warp visualizer: switch presets on a timer / strong beat. */
+    val warpAutoCycle: Boolean = true,
+    /** Warp visualizer auto-cycle interval: 15, 30 or 60 s. */
+    val warpCycleSeconds: Int = 30,
+    /** Warp visualizer: keep the current preset; no auto-cycle and taps do not change it. */
+    val warpPresetLocked: Boolean = false,
     val visualizerStyle: VisualizerStyle = VisualizerStyle.BARS,
     val hudTelemetryMode: HudTelemetryMode = HudTelemetryMode.STANDARD,
     val lastPlayedSongId: String? = null,

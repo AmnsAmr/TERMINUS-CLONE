@@ -10,6 +10,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
@@ -57,6 +58,16 @@ data class NowPlayingState(
     val durationMs: Long = 0L,
     val positionMs: Long = 0L,
     val isPlaying: Boolean = false,
+    /**
+     * Whether playback is requested (the play/pause the user or a remote chose). Unlike
+     * [isPlaying] it stays true while a skip buffers the next track.
+     */
+    val playWhenReady: Boolean = false,
+    /**
+     * Whether the play/pause control should offer "play" (Media3 `Util.shouldShowPlayButton`):
+     * follows the play intent, so it does not flip while a skip buffers.
+     */
+    val showPlayButton: Boolean = true,
     val shuffleEnabled: Boolean = false,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val audioFormatLabel: String = "—",
@@ -69,7 +80,16 @@ data class NowPlayingState(
     val audioSessionId: Int = -1,
     val sizeBytes: Long = 0L,
     val isConnected: Boolean = false,
-    val connectionError: String? = null
+    val connectionError: String? = null,
+    /** Item a "previous" would reach (shuffle and repeat applied), or null at the start of the queue. */
+    val previous: QueueNeighbour? = null,
+    /** Item a "next" would reach (shuffle and repeat applied), or null at the end of the queue. */
+    val next: QueueNeighbour? = null,
+    /**
+     * Which way the last track change moved through the queue: [TRACK_CHANGE_FORWARD] or
+     * [TRACK_CHANGE_BACKWARD]. Derived from the timeline, so notification and headset skips count.
+     */
+    val transitionDirection: Int = TRACK_CHANGE_FORWARD
 )
 
 /**
@@ -94,6 +114,11 @@ class PlaybackController @Inject constructor(
     private val queueRequestGeneration = AtomicLong(0L)
     private var seekResolutionJob: Job? = null
 
+    // Where the current item sits in the timeline, used to tell which way the next track change went.
+    // Moves with queue edits around the same item, and to a new item only on a real transition.
+    private var anchorIndex = C.INDEX_UNSET
+    private var anchorMediaId: String? = null
+
     private val controllerListener = object : MediaController.Listener {
         override fun onDisconnected(controller: MediaController) {
             if (this@PlaybackController.controller === controller) {
@@ -102,6 +127,8 @@ class PlaybackController @Inject constructor(
                 _state.value = _state.value.copy(
                     isConnected = false,
                     isPlaying = false,
+                    playWhenReady = false,
+                    showPlayButton = true,
                     connectionError = "Playback service disconnected"
                 )
             }
@@ -118,6 +145,14 @@ class PlaybackController @Inject constructor(
     private val _state = MutableStateFlow(NowPlayingState())
     val state: StateFlow<NowPlayingState> = _state
 
+    private val _queueVersion = MutableStateFlow(0)
+
+    /**
+     * Bumped whenever the queue, the current item or the shuffle order may have changed. Cheap to
+     * keep current; the queue itself is only built ([queueSnapshot]) while the queue sheet is shown.
+     */
+    val queueVersion: StateFlow<Int> = _queueVersion
+
     private val listener = object : Player.Listener {
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             _state.value = _state.value.copy(
@@ -131,10 +166,22 @@ class PlaybackController @Inject constructor(
         }
 
         override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+            controller?.let { c ->
+                if (c.currentMediaItem?.mediaId == anchorMediaId) updateAnchor(c)
+            }
             updateFromController()
         }
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            controller?.let { c ->
+                val direction = if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
+                    TRACK_CHANGE_FORWARD
+                } else {
+                    c.currentTimeline.trackChangeDirection(anchorIndex, c.currentMediaItemIndex, c.repeatMode, c.shuffleModeEnabled)
+                }
+                _state.value = _state.value.copy(transitionDirection = direction)
+                updateAnchor(c)
+            }
             updateFromController()
         }
 
@@ -142,12 +189,21 @@ class PlaybackController @Inject constructor(
             _state.value = _state.value.copy(isPlaying = isPlaying)
         }
 
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            _state.value = _state.value.copy(playWhenReady = playWhenReady, showPlayButton = Util.shouldShowPlayButton(controller))
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            _state.value = _state.value.copy(showPlayButton = Util.shouldShowPlayButton(controller))
+        }
+
+        // Both change which items are the neighbours, so refresh everything.
         override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
-            _state.value = _state.value.copy(shuffleEnabled = shuffleModeEnabled)
+            updateFromController()
         }
 
         override fun onRepeatModeChanged(repeatMode: Int) {
-            _state.value = _state.value.copy(repeatMode = repeatMode)
+            updateFromController()
         }
 
         override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
@@ -188,6 +244,7 @@ class PlaybackController @Inject constructor(
                     connectionError = null,
                     audioSessionId = if (initialSessionId > 0) initialSessionId else _state.value.audioSessionId
                 )
+                updateAnchor(connectedController)
                 updateFromController()
                 readyCallbacks.toList().also { readyCallbacks.clear() }.forEach { it() }
             } catch (e: InterruptedException) {
@@ -217,7 +274,7 @@ class PlaybackController @Inject constructor(
         controller?.removeListener(listener)
         controller?.release()
         controller = null
-        _state.value = _state.value.copy(isConnected = false, isPlaying = false)
+        _state.value = _state.value.copy(isConnected = false, isPlaying = false, playWhenReady = false, showPlayButton = true)
     }
 
     fun playSongs(items: List<MediaItem>, startIndex: Int) {
@@ -436,10 +493,9 @@ class PlaybackController @Inject constructor(
         }
     }
 
+    /** Media3's standard action: follows the play intent; from ENDED it restarts, from IDLE it prepares. */
     fun togglePlayPause() {
-        controller?.apply {
-            if (isPlaying) pause() else play()
-        }
+        Util.handlePlayPauseButtonAction(controller)
     }
 
     fun stopPlayback() {
@@ -456,7 +512,9 @@ class PlaybackController @Inject constructor(
             durationMs = 0L,
             positionMs = 0L,
             isPlaying = false,
-            connectionError = null
+            connectionError = null,
+            previous = null,
+            next = null
         )
     }
 
@@ -478,10 +536,15 @@ class PlaybackController @Inject constructor(
     fun skipToNext() = controller?.seekToNext()
     fun skipToPrevious() = controller?.seekToPrevious()
 
-    /** True when [skipToPrevious] will move to the previous item rather than restart the current one (Media3 seekToPrevious rule). */
-    fun willSkipToPreviousItem(): Boolean = controller?.let { player ->
-        player.hasPreviousMediaItem() && player.currentPosition <= player.maxSeekToPreviousPosition
-    } ?: false
+    /** Always moves to the next item; swipe-to-skip uses it because the next cover is already showing. */
+    fun skipToNextItem() = controller?.seekToNextMediaItem()
+
+    /**
+     * Always moves to the previous item, never restarts the current one: a swipe has already shown
+     * the previous cover sliding in, unlike the |<< button which follows Media3's 3-second rule.
+     */
+    fun skipToPreviousItem() = controller?.seekToPreviousMediaItem()
+
     fun seekTo(positionMs: Long) {
         val targetPositionMs = positionMs.coerceAtLeast(0L)
         val activeController = controller ?: return
@@ -566,6 +629,7 @@ class PlaybackController @Inject constructor(
         val knownDurationMs = itemMetadata?.durationMs
             ?: metadata.durationMs
             ?: 0L
+        val neighbours = c.currentTimeline.neighbourIndices(c.currentMediaItemIndex, c.repeatMode, c.shuffleModeEnabled)
         _state.value = _state.value.copy(
             mediaId = c.currentMediaItem?.mediaId,
             title = metadata.title?.toString().orEmpty(),
@@ -581,8 +645,125 @@ class PlaybackController @Inject constructor(
                 else -> 0L
             },
             isPlaying = c.isPlaying,
+            playWhenReady = c.playWhenReady,
+            showPlayButton = Util.shouldShowPlayButton(c),
             shuffleEnabled = c.shuffleModeEnabled,
-            repeatMode = c.repeatMode
+            repeatMode = c.repeatMode,
+            previous = c.neighbourAt(neighbours.previous),
+            next = c.neighbourAt(neighbours.next)
+        )
+        _queueVersion.value++
+    }
+
+    /**
+     * What the queue sheet needs from the controller: the items (immutable, so they can be read on
+     * another thread), the playback order and the current item. Main thread; only collects references,
+     * the rows are built from it off the main thread ([QueueSource.toState]).
+     */
+    fun queueSource(): QueueSource? {
+        val c = controller ?: return null
+        // Named so a system trace shows what the sheet costs on the main thread with large queues.
+        android.os.Trace.beginSection("Terminus:queueSource")
+        try {
+            val shuffle = c.shuffleModeEnabled
+            return QueueSource(
+                items = List(c.mediaItemCount) { c.getMediaItemAt(it) },
+                order = c.currentTimeline.playbackOrder(shuffle),
+                currentIndex = c.currentMediaItemIndex,
+                shuffle = shuffle
+            )
+        } finally {
+            android.os.Trace.endSection()
+        }
+    }
+
+    /** Moves the queue item at [fromIndex] to [toIndex] (queue indices, as Media3's moveMediaItem). */
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) {
+        val c = controller ?: return
+        if (fromIndex !in 0 until c.mediaItemCount || toIndex !in 0 until c.mediaItemCount) return
+        c.moveMediaItem(fromIndex, toIndex)
+    }
+
+    /** Removes the queue item at [index]; returns what is needed to undo it. */
+    fun removeQueueItem(index: Int): RemovedQueueItem? {
+        val c = controller ?: return null
+        if (index !in 0 until c.mediaItemCount) return null
+        val item = c.getMediaItemAt(index)
+        val removed = RemovedQueueItem(
+            index = index,
+            mediaItem = item,
+            title = item.mediaMetadata.title?.toString().orEmpty(),
+            wasCurrent = index == c.currentMediaItemIndex,
+            positionMs = c.currentPosition,
+            playWhenReady = c.playWhenReady
+        )
+        c.removeMediaItem(index)
+        return removed
+    }
+
+    /** Puts a removed item back; if it was the current track, playback returns to it where it was. */
+    fun restoreQueueItem(removed: RemovedQueueItem) {
+        playbackScope.launch {
+            try {
+                val item = playableItem(removed.mediaItem)
+                if (item == null) {
+                    _state.value = _state.value.copy(connectionError = "Unable to restore the removed track")
+                    return@launch
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    val c = controller ?: return@withContext
+                    val plan = undoPlan(removed, c.mediaItemCount)
+                    c.addMediaItem(plan.insertIndex, item)
+                    if (plan.seekToInserted) {
+                        c.seekTo(plan.insertIndex, plan.positionMs)
+                        if (c.playbackState == Player.STATE_IDLE) c.prepare()
+                        c.playWhenReady = removed.playWhenReady
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(connectionError = e.message ?: "Unable to restore the removed track")
+            }
+        }
+    }
+
+    /**
+     * An item the player can play again. Items read back through the MediaController carry no
+     * playback URI (the player drops them silently when re-added), so they are rebuilt the way
+     * [playSongNext] builds them.
+     */
+    private suspend fun playableItem(item: MediaItem): MediaItem? {
+        if (item.localConfiguration != null) return item
+        val id = item.mediaId
+        if (id.startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)) {
+            return createExternalAudioItem(Uri.parse(id.removePrefix(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)))
+        }
+        val song = musicRepository.getSong(id) ?: return null
+        val resolvedUri = musicRepository.getSongUris(listOf(id))[id] ?: song.uriString
+        return withContext(Dispatchers.Default) { song.copy(uriString = resolvedUri).toMediaItem() }
+    }
+
+    /** Jumps to the queue item at [index] from its start. */
+    fun playQueueItem(index: Int) {
+        val c = controller ?: return
+        if (index !in 0 until c.mediaItemCount) return
+        c.seekTo(index, 0L)
+    }
+
+    private fun updateAnchor(c: MediaController) {
+        anchorIndex = c.currentMediaItemIndex
+        anchorMediaId = c.currentMediaItem?.mediaId
+    }
+
+    private fun MediaController.neighbourAt(index: Int): QueueNeighbour? {
+        if (index == C.INDEX_UNSET || index !in 0 until mediaItemCount) return null
+        val item = getMediaItemAt(index)
+        return QueueNeighbour(
+            mediaId = item.mediaId,
+            title = item.mediaMetadata.title?.toString().orEmpty(),
+            artist = item.mediaMetadata.artist?.toString().orEmpty(),
+            artworkUri = item.mediaMetadata.artworkUri?.toString()
         )
     }
 }

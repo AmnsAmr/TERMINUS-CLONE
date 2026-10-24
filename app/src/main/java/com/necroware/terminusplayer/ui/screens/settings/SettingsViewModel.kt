@@ -166,6 +166,18 @@ class SettingsViewModel @Inject constructor(
         preferencesRepository.setOpenPlayerOnPlaylistTrackSelect(enabled)
     }
 
+    fun setWarpAutoCycle(enabled: Boolean) = viewModelScope.launch {
+        preferencesRepository.setWarpAutoCycle(enabled)
+    }
+
+    fun setWarpCycleSeconds(seconds: Int) = viewModelScope.launch {
+        preferencesRepository.setWarpCycleSeconds(seconds)
+    }
+
+    fun setWarpPresetLocked(locked: Boolean) = viewModelScope.launch {
+        preferencesRepository.setWarpPresetLocked(locked)
+    }
+
     fun setReactiveHudFlash(enabled: Boolean) = viewModelScope.launch {
         preferencesRepository.setReactiveHudFlash(enabled)
     }

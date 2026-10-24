@@ -38,6 +38,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import com.necroware.terminusplayer.ui.TestTags
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -58,6 +60,9 @@ import com.necroware.terminusplayer.data.prefs.TerminalCursorBlink
 import com.necroware.terminusplayer.data.prefs.TerminalHaptics
 import com.necroware.terminusplayer.data.prefs.HudTelemetryMode
 import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
+import com.necroware.terminusplayer.ui.components.visualizer.WarpCycleIntervals
+import com.necroware.terminusplayer.ui.components.visualizer.WarpPresets
+import com.necroware.terminusplayer.ui.components.visualizer.warpPresetIndex
 import com.necroware.terminusplayer.data.prefs.VisualizerStyle
 import com.necroware.terminusplayer.data.prefs.ThemePresetId
 import com.necroware.terminusplayer.data.prefs.ThemeColorRole
@@ -125,7 +130,7 @@ fun SettingsScreen(
     }
 
     LazyColumn(
-        modifier = Modifier.fillMaxWidth().padding(20.dp),
+        modifier = Modifier.testTag(TestTags.SETTINGS_LIST).fillMaxWidth().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
         item {
@@ -218,6 +223,13 @@ fun SettingsScreen(
                     onVisualizerStyleChange = viewModel::setVisualizerStyle,
                     playbackArtStyle = prefs.playbackArtStyle,
                     onPlaybackArtStyleChange = viewModel::setPlaybackArtStyle,
+                    warpPresetLabel = WarpPresets[warpPresetIndex(prefs.warpPresetId)].label,
+                    warpAutoCycle = prefs.warpAutoCycle,
+                    onWarpAutoCycleChange = viewModel::setWarpAutoCycle,
+                    warpCycleSeconds = prefs.warpCycleSeconds,
+                    onWarpCycleSecondsChange = viewModel::setWarpCycleSeconds,
+                    warpPresetLocked = prefs.warpPresetLocked,
+                    onWarpPresetLockedChange = viewModel::setWarpPresetLocked,
                     motionPreference = effectiveMotionPreference
                 )
             }
@@ -771,6 +783,7 @@ private fun MotionPreferenceSection(
             MotionPreference.entries.forEach { preference ->
                 Column(
                     modifier = Modifier
+                        .testTag(TestTags.motionOption(preference.name))
                         .fillMaxWidth()
                         .clickable { onSelect(preference) }
                         .padding(vertical = 8.dp)
@@ -1014,6 +1027,7 @@ private fun SettingsDropdown(
     Column {
         Row(
             modifier = Modifier
+                .testTag(TestTags.settingsSection(label))
                 .fillMaxWidth()
                 .clickable { onToggle() }
                 .padding(vertical = 8.dp),
@@ -1061,6 +1075,13 @@ private fun CrtAestheticsSection(
     onVisualizerStyleChange: (VisualizerStyle) -> Unit,
     playbackArtStyle: PlaybackArtStyle,
     onPlaybackArtStyleChange: (PlaybackArtStyle) -> Unit,
+    warpPresetLabel: String,
+    warpAutoCycle: Boolean,
+    onWarpAutoCycleChange: (Boolean) -> Unit,
+    warpCycleSeconds: Int,
+    onWarpCycleSecondsChange: (Int) -> Unit,
+    warpPresetLocked: Boolean,
+    onWarpPresetLockedChange: (Boolean) -> Unit,
     motionPreference: MotionPreference
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1167,6 +1188,7 @@ private fun CrtAestheticsSection(
                     }
                     Column(
                         modifier = Modifier
+                            .testTag(TestTags.artStyleOption(style.name))
                             .fillMaxWidth()
                             .clickable { onPlaybackArtStyleChange(style) }
                             .padding(vertical = 6.dp)
@@ -1184,6 +1206,43 @@ private fun CrtAestheticsSection(
                     }
                 }
             }
+        }
+
+        if (playbackArtStyle == PlaybackArtStyle.VISUALIZER) {
+            ToggleRow(
+                label = "VISUALIZER AUTO-CYCLE",
+                sublabel = "Blend to the next preset on a strong beat after the interval. Tap the visualizer for the next preset.",
+                checked = warpAutoCycle,
+                onCheckedChange = onWarpAutoCycleChange
+            )
+            if (warpAutoCycle) {
+                TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("INTERVAL", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        WarpCycleIntervals.forEach { seconds ->
+                            val isSelected = seconds == warpCycleSeconds
+                            Text(
+                                text = if (isSelected) "[ ${seconds}s ]" else "  ${seconds}s  ",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .clickable { onWarpCycleSecondsChange(seconds) }
+                                    .padding(vertical = 6.dp, horizontal = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            ToggleRow(
+                label = "LOCK PRESET: $warpPresetLabel",
+                sublabel = "Keep this preset: no auto-cycle, and taps on the visualizer do not change it",
+                checked = warpPresetLocked,
+                onCheckedChange = onWarpPresetLockedChange
+            )
         }
 
         TerminalBorder(modifier = Modifier.fillMaxWidth()) {

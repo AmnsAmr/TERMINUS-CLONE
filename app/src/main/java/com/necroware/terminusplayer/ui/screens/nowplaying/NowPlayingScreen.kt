@@ -14,6 +14,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.snap
@@ -40,6 +42,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import com.necroware.terminusplayer.ui.TestTags
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -49,7 +53,14 @@ import com.necroware.terminusplayer.data.prefs.MotionPreference
 import com.necroware.terminusplayer.ui.components.BlockSeekBar
 import com.necroware.terminusplayer.ui.components.FullTransportControls
 import com.necroware.terminusplayer.ui.components.PlaybackArt
+import com.necroware.terminusplayer.ui.components.PrefetchSwipeArt
 import com.necroware.terminusplayer.ui.components.SongArt
+import com.necroware.terminusplayer.ui.components.SwipeSkipPager
+import com.necroware.terminusplayer.ui.components.rememberSwipeSkipState
+import com.necroware.terminusplayer.ui.components.swipeToSkip
+import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
+import com.necroware.terminusplayer.playback.TRACK_CHANGE_FORWARD
+import com.necroware.terminusplayer.ui.components.visualizer.WarpPresetSettings
 import com.necroware.terminusplayer.ui.components.visualizer.WarpVisualizer
 import com.necroware.terminusplayer.ui.components.visualizer.collectSpectrum
 import com.necroware.terminusplayer.ui.navigation.MotionTokens
@@ -209,18 +220,23 @@ private data class TrackDisplay(
     val artist: String,
     val artUri: String,
     /** +1 when this track was reached going forward, -1 when going back. */
-    val direction: Int
+    val direction: Int,
+    /** Reached by swiping the art: the cover is already in place, so it must not slide in again. */
+    val viaSwipe: Boolean = false
 )
 
-/** Remembers the last track id and back-skip count so a change can be labelled next or previous. */
-internal class TrackChangeTracker(var id: String?, var backSkipCount: Int) {
-    var direction: Int = 1
+/**
+ * Keeps the direction of the change that brought in the current track until the track changes again,
+ * so recompositions with the same track do not relabel it.
+ */
+internal class TrackChangeTracker(var id: String?) {
+    var direction: Int = TRACK_CHANGE_FORWARD
 
-    fun update(newId: String?, newBackSkipCount: Int): Int {
+    /** [changeDirection] is the playback-derived direction to use if [newId] is a different track. */
+    fun update(newId: String?, changeDirection: Int): Int {
         if (newId != id) {
-            direction = if (newBackSkipCount > backSkipCount) -1 else 1
+            direction = changeDirection
             id = newId
-            backSkipCount = newBackSkipCount
         }
         return direction
     }
@@ -233,6 +249,25 @@ private fun trackSwapTransform(spec: MotionTransitionSpec, direction: Int): Cont
     // Profiles without movement (OFF, disabled system animations) must not animate size either.
     sizeTransform = SizeTransform { _, _ -> if (spec.isInstant || spec.slideFraction == 0f) snap() else spec.tweenSpec() }
 )
+
+/** Text for a track reached by swiping the art: crossfade only, the art already moved. */
+private fun trackFadeTransform(spec: MotionTransitionSpec): ContentTransform = ContentTransform(
+    targetContentEnter = spec.fadeInOrNone(),
+    initialContentExit = spec.fadeOutOrNone(),
+    sizeTransform = SizeTransform { _, _ -> snap() }
+)
+
+/** The swiped-in cover is already where it belongs: swap without any animation. */
+private val NoTrackTransform = ContentTransform(
+    targetContentEnter = EnterTransition.None,
+    initialContentExit = ExitTransition.None,
+    sizeTransform = SizeTransform { _, _ -> snap() }
+)
+
+/** Share of the page distance a slow swipe on the full-player art must travel to skip. */
+private const val ART_SWIPE_COMMIT_FRACTION = 0.25f
+
+private val ArtSize = 300.dp
 
 @Composable
 internal fun NowPlayingScreen(
@@ -259,6 +294,8 @@ internal fun NowPlayingScreen(
     val bufferedPositionMs by viewModel.bufferedPositionMs.collectAsStateWithLifecycle()
     val serverPingMs by viewModel.serverPingMs.collectAsStateWithLifecycle()
     val deferOptionalWork by viewModel.deferOptionalWork.collectAsStateWithLifecycle()
+    val swipeNeighbours by viewModel.swipeNeighbours.collectAsStateWithLifecycle()
+    val lastRemovedFromQueue by viewModel.lastRemoved.collectAsStateWithLifecycle()
     val haptic = rememberTerminalHaptics(prefs.terminalHaptics)
 
     val preparingSelection = pendingSong != null
@@ -276,21 +313,25 @@ internal fun NowPlayingScreen(
     val visualizerActive = displayIsPlaying && motionPreference == MotionPreference.FULL && !deferOptionalWork
     val spectrum = collectSpectrum(viewModel.spectrum, visualizerActive)
     var hudAlertColor by remember { mutableStateOf<Color?>(null) }
-    var previousPlayingState by remember { mutableStateOf<Boolean?>(null) }
+    var previousPlayRequested by remember { mutableStateOf<Boolean?>(null) }
 
-    LaunchedEffect(displayIsPlaying, prefs.reactiveHudFlash) {
-        if (prefs.reactiveHudFlash && previousPlayingState != null && previousPlayingState != displayIsPlaying) {
-            if (!displayIsPlaying) {
-                hudAlertColor = Color(0xFFFF3B30)
-                delay(350)
-                hudAlertColor = null
-            } else {
-                hudAlertColor = Color(0xFF00E5FF)
-                delay(200)
-                hudAlertColor = null
-            }
+    // Keyed on playWhenReady (the user's play/pause), not isPlaying: a skip buffers the next
+    // track for a moment, and that dip used to fire the pause and play flashes back to back.
+    LaunchedEffect(nowPlaying.playWhenReady, prefs.reactiveHudFlash) {
+        val playRequested = nowPlaying.playWhenReady
+        val changed = previousPlayRequested != null && previousPlayRequested != playRequested
+        previousPlayRequested = playRequested
+        if (!prefs.reactiveHudFlash || !changed) {
+            hudAlertColor = null
+            return@LaunchedEffect
         }
-        previousPlayingState = displayIsPlaying
+        // finally: a new change cancels this effect mid-delay, and the flash must not stay on.
+        try {
+            hudAlertColor = if (playRequested) Color(0xFF00E5FF) else Color(0xFFFF3B30)
+            delay(if (playRequested) 200 else 350)
+        } finally {
+            hudAlertColor = null
+        }
     }
 
     val activeAccent = hudAlertColor ?: accent
@@ -305,17 +346,24 @@ internal fun NowPlayingScreen(
     }
 
     var screenHeightPx by remember { mutableStateOf(1f) }
+    var screenWidthPx by remember { mutableStateOf(0f) }
     var lyricsExpanded by remember { mutableStateOf(false) }
     var showPlaylistPicker by remember { mutableStateOf(false) }
     val selectedSongId = pendingSong?.id ?: nowPlaying.mediaId
     val selectedSongIsExternal = selectedSongId.orEmpty().startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)
-    val trackChanges = remember { TrackChangeTracker(selectedSongId, viewModel.backSkipCount) }
+    val trackChanges = remember { TrackChangeTracker(selectedSongId) }
+    val artSwipe = rememberSwipeSkipState()
     val trackDisplay = TrackDisplay(
         id = selectedSongId,
         title = displayTitle,
         artist = displayArtist,
         artUri = targetArtUri ?: displaySongUri,
-        direction = trackChanges.update(selectedSongId, viewModel.backSkipCount)
+        // A freshly picked song is new playback, not a move through the queue.
+        direction = trackChanges.update(
+            selectedSongId,
+            if (preparingSelection) TRACK_CHANGE_FORWARD else nowPlaying.transitionDirection
+        ),
+        viaSwipe = artSwipe.isArrivingBySwipe(selectedSongId)
     )
     val scrollState = rememberScrollState()
 
@@ -349,7 +397,10 @@ internal fun NowPlayingScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .onSizeChanged { screenHeightPx = it.height.toFloat().coerceAtLeast(1f) }
+            .onSizeChanged {
+                screenHeightPx = it.height.toFloat().coerceAtLeast(1f)
+                screenWidthPx = it.width.toFloat()
+            }
     ) {
         CompositionLocalProvider(LocalAppPalette provides themedPalette) {
             MaterialTheme(colorScheme = themedColorScheme) {
@@ -357,7 +408,9 @@ internal fun NowPlayingScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 24.dp)
-                        .verticalScroll(scrollState),
+                        .verticalScroll(scrollState)
+                        // Room for the collapsed queue sheet's strip.
+                        .padding(bottom = QueuePeekHeight),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Top
                 ) {
@@ -425,37 +478,63 @@ internal fun NowPlayingScreen(
                     active = visualizerActive,
                     accent = activeAccent,
                     size = 300.dp,
-                    modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art)
+                    presetId = prefs.warpPresetId,
+                    presetSettings = WarpPresetSettings(prefs.warpAutoCycle, prefs.warpCycleSeconds, prefs.warpPresetLocked),
+                    onPresetShown = viewModel::setWarpPresetId,
+                    modifier = Modifier.testTag(TestTags.NOW_PLAYING_ART).padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art)
                 )
-            } else AnimatedContent(
-                targetState = trackDisplay,
-                contentKey = { it.id },
-                transitionSpec = { trackSwapTransform(motion.transition, targetState.direction) },
-                modifier = Modifier.padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art),
-                label = "trackArt"
-            ) { track ->
-                if (artStyle == com.necroware.terminusplayer.data.prefs.PlaybackArtStyle.STANDARD) {
-                    SongArt(
-                        uriString = track.artUri,
-                        size = 300.dp,
-                        crossfadeMs = motion.crossfadeMs
-                    )
-                } else {
-                    PlaybackArt(
-                        style = artStyle,
-                        title = track.title,
-                        artist = track.artist,
-                        isPlaying = displayIsPlaying,
-                        size = 300.dp,
-                        motionPreference = motionPreference
-                    )
+            } else {
+                PrefetchSwipeArt(swipeNeighbours, ArtSize)
+                // Swiping left shows the next cover entering from the right edge, right shows the previous
+                // one; covers are a screen width apart so they enter and leave from the screen edges.
+                SwipeSkipPager(
+                    state = artSwipe,
+                    currentId = trackDisplay.id,
+                    pageDistancePx = screenWidthPx,
+                    modifier = Modifier
+                        .testTag(TestTags.NOW_PLAYING_ART)
+                        .padding(top = 20.dp, bottom = 20.dp)
+                        // Vertical drag (collapse) first, horizontal swipe inside it: whichever axis
+                        // dominates after touch slop takes the gesture.
+                        .then(transition.drag)
+                        .swipeToSkip(
+                            state = artSwipe,
+                            enabled = !preparingSelection && screenWidthPx > 0f,
+                            neighbours = swipeNeighbours,
+                            pageDistancePx = screenWidthPx,
+                            commitDistancePx = screenWidthPx * ART_SWIPE_COMMIT_FRACTION,
+                            settleSpec = motion.panel.floatSpec,
+                            onCommit = { toNext ->
+                                haptic(true)
+                                viewModel.swipeSkip(toNext)
+                            }
+                        )
+                        .then(transition.art),
+                    neighbour = { track ->
+                        TrackArt(artStyle, track.artUri, track.title, track.artist, isPlaying = false, crossfadeMs = 0, motionPreference)
+                    }
+                ) {
+                    AnimatedContent(
+                        targetState = trackDisplay,
+                        contentKey = { it.id },
+                        transitionSpec = {
+                            if (targetState.viaSwipe) NoTrackTransform
+                            else trackSwapTransform(motion.transition, targetState.direction)
+                        },
+                        label = "trackArt"
+                    ) { track ->
+                        TrackArt(artStyle, track.artUri, track.title, track.artist, displayIsPlaying, motion.crossfadeMs, motionPreference)
+                    }
                 }
             }
 
             AnimatedContent(
                 targetState = trackDisplay,
                 contentKey = { it.id },
-                transitionSpec = { trackSwapTransform(motion.transition, targetState.direction) },
+                transitionSpec = {
+                    if (targetState.viaSwipe) trackFadeTransform(motion.transition)
+                    else trackSwapTransform(motion.transition, targetState.direction)
+                },
                 modifier = transition.title,
                 label = "trackTitle"
             ) { track ->
@@ -475,7 +554,10 @@ internal fun NowPlayingScreen(
             AnimatedContent(
                 targetState = trackDisplay,
                 contentKey = { it.id },
-                transitionSpec = { trackSwapTransform(motion.transition, targetState.direction) },
+                transitionSpec = {
+                    if (targetState.viaSwipe) trackFadeTransform(motion.transition)
+                    else trackSwapTransform(motion.transition, targetState.direction)
+                },
                 label = "trackArtist"
             ) { track ->
                 Text(
@@ -509,7 +591,9 @@ internal fun NowPlayingScreen(
             )
 
             FullTransportControls(
-                isPlaying = displayIsPlaying,
+                // Play intent, not isPlaying: the glyph must not morph to play while a skip buffers.
+                isPlaying = !preparingSelection && !nowPlaying.showPlayButton,
+                morphMs = motion.glyphMorphMs,
                 shuffleEnabled = !preparingSelection && nowPlaying.shuffleEnabled,
                 repeatMode = if (preparingSelection) androidx.media3.common.Player.REPEAT_MODE_OFF else nowPlaying.repeatMode,
                 onTogglePlayPause = {
@@ -662,6 +746,29 @@ internal fun NowPlayingScreen(
         }
         }
         }
+        CompositionLocalProvider(LocalAppPalette provides themedPalette) {
+            MaterialTheme(colorScheme = themedColorScheme) {
+                QueueSheet(
+                    queueFlow = viewModel.queue,
+                    lastRemoved = lastRemovedFromQueue,
+                    motion = motion,
+                    onPlay = { index ->
+                        haptic(true)
+                        viewModel.playQueueItem(index)
+                    },
+                    onMove = { from, to ->
+                        haptic(false)
+                        viewModel.moveQueueItem(from, to)
+                    },
+                    onRemove = { index ->
+                        haptic(true)
+                        viewModel.removeQueueItem(index)
+                    },
+                    onUndo = viewModel::undoQueueRemoval,
+                    modifier = transition.content
+                )
+            }
+        }
         CrtScanlineOverlay(
             intensity = prefs.scanlineIntensity,
             phosphorAfterglow = prefs.phosphorAfterglow,
@@ -707,5 +814,30 @@ internal fun NowPlayingScreen(
                 }
             }
         }
+    }
+}
+
+/** Album art or the selected animated art style for one track; also draws swipe neighbours. */
+@Composable
+private fun TrackArt(
+    style: PlaybackArtStyle,
+    artUri: String,
+    title: String,
+    artist: String,
+    isPlaying: Boolean,
+    crossfadeMs: Int,
+    motionPreference: MotionPreference
+) {
+    if (style == PlaybackArtStyle.STANDARD) {
+        SongArt(uriString = artUri, size = ArtSize, crossfadeMs = crossfadeMs)
+    } else {
+        PlaybackArt(
+            style = style,
+            title = title,
+            artist = artist,
+            isPlaying = isPlaying,
+            size = ArtSize,
+            motionPreference = motionPreference
+        )
     }
 }
