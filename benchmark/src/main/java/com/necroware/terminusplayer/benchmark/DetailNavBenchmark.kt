@@ -8,6 +8,7 @@ import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.Until
 import org.junit.Rule
 import org.junit.Test
@@ -40,6 +41,11 @@ class DetailNavBenchmark {
             iterations = ITERATIONS,
             startupMode = StartupMode.WARM,
             setupBlock = {
+                // UiAutomator waits up to 10 s per lookup for the UI to go idle, and the blinking title
+                // cursor keeps it from ever being idle: the 2026-10-24 runs spent 16-30 s per iteration in
+                // that wait and some traces stopped after the first tap. The fixed settle() pauses
+                // already give the screen time, so the idle wait is capped.
+                Configurator.getInstance().waitForIdleTimeout = IDLE_TIMEOUT_MS
                 pressHome()
                 startActivityAndWait()
                 if (!configured) {
@@ -89,6 +95,7 @@ class DetailNavBenchmark {
         const val CYCLES = 10
         const val SHORT_WAIT_MS = 1_500L
         const val SETTLE_MS = 1_000L
+        const val IDLE_TIMEOUT_MS = 500L
         const val ALBUMS_TAB = "[ ALBUMS ]"
 
         // Mirrors app/.../ui/TestTags.kt
