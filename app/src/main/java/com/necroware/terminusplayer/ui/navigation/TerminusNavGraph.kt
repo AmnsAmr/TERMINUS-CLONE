@@ -86,6 +86,7 @@ import com.necroware.terminusplayer.ui.screens.settings.SettingsViewModel
 import com.necroware.terminusplayer.ui.screens.stats.StatsScreen
 import com.necroware.terminusplayer.ui.screens.stats.StatsViewModel
 import com.necroware.terminusplayer.ui.theme.LocalAppPalette
+import com.necroware.terminusplayer.ui.theme.PrecomputeAdaptiveAccents
 import com.necroware.terminusplayer.ui.theme.rememberAnimatedAdaptiveAccent
 
 /** Index within the bottom-nav tab order, used to pick left/right slide direction. -1 if not a tab route. */
@@ -190,6 +191,15 @@ fun TerminusNavGraph(
         performanceMode = prefs.performanceMode,
         animationSpec = accentSpec
     )
+    // Gated here as well so nothing collects the neighbours while the feature is off.
+    if (prefs.adaptiveArtAccent) {
+        val accentNeighbours by playbackViewModel.swipeNeighbours.collectAsStateWithLifecycle()
+        PrecomputeAdaptiveAccents(
+            artworkUris = listOfNotNull(accentNeighbours.previous?.artUri, accentNeighbours.next?.artUri),
+            enabled = true,
+            performanceMode = prefs.performanceMode
+        )
+    }
     val haptic = rememberTerminalHaptics(prefs.terminalHaptics)
     var soundControlOpen by remember { mutableStateOf(false) }
     var soundControlOnLeft by remember { mutableStateOf(true) }
