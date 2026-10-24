@@ -332,16 +332,17 @@ Reading it:
 
 ### Phase 5: warp visualizer allocations, before/after (DEVICE)
 
-Galaxy S21 FE, Android 16, **`debug` build** (not minified, so allocation sites have real names; the visualizer's allocations are the same code path as release). 2026-10-24, Perfetto `android.heapprofd`, heap `com.android.art`, `sampling_interval_bytes: 1` (every Java allocation), 10 s, Warp Visualizer art, FULL motion, local FLAC playing, full player open. Before = `60bfbc8` (APK sha1 `d66cc59c`); after = Phase 5 commit.
+Galaxy S21 FE, Android 16, **`debug` build** (not minified, so allocation sites have real names; the visualizer's allocations are the same code path as release). 2026-10-24, Perfetto `android.heapprofd`, heap `com.android.art`, `sampling_interval_bytes: 1` (every Java allocation), 10 s, Warp Visualizer art, FULL motion, local FLAC playing, full player open.
 
-| Build | Frames rendered (`acquireLatestImage`) | `Bitmap.wrapHardwareBuffer` calls | `ImageReader.SurfaceImage.getHardwareBuffer` calls | Allocations under the visualizer render loop | Per rendered frame |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| Before | 171 | 174 | 174 | 861 | 5.0 |
-| After | 108 | 0 | 115 | 395 | 3.7 |
+| Build | GPU path | `Bitmap.wrapHardwareBuffer` | `getHardwareBuffer` | `acquireLatestImage` | Allocations under the render loop (10 s) | Visualizer on screen |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| Before (`60bfbc8`) | HardwareRenderer -> ImageReader, wrappers per frame | 174 | 174 | 171 | 861 | black |
+| Interim (`e72f4f4`) | same, wrappers cached per buffer | 0 | 115 | 108 | 395 | black |
+| After (`HardwareBufferRenderer`) | 3 own buffers in rotation, wrapped once | 0 | 0 | 0 | 176 | renders |
 
-- The per-frame `Bitmap` wrapper, `BitmapShader` and `ImageBitmap` wrapper are gone: they are created once per ImageReader buffer (keyed by `HardwareBuffer.id`, API 34+) and reused. Still allocated per frame: the `Image` from `acquireLatestImage` and the `HardwareBuffer` handle needed to read the buffer id. On API 33 (no buffer id) wrappers are still made per frame.
-- heapprofd byte totals for these calls include the native size registered by the framework, so they are not quoted as Java heap bytes.
-- **Open:** in both builds the loop rendered only 11-17 frames per second and the visualizer area showed black in `screencap`. Not investigated; it is the same before and after.
+- **The GPU visualizer never drew on this phone before.** `HardwareRenderer` into an `ImageReader` reported every frame as drawn (`syncAndDraw` = 0), but every image read back as `0x00000000`, even with a solid red fill. The reader was also one buffer short for `acquireLatestImage` (log flooded with "more than maxImages"; 11-17 fps). It is replaced by `HardwareBufferRenderer` (API 34+), which draws straight into three buffers created once; Android 10-13 use the Canvas renderer.
+- After: the remaining allocations are the render request and its callback result (framework) and the frame-clock suspension; nothing per frame is a Bitmap, shader or image wrapper. The app rendered 367 frames in a separate 3 s `dumpsys gfxinfo` window (about 120 fps), so 176 allocations in 10 s is well under one per frame.
+- heapprofd byte totals include native sizes the framework registers, so they are not quoted as Java heap bytes.
 - PlayerPanelBenchmark journey (c) before/after: **NOT MEASURED** (skipped to keep the phase within the agreed time).
 
 ---
