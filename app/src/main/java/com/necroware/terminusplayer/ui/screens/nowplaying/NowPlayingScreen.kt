@@ -60,6 +60,7 @@ import com.necroware.terminusplayer.ui.components.rememberSwipeSkipState
 import com.necroware.terminusplayer.ui.components.swipeToSkip
 import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
 import com.necroware.terminusplayer.playback.TRACK_CHANGE_FORWARD
+import com.necroware.terminusplayer.ui.components.visualizer.WarpPresetSettings
 import com.necroware.terminusplayer.ui.components.visualizer.WarpVisualizer
 import com.necroware.terminusplayer.ui.components.visualizer.collectSpectrum
 import com.necroware.terminusplayer.ui.navigation.MotionTokens
@@ -474,6 +475,9 @@ internal fun NowPlayingScreen(
                     active = visualizerActive,
                     accent = activeAccent,
                     size = 300.dp,
+                    presetId = prefs.warpPresetId,
+                    presetSettings = WarpPresetSettings(prefs.warpAutoCycle, prefs.warpCycleSeconds, prefs.warpPresetLocked),
+                    onPresetShown = viewModel::setWarpPresetId,
                     modifier = Modifier.testTag(TestTags.NOW_PLAYING_ART).padding(top = 20.dp, bottom = 20.dp).then(transition.drag).then(transition.art)
                 )
             } else {

@@ -60,6 +60,9 @@ import com.necroware.terminusplayer.data.prefs.TerminalCursorBlink
 import com.necroware.terminusplayer.data.prefs.TerminalHaptics
 import com.necroware.terminusplayer.data.prefs.HudTelemetryMode
 import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
+import com.necroware.terminusplayer.ui.components.visualizer.WarpCycleIntervals
+import com.necroware.terminusplayer.ui.components.visualizer.WarpPresets
+import com.necroware.terminusplayer.ui.components.visualizer.warpPresetIndex
 import com.necroware.terminusplayer.data.prefs.VisualizerStyle
 import com.necroware.terminusplayer.data.prefs.ThemePresetId
 import com.necroware.terminusplayer.data.prefs.ThemeColorRole
@@ -220,6 +223,13 @@ fun SettingsScreen(
                     onVisualizerStyleChange = viewModel::setVisualizerStyle,
                     playbackArtStyle = prefs.playbackArtStyle,
                     onPlaybackArtStyleChange = viewModel::setPlaybackArtStyle,
+                    warpPresetLabel = WarpPresets[warpPresetIndex(prefs.warpPresetId)].label,
+                    warpAutoCycle = prefs.warpAutoCycle,
+                    onWarpAutoCycleChange = viewModel::setWarpAutoCycle,
+                    warpCycleSeconds = prefs.warpCycleSeconds,
+                    onWarpCycleSecondsChange = viewModel::setWarpCycleSeconds,
+                    warpPresetLocked = prefs.warpPresetLocked,
+                    onWarpPresetLockedChange = viewModel::setWarpPresetLocked,
                     motionPreference = effectiveMotionPreference
                 )
             }
@@ -1065,6 +1075,13 @@ private fun CrtAestheticsSection(
     onVisualizerStyleChange: (VisualizerStyle) -> Unit,
     playbackArtStyle: PlaybackArtStyle,
     onPlaybackArtStyleChange: (PlaybackArtStyle) -> Unit,
+    warpPresetLabel: String,
+    warpAutoCycle: Boolean,
+    onWarpAutoCycleChange: (Boolean) -> Unit,
+    warpCycleSeconds: Int,
+    onWarpCycleSecondsChange: (Int) -> Unit,
+    warpPresetLocked: Boolean,
+    onWarpPresetLockedChange: (Boolean) -> Unit,
     motionPreference: MotionPreference
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1189,6 +1206,43 @@ private fun CrtAestheticsSection(
                     }
                 }
             }
+        }
+
+        if (playbackArtStyle == PlaybackArtStyle.VISUALIZER) {
+            ToggleRow(
+                label = "VISUALIZER AUTO-CYCLE",
+                sublabel = "Blend to the next preset on a strong beat after the interval. Tap the visualizer for the next preset.",
+                checked = warpAutoCycle,
+                onCheckedChange = onWarpAutoCycleChange
+            )
+            if (warpAutoCycle) {
+                TerminalBorder(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("INTERVAL", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        WarpCycleIntervals.forEach { seconds ->
+                            val isSelected = seconds == warpCycleSeconds
+                            Text(
+                                text = if (isSelected) "[ ${seconds}s ]" else "  ${seconds}s  ",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier
+                                    .clickable { onWarpCycleSecondsChange(seconds) }
+                                    .padding(vertical = 6.dp, horizontal = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            ToggleRow(
+                label = "LOCK PRESET: $warpPresetLabel",
+                sublabel = "Keep this preset: no auto-cycle, and taps on the visualizer do not change it",
+                checked = warpPresetLocked,
+                onCheckedChange = onWarpPresetLockedChange
+            )
         }
 
         TerminalBorder(modifier = Modifier.fillMaxWidth()) {

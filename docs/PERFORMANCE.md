@@ -330,6 +330,20 @@ Reading it:
 - **p90–p99 frame CPU match.** The **p50 is higher in B (6.27 and 9.89 against 5.00 and 5.35) and differs a lot between the two B runs.** B no longer has A's run of trailing frames, which may be cheap ones, so its median comes from a different mix. Not proven. **Open item.**
 - `dumpsys gfxinfo` over the same journey (3 alternating pairs, 14:47–14:52) agrees on frame counts (A 995–1,006, B 702–705; janky 5.2–6.0% for both) but its percentiles include idle frames (cursor blink), so they are not quoted as a frame-time comparison.
 
+### Phase 5: warp visualizer allocations, before/after (DEVICE)
+
+Galaxy S21 FE, Android 16, **`debug` build** (not minified, so allocation sites have real names; the visualizer's allocations are the same code path as release). 2026-10-24, Perfetto `android.heapprofd`, heap `com.android.art`, `sampling_interval_bytes: 1` (every Java allocation), 10 s, Warp Visualizer art, FULL motion, local FLAC playing, full player open. Before = `60bfbc8` (APK sha1 `d66cc59c`); after = Phase 5 commit.
+
+| Build | Frames rendered (`acquireLatestImage`) | `Bitmap.wrapHardwareBuffer` calls | `ImageReader.SurfaceImage.getHardwareBuffer` calls | Allocations under the visualizer render loop | Per rendered frame |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| Before | 171 | 174 | 174 | 861 | 5.0 |
+| After | 108 | 0 | 115 | 395 | 3.7 |
+
+- The per-frame `Bitmap` wrapper, `BitmapShader` and `ImageBitmap` wrapper are gone: they are created once per ImageReader buffer (keyed by `HardwareBuffer.id`, API 34+) and reused. Still allocated per frame: the `Image` from `acquireLatestImage` and the `HardwareBuffer` handle needed to read the buffer id. On API 33 (no buffer id) wrappers are still made per frame.
+- heapprofd byte totals for these calls include the native size registered by the framework, so they are not quoted as Java heap bytes.
+- **Open:** in both builds the loop rendered only 11-17 frames per second and the visualizer area showed black in `screencap`. Not investigated; it is the same before and after.
+- PlayerPanelBenchmark journey (c) before/after: **NOT MEASURED** (skipped to keep the phase within the agreed time).
+
 ---
 
 ### Table 4: Compose Stability Overview
