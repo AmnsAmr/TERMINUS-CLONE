@@ -125,7 +125,10 @@ Needs at least one on-device track. Setup leaves the art style changed; reset it
   -Pandroid.testInstrumentationRunnerArguments.class=com.necroware.terminusplayer.benchmark.PlayerPanelBenchmark
 ```
 
-#### E. Run All Benchmarks at Once
+#### E. Detail Navigation Benchmark
+`DetailNavBenchmark` (`FrameTimingMetric`), 5 iterations: Library → `[ ALBUMS ]` → first album → back, ×10. Setup selects FULL motion and leaves a paused on-device track loaded, so the mini bar is present. On the S21 FE its Perfetto recordings often stop early (see the Phase 4 comparison in section 4); check that each trace's `measureBlock` slice is closed before using its numbers.
+
+#### F. Run All Benchmarks at Once
 ```bash
 ./gradlew :benchmark:connectedBenchmarkReleaseAndroidTest
 ```
@@ -288,6 +291,44 @@ Reading it:
 - **The median is the consistent signal:** both Phase 3 builds measured 7.09–7.14 ms CPU p50, both A runs 6.31–6.49 ms. That points to a possible cost of 0.6–0.8 ms per frame from Phase 3. **Open item, cause not identified.**
 - **Run 4 is anomalous:** far fewer frames (one iteration produced 1,020) and iterations about 40–50 s apart instead of about 65–70 s. The cause was not investigated, so it is a weak drift check.
 - The phone dropped off USB briefly during run 1 (detached instrumentation kept running; charging paused).
+
+### Phase 4 comparison: tab switch and Library → Album → back (DEVICE)
+
+Same device and OS as the baseline (Galaxy S21 FE `SM-G990E`, Android 16, build `G990EXXSOHZH4`). All runs on 2026-10-24, `benchmarkRelease` installed with `adb install-multiple -r <apk> baselineProfiles/0/<dm>`, Wi-Fi off, battery 100% on USB, every run started and ended at thermal status 0. Values in ms.
+
+| Variant | Commit | App APK sha1 |
+| :--- | :--- | :--- |
+| A: before Phase 4 (adds only the album test tags) | `1300652` | `28abb141` |
+| B: Phase 4 (play/pause morph + detail-page chrome) | `6bfcf00` | `74111ebc` |
+
+**Tab switch** (`TabSwitchFrameTimingBenchmark`, 5 iterations, order A → B → A, 13:02–13:57):
+
+| Mode | Run | Frames median (min / sd) | CPU p50 | CPU p90 | CPU p95 | CPU p99 | Overrun p50 | Overrun p90 | Overrun p95 | Overrun p99 |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `None` | 1 A | 155 (139 / 14.0) | 3.69 | 16.22 | 19.57 | 27.49 | -1.89 | 12.99 | 17.70 | 38.68 |
+| `None` | 2 B | 156 (139 / 8.5) | 3.92 | 16.58 | 20.54 | 28.67 | -1.45 | 13.37 | 19.82 | 35.23 |
+| `None` | 3 A | 154 (141 / 7.9) | 3.90 | 17.17 | 20.72 | 31.07 | -0.81 | 14.48 | 19.51 | 35.55 |
+| `Partial` | 1 A | 141 (138 / 7.3) | 4.35 | 15.02 | 16.90 | 24.89 | -0.49 | 12.07 | 14.25 | 27.29 |
+| `Partial` | 2 B | 152 (141 / 7.2) | 4.19 | 15.82 | 18.67 | 23.47 | -1.08 | 12.75 | 15.39 | 23.05 |
+| `Partial` | 3 A | 148 (139 / 8.5) | 4.29 | 15.80 | 18.71 | 25.47 | -0.63 | 12.63 | 15.49 | 22.33 |
+
+B falls inside the spread of the two A runs on every column: no measurable tab-switch change. (Tab routes are not affected by the detail-page change; the morph only runs on play/pause.)
+
+**Library → Album → back ×10: Macrobenchmark results not usable.** `DetailNavBenchmark` ran twice (A → B → A each time). Its Perfetto recordings stopped early in many iterations: the `measureBlock` slice never closes, and the phone logged `perfetto: Timeout while waiting for ACKs for tracing session`. Counting from the traces of the second run: A recorded the whole journey in 18 of 20 iterations (about 1,130 frames, 20 taps each); B in 1 of 10. Macrobenchmark still reports percentiles for the cut-off iterations, so its numbers for this journey are not comparable and are not quoted here. Cause not found. The UiAutomator idle-wait cap (commit `2bfbc08`) removed a 16–30 s idle stretch per iteration but did not fix the truncation.
+
+**Library → Album → back ×10: manual Perfetto traces.** Same journey driven by `adb shell input` (tap first album, `KEYCODE_BACK`, 1.5 s apart), one 36 s `perfetto` session per run (`sched freq gfx view input`, app atrace), alternating A/B, 14:54–14:58. Transitions are the bursts of `Choreographer#doFrame` on the main thread (a gap over 150 ms ends a burst). Frame CPU = `doFrame` + the following RenderThread `DrawFrame`, over all transition frames.
+
+| Run | Open album: length median | Back: length median | Frames per transition (median) | Frame rate during transitions | Frame CPU p50 | p90 | p95 | p99 | Frames |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| A1 | 443 | 457 | 54 | 120 fps | 5.35 | 15.95 | 16.44 | 26.79 | 1,080 |
+| B1 | 380 | 312 | 43 | 121 fps | 6.27 | 16.22 | 17.10 | 28.06 | 837 |
+| A2 | 439 | 457 | 54 | 120 fps | 5.00 | 15.88 | 16.54 | 25.41 | 1,078 |
+| B2 | 379 | 307 | 42 | 119 fps | 9.89 | 16.27 | 16.83 | 26.21 | 836 |
+
+Reading it:
+- **Both hold about 120 fps through the transitions.** B produces fewer frames because its transitions end sooner (about 60 ms on open, 150 ms on back), not because it misses frames. A keeps drawing after the screen transition, which fits the padding change and mini-bar re-anchoring that Phase 4 removed (not traced to the slice).
+- **p90–p99 frame CPU match.** The **p50 is higher in B (6.27 and 9.89 against 5.00 and 5.35) and differs a lot between the two B runs.** B no longer has A's run of trailing frames, which may be cheap ones, so its median comes from a different mix. Not proven. **Open item.**
+- `dumpsys gfxinfo` over the same journey (3 alternating pairs, 14:47–14:52) agrees on frame counts (A 995–1,006, B 702–705; janky 5.2–6.0% for both) but its percentiles include idle frames (cursor blink), so they are not quoted as a frame-time comparison.
 
 ---
 
