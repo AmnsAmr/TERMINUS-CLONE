@@ -71,7 +71,9 @@ fun MiniPlayerBar(
     onSwipeSkip: ((toNext: Boolean) -> Unit)? = null,
     /** Tracks a swipe would reach; a side without one rubber-bands instead of skipping. */
     neighbours: SwipeNeighbours = SwipeNeighbours(),
-    swipeSettleSpec: AnimationSpec<Float> = spring()
+    swipeSettleSpec: AnimationSpec<Float> = spring(),
+    /** Play/pause morph duration from the motion tokens; 0 swaps immediately. */
+    playPauseMorphMs: Int = 0
 ) {
     if (nowPlaying.title.isBlank()) return
 
@@ -139,10 +141,11 @@ fun MiniPlayerBar(
             )
         }
         CompactTransportControls(
-            isPlaying = nowPlaying.isPlaying,
+            isPlaying = !nowPlaying.showPlayButton,
             onTogglePlayPause = onTogglePlayPause,
             onSkipNext = onSkipNext,
-            onSkipPrevious = onSkipPrevious
+            onSkipPrevious = onSkipPrevious,
+            morphMs = playPauseMorphMs
         )
     }
 }

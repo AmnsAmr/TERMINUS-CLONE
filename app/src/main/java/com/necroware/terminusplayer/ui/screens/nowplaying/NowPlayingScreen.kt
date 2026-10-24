@@ -584,7 +584,9 @@ internal fun NowPlayingScreen(
             )
 
             FullTransportControls(
-                isPlaying = displayIsPlaying,
+                // Play intent, not isPlaying: the glyph must not morph to play while a skip buffers.
+                isPlaying = !preparingSelection && !nowPlaying.showPlayButton,
+                morphMs = motion.glyphMorphMs,
                 shuffleEnabled = !preparingSelection && nowPlaying.shuffleEnabled,
                 repeatMode = if (preparingSelection) androidx.media3.common.Player.REPEAT_MODE_OFF else nowPlaying.repeatMode,
                 onTogglePlayPause = {

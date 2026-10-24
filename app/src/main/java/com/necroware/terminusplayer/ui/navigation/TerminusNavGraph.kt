@@ -464,7 +464,8 @@ fun TerminusNavGraph(
                             playbackViewModel.swipeSkip(toNext)
                         },
                         neighbours = miniNeighbours,
-                        swipeSettleSpec = motion.panel.floatSpec
+                        swipeSettleSpec = motion.panel.floatSpec,
+                        playPauseMorphMs = motion.glyphMorphMs
                     )
                 }
             },

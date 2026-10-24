@@ -10,6 +10,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
@@ -62,6 +63,11 @@ data class NowPlayingState(
      * [isPlaying] it stays true while a skip buffers the next track.
      */
     val playWhenReady: Boolean = false,
+    /**
+     * Whether the play/pause control should offer "play" (Media3 `Util.shouldShowPlayButton`):
+     * follows the play intent, so it does not flip while a skip buffers.
+     */
+    val showPlayButton: Boolean = true,
     val shuffleEnabled: Boolean = false,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val audioFormatLabel: String = "—",
@@ -122,6 +128,7 @@ class PlaybackController @Inject constructor(
                     isConnected = false,
                     isPlaying = false,
                     playWhenReady = false,
+                    showPlayButton = true,
                     connectionError = "Playback service disconnected"
                 )
             }
@@ -175,7 +182,11 @@ class PlaybackController @Inject constructor(
         }
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
-            _state.value = _state.value.copy(playWhenReady = playWhenReady)
+            _state.value = _state.value.copy(playWhenReady = playWhenReady, showPlayButton = Util.shouldShowPlayButton(controller))
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            _state.value = _state.value.copy(showPlayButton = Util.shouldShowPlayButton(controller))
         }
 
         // Both change which items are the neighbours, so refresh everything.
@@ -255,7 +266,7 @@ class PlaybackController @Inject constructor(
         controller?.removeListener(listener)
         controller?.release()
         controller = null
-        _state.value = _state.value.copy(isConnected = false, isPlaying = false, playWhenReady = false)
+        _state.value = _state.value.copy(isConnected = false, isPlaying = false, playWhenReady = false, showPlayButton = true)
     }
 
     fun playSongs(items: List<MediaItem>, startIndex: Int) {
@@ -474,10 +485,9 @@ class PlaybackController @Inject constructor(
         }
     }
 
+    /** Media3's standard action: follows the play intent; from ENDED it restarts, from IDLE it prepares. */
     fun togglePlayPause() {
-        controller?.apply {
-            if (isPlaying) pause() else play()
-        }
+        Util.handlePlayPauseButtonAction(controller)
     }
 
     fun stopPlayback() {
@@ -628,6 +638,7 @@ class PlaybackController @Inject constructor(
             },
             isPlaying = c.isPlaying,
             playWhenReady = c.playWhenReady,
+            showPlayButton = Util.shouldShowPlayButton(c),
             shuffleEnabled = c.shuffleModeEnabled,
             repeatMode = c.repeatMode,
             previous = c.neighbourAt(neighbours.previous),
