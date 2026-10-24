@@ -48,7 +48,9 @@ private fun resolveArtModel(uriString: String): Any? {
  * - Automatically active in [PerformanceMode.FULL] and [PerformanceMode.BALANCED].
  * - Automatically deferred in [PerformanceMode.BATTERY_SAVER] (and [PerformanceMode.AUTO] under Android Battery Saver).
  *
- * Returns [defaultAccent] immediately if disabled, no artwork exists, or in battery saver mode.
+ * Returns [defaultAccent] immediately if disabled, no artwork exists, or in battery saver mode,
+ * and when a cover yields no colour. While a new cover is still being read it returns the
+ * previous cover's colour.
  */
 @Composable
 fun rememberAdaptiveAccent(
@@ -62,28 +64,31 @@ fun rememberAdaptiveAccent(
     val isSystemPowerSaving = powerManager?.isPowerSaveMode == true
     val isAllowedByPerformance = !shouldDeferOptionalWork(performanceMode, isSystemPowerSaving)
 
-    if (!enabled || !isAllowedByPerformance || artworkUri.isNullOrBlank()) {
-        return defaultAccent
+    val activeUri = artworkUri?.takeIf { enabled && isAllowedByPerformance && it.isNotBlank() }
+    val cached = activeUri?.let { accentCache.get(it) }
+
+    // Always composed, so it outlives track changes: while a new cover's colour is being
+    // extracted it keeps the previous track's colour instead of dropping to the default,
+    // which made the accent blend old -> default -> new on every uncached skip.
+    val lastAccent by produceState<Color?>(initialValue = null, key1 = activeUri) {
+        when {
+            activeUri == null -> value = null
+            cached != null -> value = cached
+            else -> {
+                val extracted = withContext(Dispatchers.IO) {
+                    extractDominantAccent(context, activeUri)
+                }
+                if (extracted != null) accentCache.put(activeUri, extracted)
+                value = extracted
+            }
+        }
     }
 
-    val cached = accentCache.get(artworkUri)
-    if (cached != null) return cached
-
-    val accent by produceState(
-        initialValue = defaultAccent,
-        key1 = artworkUri,
-        key2 = isAllowedByPerformance
-    ) {
-        val extracted = withContext(Dispatchers.IO) {
-            extractDominantAccent(context, artworkUri)
-        }
-        if (extracted != null) {
-            accentCache.put(artworkUri, extracted)
-            value = extracted
-        }
+    return when {
+        activeUri == null -> defaultAccent
+        cached != null -> cached
+        else -> lastAccent ?: defaultAccent
     }
-
-    return accent
 }
 
 /**

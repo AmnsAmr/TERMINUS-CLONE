@@ -311,21 +311,25 @@ internal fun NowPlayingScreen(
     val visualizerActive = displayIsPlaying && motionPreference == MotionPreference.FULL && !deferOptionalWork
     val spectrum = collectSpectrum(viewModel.spectrum, visualizerActive)
     var hudAlertColor by remember { mutableStateOf<Color?>(null) }
-    var previousPlayingState by remember { mutableStateOf<Boolean?>(null) }
+    var previousPlayRequested by remember { mutableStateOf<Boolean?>(null) }
 
-    LaunchedEffect(displayIsPlaying, prefs.reactiveHudFlash) {
-        if (prefs.reactiveHudFlash && previousPlayingState != null && previousPlayingState != displayIsPlaying) {
-            if (!displayIsPlaying) {
-                hudAlertColor = Color(0xFFFF3B30)
-                delay(350)
-                hudAlertColor = null
-            } else {
-                hudAlertColor = Color(0xFF00E5FF)
-                delay(200)
-                hudAlertColor = null
-            }
+    // Keyed on playWhenReady (the user's play/pause), not isPlaying: a skip buffers the next
+    // track for a moment, and that dip used to fire the pause and play flashes back to back.
+    LaunchedEffect(nowPlaying.playWhenReady, prefs.reactiveHudFlash) {
+        val playRequested = nowPlaying.playWhenReady
+        val changed = previousPlayRequested != null && previousPlayRequested != playRequested
+        previousPlayRequested = playRequested
+        if (!prefs.reactiveHudFlash || !changed) {
+            hudAlertColor = null
+            return@LaunchedEffect
         }
-        previousPlayingState = displayIsPlaying
+        // finally: a new change cancels this effect mid-delay, and the flash must not stay on.
+        try {
+            hudAlertColor = if (playRequested) Color(0xFF00E5FF) else Color(0xFFFF3B30)
+            delay(if (playRequested) 200 else 350)
+        } finally {
+            hudAlertColor = null
+        }
     }
 
     val activeAccent = hudAlertColor ?: accent
