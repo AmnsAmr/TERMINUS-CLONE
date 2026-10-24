@@ -14,6 +14,8 @@ import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.playback.AudioSpectrum
 import com.necroware.terminusplayer.playback.NowPlayingState
 import com.necroware.terminusplayer.playback.QueueNeighbour
+import com.necroware.terminusplayer.playback.QueueState
+import com.necroware.terminusplayer.playback.RemovedQueueItem
 import com.necroware.terminusplayer.ui.components.SwipeNeighbours
 import com.necroware.terminusplayer.ui.components.SwipeTrack
 import com.necroware.terminusplayer.playback.SpectrumFrame
@@ -26,6 +28,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -196,6 +202,45 @@ class PlaybackViewModel @Inject constructor(
 
     fun togglePlayPause() = controller.togglePlayPause()
 
+    /**
+     * The queue for the queue sheet, in playback order. Built from the controller only while the
+     * sheet collects it, and rebuilt when the queue, the current item or shuffle changes.
+     */
+    @OptIn(FlowPreview::class)
+    val queue: StateFlow<QueueState> = controller.queueVersion
+        // One change (e.g. a removal) reports several player events; rebuild once per burst.
+        .debounce(QUEUE_REBUILD_DEBOUNCE_MS)
+        .mapLatest { controller.queueSource() }
+        .mapLatest { source -> withContext(Dispatchers.Default) { source?.toState() ?: QueueState() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), QueueState())
+
+    private val _lastRemoved = MutableStateFlow<RemovedQueueItem?>(null)
+
+    /** The item a swipe just removed, while its UNDO is offered; null otherwise. */
+    val lastRemoved: StateFlow<RemovedQueueItem?> = _lastRemoved
+    private var undoTimeout: Job? = null
+
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) = controller.moveQueueItem(fromIndex, toIndex)
+
+    fun playQueueItem(index: Int) = controller.playQueueItem(index)
+
+    fun removeQueueItem(index: Int) {
+        val removed = controller.removeQueueItem(index) ?: return
+        _lastRemoved.value = removed
+        undoTimeout?.cancel()
+        undoTimeout = viewModelScope.launch {
+            delay(UNDO_WINDOW_MS)
+            if (_lastRemoved.value === removed) _lastRemoved.value = null
+        }
+    }
+
+    fun undoQueueRemoval() {
+        val removed = _lastRemoved.value ?: return
+        undoTimeout?.cancel()
+        _lastRemoved.value = null
+        controller.restoreQueueItem(removed)
+    }
+
     /** Remembers the warp visualizer preset last shown; written only when it changed. */
     fun setWarpPresetId(id: String) {
         viewModelScope.launch { preferencesRepository.setWarpPresetId(id) }
@@ -316,3 +361,9 @@ class PlaybackViewModel @Inject constructor(
 
     fun playExternalAudio(uri: Uri) = controller.playExternalAudio(uri)
 }
+
+/** How long a swipe-removed queue item can be restored. */
+private const val UNDO_WINDOW_MS = 4_000L
+
+/** Groups the player events of one queue change into one rebuild. */
+private const val QUEUE_REBUILD_DEBOUNCE_MS = 32L

@@ -295,6 +295,7 @@ internal fun NowPlayingScreen(
     val serverPingMs by viewModel.serverPingMs.collectAsStateWithLifecycle()
     val deferOptionalWork by viewModel.deferOptionalWork.collectAsStateWithLifecycle()
     val swipeNeighbours by viewModel.swipeNeighbours.collectAsStateWithLifecycle()
+    val lastRemovedFromQueue by viewModel.lastRemoved.collectAsStateWithLifecycle()
     val haptic = rememberTerminalHaptics(prefs.terminalHaptics)
 
     val preparingSelection = pendingSong != null
@@ -407,7 +408,9 @@ internal fun NowPlayingScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(horizontal = 24.dp)
-                        .verticalScroll(scrollState),
+                        .verticalScroll(scrollState)
+                        // Room for the collapsed queue sheet's strip.
+                        .padding(bottom = QueuePeekHeight),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Top
                 ) {
@@ -742,6 +745,29 @@ internal fun NowPlayingScreen(
             }
         }
         }
+        }
+        CompositionLocalProvider(LocalAppPalette provides themedPalette) {
+            MaterialTheme(colorScheme = themedColorScheme) {
+                QueueSheet(
+                    queueFlow = viewModel.queue,
+                    lastRemoved = lastRemovedFromQueue,
+                    motion = motion,
+                    onPlay = { index ->
+                        haptic(true)
+                        viewModel.playQueueItem(index)
+                    },
+                    onMove = { from, to ->
+                        haptic(false)
+                        viewModel.moveQueueItem(from, to)
+                    },
+                    onRemove = { index ->
+                        haptic(true)
+                        viewModel.removeQueueItem(index)
+                    },
+                    onUndo = viewModel::undoQueueRemoval,
+                    modifier = transition.content
+                )
+            }
         }
         CrtScanlineOverlay(
             intensity = prefs.scanlineIntensity,
