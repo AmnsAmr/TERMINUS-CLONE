@@ -145,6 +145,14 @@ class PlaybackController @Inject constructor(
     private val _state = MutableStateFlow(NowPlayingState())
     val state: StateFlow<NowPlayingState> = _state
 
+    private val _queueVersion = MutableStateFlow(0)
+
+    /**
+     * Bumped whenever the queue, the current item or the shuffle order may have changed. Cheap to
+     * keep current; the queue itself is only built ([queueSnapshot]) while the queue sheet is shown.
+     */
+    val queueVersion: StateFlow<Int> = _queueVersion
+
     private val listener = object : Player.Listener {
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             _state.value = _state.value.copy(
@@ -644,6 +652,103 @@ class PlaybackController @Inject constructor(
             previous = c.neighbourAt(neighbours.previous),
             next = c.neighbourAt(neighbours.next)
         )
+        _queueVersion.value++
+    }
+
+    /**
+     * What the queue sheet needs from the controller: the items (immutable, so they can be read on
+     * another thread), the playback order and the current item. Main thread; only collects references,
+     * the rows are built from it off the main thread ([QueueSource.toState]).
+     */
+    fun queueSource(): QueueSource? {
+        val c = controller ?: return null
+        // Named so a system trace shows what the sheet costs on the main thread with large queues.
+        android.os.Trace.beginSection("Terminus:queueSource")
+        try {
+            val shuffle = c.shuffleModeEnabled
+            return QueueSource(
+                items = List(c.mediaItemCount) { c.getMediaItemAt(it) },
+                order = c.currentTimeline.playbackOrder(shuffle),
+                currentIndex = c.currentMediaItemIndex,
+                shuffle = shuffle
+            )
+        } finally {
+            android.os.Trace.endSection()
+        }
+    }
+
+    /** Moves the queue item at [fromIndex] to [toIndex] (queue indices, as Media3's moveMediaItem). */
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) {
+        val c = controller ?: return
+        if (fromIndex !in 0 until c.mediaItemCount || toIndex !in 0 until c.mediaItemCount) return
+        c.moveMediaItem(fromIndex, toIndex)
+    }
+
+    /** Removes the queue item at [index]; returns what is needed to undo it. */
+    fun removeQueueItem(index: Int): RemovedQueueItem? {
+        val c = controller ?: return null
+        if (index !in 0 until c.mediaItemCount) return null
+        val item = c.getMediaItemAt(index)
+        val removed = RemovedQueueItem(
+            index = index,
+            mediaItem = item,
+            title = item.mediaMetadata.title?.toString().orEmpty(),
+            wasCurrent = index == c.currentMediaItemIndex,
+            positionMs = c.currentPosition,
+            playWhenReady = c.playWhenReady
+        )
+        c.removeMediaItem(index)
+        return removed
+    }
+
+    /** Puts a removed item back; if it was the current track, playback returns to it where it was. */
+    fun restoreQueueItem(removed: RemovedQueueItem) {
+        playbackScope.launch {
+            try {
+                val item = playableItem(removed.mediaItem)
+                if (item == null) {
+                    _state.value = _state.value.copy(connectionError = "Unable to restore the removed track")
+                    return@launch
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    val c = controller ?: return@withContext
+                    val plan = undoPlan(removed, c.mediaItemCount)
+                    c.addMediaItem(plan.insertIndex, item)
+                    if (plan.seekToInserted) {
+                        c.seekTo(plan.insertIndex, plan.positionMs)
+                        if (c.playbackState == Player.STATE_IDLE) c.prepare()
+                        c.playWhenReady = removed.playWhenReady
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(connectionError = e.message ?: "Unable to restore the removed track")
+            }
+        }
+    }
+
+    /**
+     * An item the player can play again. Items read back through the MediaController carry no
+     * playback URI (the player drops them silently when re-added), so they are rebuilt the way
+     * [playSongNext] builds them.
+     */
+    private suspend fun playableItem(item: MediaItem): MediaItem? {
+        if (item.localConfiguration != null) return item
+        val id = item.mediaId
+        if (id.startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)) {
+            return createExternalAudioItem(Uri.parse(id.removePrefix(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)))
+        }
+        val song = musicRepository.getSong(id) ?: return null
+        val resolvedUri = musicRepository.getSongUris(listOf(id))[id] ?: song.uriString
+        return withContext(Dispatchers.Default) { song.copy(uriString = resolvedUri).toMediaItem() }
+    }
+
+    /** Jumps to the queue item at [index] from its start. */
+    fun playQueueItem(index: Int) {
+        val c = controller ?: return
+        if (index !in 0 until c.mediaItemCount) return
+        c.seekTo(index, 0L)
     }
 
     private fun updateAnchor(c: MediaController) {
