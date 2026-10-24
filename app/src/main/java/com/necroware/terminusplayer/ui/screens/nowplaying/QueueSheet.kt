@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -45,6 +46,8 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -68,6 +71,7 @@ import com.necroware.terminusplayer.playback.QueueState
 import com.necroware.terminusplayer.playback.RemovedQueueItem
 import com.necroware.terminusplayer.playback.moveFor
 import com.necroware.terminusplayer.ui.navigation.MotionTokens
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -201,11 +205,23 @@ private fun QueueList(
 ) {
     val listState = rememberLazyListState()
     val rowPx = with(LocalDensity.current) { QueueRowHeight.toPx() }
-    // Rows as shown: the queue, or a local reorder in progress until the player reports the move.
-    var display by remember(queue.entries) { mutableStateOf(queue.entries) }
+    // Gesture callbacks outlive compositions, so they read the latest queue through these.
+    val latestQueue by rememberUpdatedState(queue)
+    val latestOnMove by rememberUpdatedState(onMove)
+    // A drag works on one editable copy of the rows (made once at drag start), and moves a single
+    // row within it: no list search or full copy per pointer event, which a 4,887-track queue felt.
+    var reordered by remember { mutableStateOf<SnapshotStateList<QueueEntry>?>(null) }
+    val rows: List<QueueEntry> = reordered ?: queue.entries
     var dragKey by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var dragStart by remember { mutableIntStateOf(-1) }
+    var dragPos by remember { mutableIntStateOf(-1) }
+    val scope = rememberCoroutineScope()
+    var settleJob by remember { mutableStateOf<Job?>(null) }
+    // Back to the player's order once no drag is running (after a drop, the player's update has it).
+    LaunchedEffect(queue.entries, dragKey) {
+        if (dragKey == null) reordered = null
+    }
     val instant = motion.transition.isInstant || motion.transition.slideFraction == 0f
     val placementSpec: FiniteAnimationSpec<IntOffset> = remember(instant) {
         if (instant) snap() else spring(stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset.VisibilityThreshold)
@@ -257,7 +273,7 @@ private fun QueueList(
             state = listState,
             modifier = Modifier.weight(1f).nestedScroll(sheetScroll)
         ) {
-            itemsIndexed(display, key = { _, entry -> entry.key }) { position, entry ->
+            itemsIndexed(rows, key = { _, entry -> entry.key }) { position, entry ->
                 val dragging = entry.key == dragKey
                 val latestEntry by rememberUpdatedState(entry)
                 val dismiss = rememberSwipeToDismissBoxState(
@@ -291,31 +307,54 @@ private fun QueueList(
                         handle = Modifier.pointerInput(entry.key) {
                             detectDragGestures(
                                 onDragStart = {
-                                    dragKey = entry.key
-                                    dragStart = display.indexOfFirst { it.key == entry.key }
-                                    dragOffset = 0f
+                                    // Not while the last drop is gliding or waiting for the player to confirm
+                                    // it: row positions would not match the player's queue yet.
+                                    val busy = reordered != null || settleJob?.isActive == true
+                                    val base = latestQueue.entries
+                                    val start = if (busy) -1 else base.indexOfFirst { it.key == entry.key }
+                                    if (start >= 0) {
+                                        reordered = base.toMutableStateList()
+                                        dragKey = entry.key
+                                        dragStart = start
+                                        dragPos = start
+                                        dragOffset = 0f
+                                    }
                                 },
                                 onDrag = { change, amount ->
                                     change.consume()
-                                    dragOffset += amount.y
-                                    val from = display.indexOfFirst { it.key == dragKey }
-                                    if (from < 0) return@detectDragGestures
-                                    val steps = reorderSteps(dragOffset, rowPx)
-                                    val to = (from + steps).coerceIn(0, display.lastIndex)
-                                    if (to != from) {
-                                        display = display.toMutableList().apply { add(to, removeAt(from)) }
-                                        dragOffset -= (to - from) * rowPx
+                                    val list = reordered
+                                    if (list != null && dragPos >= 0) {
+                                        dragOffset += amount.y
+                                        val steps = reorderSteps(dragOffset, rowPx)
+                                        if (steps != 0) {
+                                            val to = (dragPos + steps).coerceIn(0, list.lastIndex)
+                                            if (to != dragPos) {
+                                                list.add(to, list.removeAt(dragPos))
+                                                dragOffset -= (to - dragPos) * rowPx
+                                                dragPos = to
+                                            }
+                                        }
                                     }
                                 },
                                 onDragEnd = {
-                                    val end = display.indexOfFirst { it.key == dragKey }
-                                    queue.moveFor(dragStart, end)?.let { (from, to) -> onMove(from, to) }
-                                    dragKey = null
-                                    dragOffset = 0f
+                                    val move = latestQueue.moveFor(dragStart, dragPos)
+                                    dragPos = -1
+                                    // Glide into the slot instead of snapping by up to half a row, and only
+                                    // then tell the player: applying the move makes Media3 resend the whole
+                                    // queue and the sheet rebuild, which stuttered the glide on long queues.
+                                    settleJob = scope.launch {
+                                        try {
+                                            animate(dragOffset, 0f, animationSpec = motion.panel.floatSpec) { value, _ -> dragOffset = value }
+                                        } finally {
+                                            move?.let { (from, to) -> latestOnMove(from, to) }
+                                            dragKey = null
+                                        }
+                                    }
                                 },
                                 onDragCancel = {
-                                    display = queue.entries
+                                    reordered = null
                                     dragKey = null
+                                    dragPos = -1
                                     dragOffset = 0f
                                 }
                             )
