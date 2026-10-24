@@ -8,8 +8,6 @@ import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.uiautomator.By
-import androidx.test.uiautomator.BySelector
-import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import org.junit.Rule
 import org.junit.Test
@@ -107,56 +105,8 @@ class PlayerPanelBenchmark {
 
     private fun MacrobenchmarkScope.configureSettings(artStyle: String) {
         requireObject(By.text("SETTINGS")).click()
-        selectOption(section = "ANIMATIONS", option = "motion_option_FULL")
-        selectOption(section = "CRT & AESTHETICS", option = "art_style_option_$artStyle")
-    }
-
-    /**
-     * Expands [section] if it is collapsed and picks [option]. The section is left open: collapsing
-     * it again would mean scrolling back to a header that may be only partly on screen.
-     */
-    private fun MacrobenchmarkScope.selectOption(section: String, option: String) {
-        // BySelector builders mutate in place, so build a fresh selector for every lookup.
-        fun header() = By.res(settingsSection(section))
-        // Open/closed state can survive in the app, so read it from the header's marker.
-        if (scrollTo(header()).hasObject(By.text(SECTION_COLLAPSED))) {
-            scrollTo(header()).click()
-            check(device.wait(Until.hasObject(header().hasDescendant(By.text(SECTION_EXPANDED))), WAIT_MS)) {
-                "Settings section $section did not expand"
-            }
-        }
-        scrollTo(By.res(option)).click()
-        device.waitForIdle()
-    }
-
-    /** Scrolls the Settings list until [selector] is on screen. */
-    private fun MacrobenchmarkScope.scrollTo(selector: BySelector): UiObject2 {
-        device.findObject(selector)?.let { return it }
-        // UiObject2.scroll() did not move this LazyColumn on the S21 FE (seen in screenshots), so
-        // swipe explicitly inside the list's bounds. Look downwards first, then upwards.
-        val bounds = requireObject(By.res(SETTINGS_LIST)).visibleBounds
-        val x = bounds.centerX()
-        val low = bounds.top + bounds.height() * 3 / 4
-        val high = bounds.top + bounds.height() / 4
-        for ((fromY, toY) in listOf(low to high, high to low)) {
-            repeat(MAX_SCROLLS) {
-                device.swipe(x, fromY, x, toY, SCROLL_STEPS)
-                device.waitForIdle()
-                device.findObject(selector)?.let { return it }
-            }
-        }
-        return requireObject(selector)
-    }
-
-    /**
-     * Plays the first on-device track so the queue (and every skip) stays local: results must not
-     * depend on the network or the Navidrome server being reachable.
-     */
-    private fun MacrobenchmarkScope.startLocalPlayback() {
-        requireObject(By.text("LIBRARY")).click()
-        requireObject(By.text(LOCAL_MUSIC_TAB)).click()
-        requireObject(By.res(SONG_ROW).hasDescendant(By.textStartsWith(LOCAL_ROW_STATUS))).click()
-        requireObject(By.res(MINI_PLAYER))
+        selectSettingsOption(section = "ANIMATIONS", option = "motion_option_FULL")
+        selectSettingsOption(section = "CRT & AESTHETICS", option = "art_style_option_$artStyle")
     }
 
     private fun MacrobenchmarkScope.ensureTrackLoaded() {
@@ -168,10 +118,12 @@ class PlayerPanelBenchmark {
 
     private fun MacrobenchmarkScope.ensurePlaying() {
         val button = requireObject(By.res(TRANSPORT_PLAY_PAUSE))
-        if (button.findObject(By.text(GLYPH_PAUSE)) == null) {
+        if (!showsPause(button)) {
             button.click()
-            check(device.wait(Until.hasObject(By.res(TRANSPORT_PLAY_PAUSE).hasDescendant(By.text(GLYPH_PAUSE))), WAIT_MS)) {
-                "Playback did not start"
+            val deadline = System.currentTimeMillis() + WAIT_MS
+            while (!showsPause(requireObject(By.res(TRANSPORT_PLAY_PAUSE)))) {
+                check(System.currentTimeMillis() < deadline) { "Playback did not start" }
+                Thread.sleep(POLL_MS)
             }
         }
     }
@@ -218,19 +170,12 @@ class PlayerPanelBenchmark {
         device.executeShellCommand("input swipe ${art.centerX()} ${art.centerY()} ${art.centerX()} $endY $SWIPE_DURATION_MS")
     }
 
-    private fun MacrobenchmarkScope.requireObject(selector: BySelector, timeoutMs: Long = WAIT_MS): UiObject2 =
-        device.wait(Until.findObject(selector), timeoutMs) ?: error("Not found within $timeoutMs ms: $selector")
-
     private companion object {
-        const val PACKAGE = "com.necroware.terminusplayer"
         const val ITERATIONS = 5
         const val CYCLES = 10
-        const val WAIT_MS = 5_000L
         const val SHORT_WAIT_MS = 1_500L
         const val PANEL_SETTLE_MS = 1_000L
-        const val MAX_SCROLLS = 8
-        /** Slow enough (about 200 ms) that the list does not fling past the target. */
-        const val SCROLL_STEPS = 40
+        const val POLL_MS = 100L
         /** Same duration as the hand-tested swipe that collapsed the panel. */
         const val SWIPE_DURATION_MS = 150
         /** Longer than the FULL track-swap transition (260 ms token), so each skip settles inside the window. */
@@ -238,22 +183,11 @@ class PlayerPanelBenchmark {
         const val VISUALIZER_PLAY_MS = 20_000L
         const val ART_ALBUM = "STANDARD"
         const val ART_VISUALIZER = "VISUALIZER"
-        const val GLYPH_PAUSE = "||"
-        const val LOCAL_MUSIC_TAB = "[ LOCAL MUSIC ]"
-        /** Source line of an on-device row ("LOCAL · LOCAL ONLY · ..."). */
-        const val LOCAL_ROW_STATUS = "LOCAL ·"
-        const val SECTION_COLLAPSED = "[ + ]"
-        const val SECTION_EXPANDED = "[ - ]"
 
-        // Mirrors app/.../ui/TestTags.kt
-        const val MINI_PLAYER = "mini_player"
+        // Mirrors app/.../ui/TestTags.kt (shared tags live in BenchmarkUi.kt)
         const val NOW_PLAYING_ART = "now_playing_art"
         const val TRANSPORT_PREVIOUS = "transport_previous"
         const val TRANSPORT_PLAY_PAUSE = "transport_play_pause"
         const val TRANSPORT_NEXT = "transport_next"
-        const val SONG_ROW = "song_row"
-        const val SETTINGS_LIST = "settings_list"
-        val NonAlphanumeric = Regex("[^A-Za-z0-9]")
-        fun settingsSection(label: String) = "settings_section_" + label.replace(NonAlphanumeric, "_")
     }
 }

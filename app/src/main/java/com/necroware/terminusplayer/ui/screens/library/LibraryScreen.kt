@@ -339,7 +339,7 @@ fun LibraryScreen(
                             ) {
                                 items(sortedAlbums, key = { it.title }, contentType = { "album_card" }) { album ->
                                     TerminalBorder(
-                                        modifier = Modifier.fillMaxWidth().clickable { onAlbumClick(album.title) }
+                                        modifier = Modifier.fillMaxWidth().testTag(TestTags.ALBUM_ROW).clickable { onAlbumClick(album.title) }
                                     ) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             SongArt(uriString = album.representativeUriString, size = 48.dp)
