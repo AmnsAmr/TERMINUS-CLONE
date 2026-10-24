@@ -441,7 +441,12 @@ private class GpuWarpRenderer private constructor(
     }
 
     companion object {
-        private const val READER_IMAGES = 3
+        /**
+         * Two images stay open (on screen, and the one before it), and acquireLatestImage needs two
+         * more free slots than that. With 3, most acquires failed ("more than maxImages") and the
+         * visualizer stayed black at 11-17 fps on the S21 FE.
+         */
+        private const val READER_IMAGES = 4
 
         /** Null when this device rejects the offscreen GPU setup; callers fall back to Canvas. */
         fun createOrNull(width: Int, height: Int): GpuWarpRenderer? {
