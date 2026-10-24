@@ -57,6 +57,11 @@ data class NowPlayingState(
     val durationMs: Long = 0L,
     val positionMs: Long = 0L,
     val isPlaying: Boolean = false,
+    /**
+     * Whether playback is requested (the play/pause the user or a remote chose). Unlike
+     * [isPlaying] it stays true while a skip buffers the next track.
+     */
+    val playWhenReady: Boolean = false,
     val shuffleEnabled: Boolean = false,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val audioFormatLabel: String = "—",
@@ -116,6 +121,7 @@ class PlaybackController @Inject constructor(
                 _state.value = _state.value.copy(
                     isConnected = false,
                     isPlaying = false,
+                    playWhenReady = false,
                     connectionError = "Playback service disconnected"
                 )
             }
@@ -166,6 +172,10 @@ class PlaybackController @Inject constructor(
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             _state.value = _state.value.copy(isPlaying = isPlaying)
+        }
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            _state.value = _state.value.copy(playWhenReady = playWhenReady)
         }
 
         // Both change which items are the neighbours, so refresh everything.
@@ -245,7 +255,7 @@ class PlaybackController @Inject constructor(
         controller?.removeListener(listener)
         controller?.release()
         controller = null
-        _state.value = _state.value.copy(isConnected = false, isPlaying = false)
+        _state.value = _state.value.copy(isConnected = false, isPlaying = false, playWhenReady = false)
     }
 
     fun playSongs(items: List<MediaItem>, startIndex: Int) {
@@ -617,6 +627,7 @@ class PlaybackController @Inject constructor(
                 else -> 0L
             },
             isPlaying = c.isPlaying,
+            playWhenReady = c.playWhenReady,
             shuffleEnabled = c.shuffleModeEnabled,
             repeatMode = c.repeatMode,
             previous = c.neighbourAt(neighbours.previous),
