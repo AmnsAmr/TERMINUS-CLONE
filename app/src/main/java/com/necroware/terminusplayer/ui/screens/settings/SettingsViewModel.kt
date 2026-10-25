@@ -150,6 +150,10 @@ class SettingsViewModel @Inject constructor(
         preferencesRepository.setCrossfadeDurationMs(durationMs)
     }
 
+    fun setWaveformSeekBarEnabled(enabled: Boolean) = viewModelScope.launch {
+        preferencesRepository.setWaveformSeekBarEnabled(enabled)
+    }
+
     private var scanlineIntensityJob: Job? = null
     fun setScanlineIntensity(intensity: Float) {
         scanlineIntensityJob?.cancel()

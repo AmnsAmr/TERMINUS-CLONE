@@ -11,6 +11,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.delay
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ContentTransform
@@ -50,7 +51,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.necroware.terminusplayer.ui.components.AudioMonitorCard
 import com.necroware.terminusplayer.data.prefs.MotionPreference
+import com.necroware.terminusplayer.playback.WaveformData
 import com.necroware.terminusplayer.ui.components.BlockSeekBar
+import com.necroware.terminusplayer.ui.components.WaveformSeekBar
 import com.necroware.terminusplayer.ui.components.FullTransportControls
 import com.necroware.terminusplayer.ui.components.PlaybackArt
 import com.necroware.terminusplayer.ui.components.PrefetchSwipeArt
@@ -119,6 +122,8 @@ private fun PlaybackProgressSection(
     isPlaying: Boolean,
     motionPreference: MotionPreference,
     enabled: Boolean,
+    waveformData: WaveformData?,
+    waveformEnabled: Boolean,
     onSeek: (Long) -> Unit
 ) {
     val progressState = rememberSmoothPosition(
@@ -127,16 +132,40 @@ private fun PlaybackProgressSection(
         animate = motionPreference == MotionPreference.FULL
     )
     val displayedPositionMs = progressState.value.coerceIn(0L, durationMs.coerceAtLeast(0L))
-    BlockSeekBar(
-        positionMs = displayedPositionMs,
-        durationMs = durationMs,
-        onSeek = { newPositionMs ->
-            progressState.value = newPositionMs
-            onSeek(newPositionMs)
-        },
-        modifier = Modifier.padding(top = 20.dp),
-        enabled = enabled
-    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 16.dp)
+            .height(44.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        if (waveformEnabled) {
+            WaveformSeekBar(
+                waveformData = waveformData,
+                positionMsProvider = { progressState.value },
+                durationMs = durationMs,
+                onSeek = { newPositionMs ->
+                    progressState.value = newPositionMs
+                    onSeek(newPositionMs)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                barHeight = 44.dp,
+                enabled = enabled
+            )
+        } else {
+            BlockSeekBar(
+                positionMs = displayedPositionMs,
+                durationMs = durationMs,
+                onSeek = { newPositionMs ->
+                    progressState.value = newPositionMs
+                    onSeek(newPositionMs)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = enabled
+            )
+        }
+    }
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween
@@ -296,6 +325,7 @@ internal fun NowPlayingScreen(
     val deferOptionalWork by viewModel.deferOptionalWork.collectAsStateWithLifecycle()
     val swipeNeighbours by viewModel.swipeNeighbours.collectAsStateWithLifecycle()
     val lastRemovedFromQueue by viewModel.lastRemoved.collectAsStateWithLifecycle()
+    val waveformData by viewModel.waveformData.collectAsStateWithLifecycle()
     val haptic = rememberTerminalHaptics(prefs.terminalHaptics)
 
     val preparingSelection = pendingSong != null
@@ -584,6 +614,8 @@ internal fun NowPlayingScreen(
                 isPlaying = displayIsPlaying,
                 motionPreference = motionPreference,
                 enabled = !preparingSelection,
+                waveformData = waveformData,
+                waveformEnabled = prefs.waveformSeekBarEnabled,
                 onSeek = {
                     haptic(true)
                     viewModel.seekTo(it)
@@ -646,6 +678,7 @@ internal fun NowPlayingScreen(
                 bufferRemainingSec = bufferAheadSec,
                 serverPingMs = if (preparingSelection) null else serverPingMs,
                 visualizerStyle = prefs.visualizerStyle,
+                eqStatusLabel = if (preparingSelection) "—" else nowPlaying.eqStatusLabel,
                 spectrum = spectrum,
                 visualizerActive = visualizerActive,
                 modifier = Modifier.padding(top = 24.dp, bottom = 24.dp)

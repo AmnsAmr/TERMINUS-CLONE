@@ -63,6 +63,7 @@ private object Keys {
     val WARP_PRESET_LOCKED = booleanPreferencesKey("warp_preset_locked")
     val VISUALIZER_STYLE = stringPreferencesKey("visualizer_style")
     val HUD_TELEMETRY_MODE = stringPreferencesKey("hud_telemetry_mode")
+    val WAVEFORM_SEEK_BAR_ENABLED = booleanPreferencesKey("waveform_seek_bar_enabled")
     val LAST_PLAYED_SONG_ID = stringPreferencesKey("last_played_song_id_v2")
     val LAST_PLAYED_POSITION_MS = longPreferencesKey("last_played_position_ms")
     val SERVER_URL = stringPreferencesKey("server_url")
@@ -445,6 +446,10 @@ class UserPreferencesRepository @Inject constructor(
         dataStore.edit { it[Keys.HUD_TELEMETRY_MODE] = mode.name }
     }
 
+    suspend fun setWaveformSeekBarEnabled(enabled: Boolean) {
+        dataStore.edit { it[Keys.WAVEFORM_SEEK_BAR_ENABLED] = enabled }
+    }
+
     suspend fun setLastPlayed(songId: String?, positionMs: Long) {
         dataStore.edit { prefs ->
             if (songId != null) {
@@ -537,6 +542,7 @@ class UserPreferencesRepository @Inject constructor(
             warpPresetLocked = this[Keys.WARP_PRESET_LOCKED] ?: defaults.warpPresetLocked,
             visualizerStyle = visualizerStyle,
             hudTelemetryMode = hudTelemetryMode,
+            waveformSeekBarEnabled = this[Keys.WAVEFORM_SEEK_BAR_ENABLED] ?: defaults.waveformSeekBarEnabled,
             lastPlayedSongId = this[Keys.LAST_PLAYED_SONG_ID],
             lastPlayedPositionMs = this[Keys.LAST_PLAYED_POSITION_MS] ?: 0L,
             serverUrl = this[Keys.SERVER_URL] ?: "",

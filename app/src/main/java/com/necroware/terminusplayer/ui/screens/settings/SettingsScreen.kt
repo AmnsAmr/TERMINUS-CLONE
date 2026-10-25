@@ -425,6 +425,12 @@ fun SettingsScreen(
                         checked = prefs.openPlayerOnPlaylistTrackSelect,
                         onCheckedChange = viewModel::setOpenPlayerOnPlaylistTrackSelect
                     )
+                    ToggleRow(
+                        label = "Waveform Seek Bar",
+                        sublabel = "Render high-resolution audio waveform instead of classic segmented block bar",
+                        checked = prefs.waveformSeekBarEnabled,
+                        onCheckedChange = viewModel::setWaveformSeekBarEnabled
+                    )
                 }
             }
         }

@@ -188,6 +188,7 @@ data class UserPreferences(
     val warpPresetLocked: Boolean = false,
     val visualizerStyle: VisualizerStyle = VisualizerStyle.BARS,
     val hudTelemetryMode: HudTelemetryMode = HudTelemetryMode.STANDARD,
+    val waveformSeekBarEnabled: Boolean = true,
     val lastPlayedSongId: String? = null,
     val lastPlayedPositionMs: Long = 0L,
     val serverUrl: String = "",

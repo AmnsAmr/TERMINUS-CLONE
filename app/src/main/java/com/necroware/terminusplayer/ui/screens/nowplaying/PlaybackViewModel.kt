@@ -20,6 +20,9 @@ import com.necroware.terminusplayer.ui.components.SwipeNeighbours
 import com.necroware.terminusplayer.ui.components.SwipeTrack
 import com.necroware.terminusplayer.playback.SpectrumFrame
 import com.necroware.terminusplayer.playback.PlaybackController
+import com.necroware.terminusplayer.playback.WaveformData
+import com.necroware.terminusplayer.playback.WaveformExtractor
+import com.necroware.terminusplayer.playback.WaveformMath
 import com.necroware.terminusplayer.data.model.SyncedLyrics
 import com.necroware.terminusplayer.data.model.Song
 import com.necroware.terminusplayer.data.model.Playlist
@@ -45,6 +48,7 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import javax.inject.Inject
 
 @HiltViewModel
@@ -52,9 +56,13 @@ class PlaybackViewModel @Inject constructor(
     private val controller: PlaybackController,
     private val repository: MusicRepository,
     private val preferencesRepository: UserPreferencesRepository,
+    private val waveformExtractor: WaveformExtractor,
     audioSpectrum: AudioSpectrum,
     powerSaverState: SystemPowerSaverState
 ) : ViewModel() {
+
+    private val _waveformData = MutableStateFlow<WaveformData?>(null)
+    val waveformData: StateFlow<WaveformData?> = _waveformData.asStateFlow()
 
     /**
      * Live audio spectrum for visualizers. Collect it only while a visualizer is visible,
@@ -198,6 +206,82 @@ class PlaybackViewModel @Inject constructor(
                 }
             }
         }
+        viewModelScope.launch {
+            var extractionJob: Job? = null
+            combine(
+                nowPlaying.map { it.mediaId }.distinctUntilChanged(),
+                preferences.map { it.waveformSeekBarEnabled }.distinctUntilChanged()
+            ) { mediaId, enabled -> mediaId to enabled }
+            .collect { (mediaId, enabled) ->
+                extractionJob?.cancel()
+                if (!enabled || mediaId == null) {
+                    _waveformData.value = null
+                    return@collect
+                }
+
+                val song = repository.getSong(mediaId)
+                val duration = song?.duration?.takeIf { it > 0L }
+                    ?: nowPlaying.value.durationMs.takeIf { it > 0L }
+                    ?: 1L
+                val sizeBytes = song?.sizeBytes ?: 0L
+                val cacheKey = WaveformMath.generateCacheKey(mediaId, sizeBytes, duration)
+
+                // 1. Fast path: check disk cache synchronously to eliminate null flash
+                val cached = waveformExtractor.getCachedWaveform(cacheKey)
+                if (cached != null) {
+                    _waveformData.value = cached
+                } else {
+                    _waveformData.value = null
+                }
+
+                extractionJob = launch {
+                    val targetUriString = song?.downloadedUri
+                        ?: song?.uriString?.takeIf { song.providerId == "local" }
+                        ?: mediaId.takeIf { it.startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX) }
+                            ?.removePrefix(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)
+                        ?: repository.getSongUris(listOf(mediaId))[mediaId]
+
+                    if (targetUriString.isNullOrBlank()) {
+                        return@launch
+                    }
+
+                    if (cached == null) {
+                        // Defer heavy decoding if battery saver or power save mode is active
+                        if (deferOptionalWork.value) {
+                            return@launch
+                        }
+
+                        val extracted = waveformExtractor.extractWaveform(
+                            uri = Uri.parse(targetUriString),
+                            cacheKey = cacheKey,
+                            durationMs = duration
+                        )
+                        if (isActive && extracted != null) {
+                            _waveformData.value = extracted
+                        }
+                    }
+
+                    // Lookahead: pre-warm the next track in the queue so it is cached in advance
+                    val nextMediaId = nowPlaying.value.next?.mediaId
+                    if (nextMediaId != null && !deferOptionalWork.value && isActive) {
+                        val nextSong = repository.getSong(nextMediaId)
+                        val nextDuration = nextSong?.duration?.takeIf { it > 0L } ?: 1L
+                        val nextSize = nextSong?.sizeBytes ?: 0L
+                        val nextKey = WaveformMath.generateCacheKey(nextMediaId, nextSize, nextDuration)
+                        if (waveformExtractor.getCachedWaveform(nextKey) == null) {
+                            val nextUri = nextSong?.downloadedUri
+                                ?: nextSong?.uriString?.takeIf { nextSong.providerId == "local" }
+                                ?: nextMediaId.takeIf { it.startsWith(EXTERNAL_AUDIO_MEDIA_ID_PREFIX) }
+                                    ?.removePrefix(EXTERNAL_AUDIO_MEDIA_ID_PREFIX)
+                                ?: repository.getSongUris(listOf(nextMediaId))[nextMediaId]
+                            if (!nextUri.isNullOrBlank()) {
+                                waveformExtractor.extractWaveform(Uri.parse(nextUri), nextKey, nextDuration)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fun togglePlayPause() = controller.togglePlayPause()
@@ -206,7 +290,7 @@ class PlaybackViewModel @Inject constructor(
      * The queue for the queue sheet, in playback order. Built from the controller only while the
      * sheet collects it, and rebuilt when the queue, the current item or shuffle changes.
      */
-    @OptIn(FlowPreview::class)
+    @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
     val queue: StateFlow<QueueState> = controller.queueVersion
         // One change (e.g. a removal) reports several player events; rebuild once per burst.
         .debounce(QUEUE_REBUILD_DEBOUNCE_MS)
