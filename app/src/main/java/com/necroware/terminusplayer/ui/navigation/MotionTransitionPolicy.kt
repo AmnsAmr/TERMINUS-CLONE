@@ -12,6 +12,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Immutable
@@ -99,6 +101,24 @@ internal fun tabTransitionSpec(
     }
 }
 
+/**
+ * Container transform expansion spec for playlists and quick mixes (Liked Songs, Recent, Most Played).
+ * Expands outward from the card scale to fill the screen on entry, and reverses on pop.
+ */
+internal fun playlistExpandTransitionSpec(
+    preference: MotionPreference,
+    systemAnimationsEnabled: Boolean
+): MotionTransitionSpec = when (preference) {
+    MotionPreference.FULL -> MotionTransitionSpec(durationMs = 260, slideFraction = 0.12f, fade = true)
+    MotionPreference.MEDIUM -> MotionTransitionSpec(durationMs = 160, slideFraction = 0.06f, fade = true)
+    MotionPreference.OFF -> MotionTransitionSpec(durationMs = 0, slideFraction = 0f, fade = false)
+    MotionPreference.SYSTEM -> if (systemAnimationsEnabled) {
+        MotionTransitionSpec(durationMs = 220, slideFraction = 0.08f, fade = true)
+    } else {
+        MotionTransitionSpec(durationMs = 0, slideFraction = 0f, fade = false)
+    }
+}
+
 private val SnapPanel = PanelMotionSpec(animated = false, dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessHigh)
 
 internal fun motionTokens(
@@ -142,6 +162,12 @@ internal fun MotionTransitionSpec.fadeInOrNone(): EnterTransition =
 
 internal fun MotionTransitionSpec.fadeOutOrNone(): ExitTransition =
     if (isInstant || !fade) ExitTransition.None else fadeOut(tweenSpec())
+
+internal fun MotionTransitionSpec.scaleInOrNone(initialScale: Float = 0.88f): EnterTransition =
+    if (isInstant) EnterTransition.None else scaleIn(tweenSpec(), initialScale = initialScale)
+
+internal fun MotionTransitionSpec.scaleOutOrNone(targetScale: Float = 1.06f): ExitTransition =
+    if (isInstant) ExitTransition.None else scaleOut(tweenSpec(), targetScale = targetScale)
 
 /** [direction] is +1 to enter from the end edge, -1 from the start edge. */
 internal fun MotionTransitionSpec.slideInHorizontallyOrNone(direction: Int = 1): EnterTransition =

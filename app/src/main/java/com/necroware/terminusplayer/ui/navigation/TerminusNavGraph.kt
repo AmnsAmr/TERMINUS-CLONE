@@ -134,6 +134,18 @@ private fun detailPopEnter(motion: MotionPreference, systemAnimationsEnabled: Bo
 private fun detailPopExit(motion: MotionPreference, systemAnimationsEnabled: Boolean): ExitTransition =
     motionTransitionSpec(motion, systemAnimationsEnabled).let { it.slideOutHorizontallyOrNone() + it.fadeOutOrNone() }
 
+private fun playlistExpandEnter(motion: MotionPreference, systemAnimationsEnabled: Boolean): EnterTransition =
+    playlistExpandTransitionSpec(motion, systemAnimationsEnabled).let { it.scaleInOrNone(0.88f) + it.fadeInOrNone() }
+
+private fun playlistExpandExit(motion: MotionPreference, systemAnimationsEnabled: Boolean): ExitTransition =
+    playlistExpandTransitionSpec(motion, systemAnimationsEnabled).let { it.scaleOutOrNone(1.06f) + it.fadeOutOrNone() }
+
+private fun playlistExpandPopEnter(motion: MotionPreference, systemAnimationsEnabled: Boolean): EnterTransition =
+    playlistExpandTransitionSpec(motion, systemAnimationsEnabled).let { it.scaleInOrNone(1.06f) + it.fadeInOrNone() }
+
+private fun playlistExpandPopExit(motion: MotionPreference, systemAnimationsEnabled: Boolean): ExitTransition =
+    playlistExpandTransitionSpec(motion, systemAnimationsEnabled).let { it.scaleOutOrNone(0.88f) + it.fadeOutOrNone() }
+
 @Composable
 private fun rememberSystemAnimationsEnabled(): Boolean {
     val context = LocalContext.current
@@ -461,10 +473,10 @@ fun TerminusNavGraph(
             composable(
                 route = Destination.PlaylistDetail.route,
                 arguments = listOf(navArgument("kind") { type = NavType.StringType }),
-                enterTransition = { detailEnter(motionPreference, systemAnimationsEnabled) },
-                exitTransition = { detailExit(motionPreference, systemAnimationsEnabled) },
-                popEnterTransition = { detailPopEnter(motionPreference, systemAnimationsEnabled) },
-                popExitTransition = { detailPopExit(motionPreference, systemAnimationsEnabled) }
+                enterTransition = { playlistExpandEnter(motionPreference, systemAnimationsEnabled) },
+                exitTransition = { playlistExpandExit(motionPreference, systemAnimationsEnabled) },
+                popEnterTransition = { playlistExpandPopEnter(motionPreference, systemAnimationsEnabled) },
+                popExitTransition = { playlistExpandPopExit(motionPreference, systemAnimationsEnabled) }
             ) {
                 RouteContent(tabBottom) {
                     PlaylistDetailScreen(

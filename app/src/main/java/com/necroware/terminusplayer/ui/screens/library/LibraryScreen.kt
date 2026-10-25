@@ -996,11 +996,13 @@ private fun SongList(
                             )
                         }
                     }
+                    val isScrollInProgress = listState.isScrollInProgress
                     items(section.songs, key = { it.id }, contentType = { "library_song_row" }) { song ->
                         LibrarySongRow(
                             song = song,
                             isSelected = selectedSongs.contains(song),
                             isCurrentlyPlaying = song.id == currentlyPlayingSongId,
+                            isScrollInProgress = isScrollInProgress,
                             onClick = { onSongClick(song, songs) },
                             onLongClick = { onLongPress(song) },
                             onLike = { onLike(song) },
@@ -1042,12 +1044,14 @@ internal data class PreparedSongList(
     val songIndexById: Map<String, Int>
 )
 
+
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 fun LibrarySongRow(
     song: Song,
     isSelected: Boolean,
     isCurrentlyPlaying: Boolean = false,
+    isScrollInProgress: Boolean = false,
     searchQuery: String = "",
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -1103,9 +1107,11 @@ fun LibrarySongRow(
         ),
         label = "song-row-swipe-offset"
     )
+
     val dragState = rememberDraggableState { delta ->
         offsetPx = (offsetPx + delta).coerceIn(-revealWidthPx, revealWidthPx)
     }
+    val canDrag = !isScrollInProgress || offsetPx != 0f
 
     Box(
         modifier = Modifier
@@ -1176,6 +1182,7 @@ fun LibrarySongRow(
                 .draggable(
                     state = dragState,
                     orientation = Orientation.Horizontal,
+                    enabled = canDrag,
                     onDragStarted = { isDragging = true },
                     onDragStopped = {
                         when {

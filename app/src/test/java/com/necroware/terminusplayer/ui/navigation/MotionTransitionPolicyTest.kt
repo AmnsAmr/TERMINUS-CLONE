@@ -109,4 +109,26 @@ class MotionTransitionPolicyTest {
         assertTrue(system.glyphMorphMs > medium.glyphMorphMs)
         assertTrue(medium.glyphMorphMs > 0)
     }
+
+    @Test
+    fun playlistExpandTransitionSpecHonorsMotionPreferences() {
+        val full = playlistExpandTransitionSpec(MotionPreference.FULL, true)
+        val medium = playlistExpandTransitionSpec(MotionPreference.MEDIUM, true)
+        val off = playlistExpandTransitionSpec(MotionPreference.OFF, true)
+        val systemDisabled = playlistExpandTransitionSpec(MotionPreference.SYSTEM, false)
+
+        assertTrue(full.fade)
+        assertTrue(full.durationMs >= 220)
+        assertTrue(medium.fade)
+        assertEquals(160, medium.durationMs)
+        assertFalse(off.fade)
+        assertTrue(off.isInstant)
+        assertFalse(systemDisabled.fade)
+        assertTrue(systemDisabled.isInstant)
+
+        assertEquals(androidx.compose.animation.EnterTransition.None, off.scaleInOrNone())
+        assertEquals(androidx.compose.animation.ExitTransition.None, off.scaleOutOrNone())
+        assertNotEquals(androidx.compose.animation.EnterTransition.None, full.scaleInOrNone())
+        assertNotEquals(androidx.compose.animation.ExitTransition.None, full.scaleOutOrNone())
+    }
 }
