@@ -1,5 +1,8 @@
 package com.necroware.terminusplayer.ui.navigation
 
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.AnchoredDraggableState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -22,6 +25,43 @@ class PlayerPanelMathTest {
     fun fractionWithoutMeasuredAnchorsFollowsTheOffsetEdge() {
         assertEquals(1f, panelExpansionFraction(offset = 0f, collapsedOffset = 0f), 0f)
         assertEquals(0f, panelExpansionFraction(offset = 10f, collapsedOffset = 0f), 0f)
+    }
+
+    @Test
+    fun fractionClampsWhenOffsetExceedsCollapsedAnchorDuringRotation() {
+        // When rotating from portrait (height 2200) to landscape (height 800),
+        // offset might momentarily be 2200 while collapsedOffset is 800:
+        assertEquals(0f, panelExpansionFraction(offset = 2200f, collapsedOffset = 800f), 0f)
+    }
+
+    @OptIn(ExperimentalFoundationApi::class)
+    @Test
+    fun playerPanelStateRetainsCollapsedPositionAcrossOrientationChange() {
+        val draggable = AnchoredDraggableState(
+            initialValue = PlayerPanelValue.Collapsed,
+            positionalThreshold = { it * 0.5f },
+            velocityThreshold = { 100f },
+            animationSpec = tween()
+        )
+        val state = PlayerPanelState(draggable)
+
+        // Portrait layout
+        state.updateAnchors(1800f)
+        assertEquals(1800f, state.draggable.offset, 0.01f)
+        assertEquals(0f, state.fraction, 0.01f)
+        assertEquals(1f, miniBarAlpha(state.fraction), 0.01f)
+
+        // Rotate to landscape
+        state.updateAnchors(700f)
+        assertEquals(700f, state.draggable.offset, 0.01f)
+        assertEquals(0f, state.fraction, 0.01f)
+        assertEquals(1f, miniBarAlpha(state.fraction), 0.01f)
+
+        // Rotate back to portrait
+        state.updateAnchors(1800f)
+        assertEquals(1800f, state.draggable.offset, 0.01f)
+        assertEquals(0f, state.fraction, 0.01f)
+        assertEquals(1f, miniBarAlpha(state.fraction), 0.01f)
     }
 
     @Test

@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.anchoredDraggable
 import androidx.compose.foundation.gestures.animateTo
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBars
@@ -104,6 +105,7 @@ internal class PlayerPanelState(
         get() {
             val offset = draggable.offset
             if (offset.isNaN()) return if (draggable.currentValue == PlayerPanelValue.Expanded) 1f else 0f
+            if (collapsedOffsetPx <= 0f) return if (draggable.currentValue == PlayerPanelValue.Expanded) 1f else 0f
             return panelExpansionFraction(offset, collapsedOffsetPx)
         }
 
@@ -195,93 +197,104 @@ internal fun PlayerPanel(
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
-    var heightPx by remember { mutableIntStateOf(0) }
     val bottomBarPx = with(density) { bottomBarHeight.toPx() }
-    SideEffect {
-        if (heightPx > 0) {
-            state.updateAnchors(if (miniVisible) heightPx - bottomBarPx else heightPx.toFloat())
+
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val heightPx = constraints.maxHeight.toFloat()
+        val collapsedOffset = if (miniVisible) (heightPx - bottomBarPx).coerceAtLeast(0f) else heightPx
+
+        SideEffect {
+            if (heightPx > 0f) {
+                state.updateAnchors(collapsedOffset)
+            }
         }
-    }
 
-    val latestOnCollapsed by rememberUpdatedState(onCollapsed)
-    LaunchedEffect(state) {
-        snapshotFlow { state.draggable.currentValue }.drop(1).collect {
-            if (it == PlayerPanelValue.Collapsed) latestOnCollapsed()
+        val latestOnCollapsed by rememberUpdatedState(onCollapsed)
+        LaunchedEffect(state) {
+            snapshotFlow { state.draggable.currentValue }.drop(1).collect {
+                if (it == PlayerPanelValue.Collapsed) latestOnCollapsed()
+            }
         }
-    }
 
-    val isOpen by remember(state) { derivedStateOf { state.fraction > 0f } }
-    val isFullyOpen by remember(state) { derivedStateOf { state.fraction >= 1f } }
+        val isOpen by remember(state) { derivedStateOf { state.fraction > 0f } }
+        val isFullyOpen by remember(state) { derivedStateOf { state.fraction >= 1f } }
 
-    // Mini title is bodySmall, full title is titleLarge; scale the full title down to match at fraction 0.
-    val typography = MaterialTheme.typography
-    val titleStartScale = remember(typography) {
-        val mini = typography.bodySmall.fontSize.value
-        val full = typography.titleLarge.fontSize.value
-        if (mini.isNaN() || full.isNaN() || full <= 0f) 0.5f else mini / full
-    }
+        // Mini title is bodySmall, full title is titleLarge; scale the full title down to match at fraction 0.
+        val typography = MaterialTheme.typography
+        val titleStartScale = remember(typography) {
+            val mini = typography.bodySmall.fontSize.value
+            val full = typography.titleLarge.fontSize.value
+            if (mini.isNaN() || full.isNaN() || full <= 0f) 0.5f else mini / full
+        }
 
-    Box(
-        modifier
-            .fillMaxSize()
-            .onSizeChanged { heightPx = it.height }
-            .graphicsLayer {
-                val offset = state.draggable.offset
-                translationY = when {
-                    !offset.isNaN() -> offset + collapsedShiftPx() * (1f - state.fraction)
-                    state.draggable.currentValue == PlayerPanelValue.Expanded -> 0f
-                    else -> size.height
+        Box(
+            Modifier
+                .fillMaxSize()
+                .onSizeChanged { size ->
+                    val h = size.height.toFloat()
+                    if (h > 0f) {
+                        state.updateAnchors(if (miniVisible) (h - bottomBarPx).coerceAtLeast(0f) else h)
+                    }
                 }
+                .graphicsLayer {
+                    val offset = state.draggable.offset
+                    translationY = when {
+                        !offset.isNaN() -> offset + collapsedShiftPx() * (1f - state.fraction)
+                        state.draggable.currentValue == PlayerPanelValue.Expanded -> 0f
+                        collapsedOffset > 0f -> collapsedOffset + collapsedShiftPx()
+                        else -> size.height
+                    }
+                }
+                .onGloballyPositioned { state.panelCoordinates = it }
+                .anchoredDraggable(state.draggable, Orientation.Vertical)
+                .background(background)
+        ) {
+            if (miniVisible && !isFullyOpen) {
+                val miniModifiers = remember(state) {
+                    Triple(
+                        Modifier
+                            .trackPanelBounds(state) { state.miniArtBounds = it }
+                            .graphicsLayer {
+                                // The full artwork takes over this exact spot as soon as the panel moves.
+                                alpha = if (state.fraction > 0f && !state.fullArtBounds.isEmpty) 0f else 1f
+                            },
+                        Modifier.trackPanelBounds(state) { state.miniTitleBounds = it },
+                        Modifier.graphicsLayer { alpha = miniBarAlpha(state.fraction) }
+                    )
+                }
+                mini(miniModifiers.first, miniModifiers.second, miniModifiers.third)
             }
-            .onGloballyPositioned { state.panelCoordinates = it }
-            .anchoredDraggable(state.draggable, Orientation.Vertical)
-            .background(background)
-    ) {
-        if (miniVisible && !isFullyOpen) {
-            val miniModifiers = remember(state) {
-                Triple(
-                    Modifier
-                        .trackPanelBounds(state) { state.miniArtBounds = it }
-                        .graphicsLayer {
-                            // The full artwork takes over this exact spot as soon as the panel moves.
-                            alpha = if (state.fraction > 0f && !state.fullArtBounds.isEmpty) 0f else 1f
-                        },
-                    Modifier.trackPanelBounds(state) { state.miniTitleBounds = it },
-                    Modifier.graphicsLayer { alpha = miniBarAlpha(state.fraction) }
-                )
-            }
-            mini(miniModifiers.first, miniModifiers.second, miniModifiers.third)
-        }
-        if (isOpen) {
-            val transition = remember(state, titleStartScale) {
-                NowPlayingTransition(
-                    drag = Modifier.anchoredDraggable(state.draggable, Orientation.Vertical),
-                    art = Modifier
-                        .trackPanelBounds(state) { state.fullArtBounds = it }
-                        .graphicsLayer {
-                            val to = state.fullArtBounds
-                            if (to.isEmpty) {
-                                alpha = 0f
-                                return@graphicsLayer
-                            }
-                            val from = state.miniArtBounds
-                            if (!from.isEmpty) applySharedBounds(from, to, from.width / to.width, state.fraction)
-                        },
-                    title = Modifier
-                        .trackPanelBounds(state) { state.fullTitleBounds = it }
-                        .graphicsLayer {
-                            val fraction = state.fraction
-                            alpha = sharedTitleAlpha(fraction)
-                            val to = state.fullTitleBounds
-                            val from = state.miniTitleBounds
-                            if (!to.isEmpty && !from.isEmpty) applySharedBounds(from, to, titleStartScale, fraction)
-                        },
-                    content = Modifier.graphicsLayer { alpha = fullContentAlpha(state.fraction) }
-                )
-            }
-            // Same insets Scaffold gave the Now Playing route before it moved into the panel.
-            Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
-                full(transition)
+            if (isOpen) {
+                val transition = remember(state, titleStartScale) {
+                    NowPlayingTransition(
+                        drag = Modifier.anchoredDraggable(state.draggable, Orientation.Vertical),
+                        art = Modifier
+                            .trackPanelBounds(state) { state.fullArtBounds = it }
+                            .graphicsLayer {
+                                val to = state.fullArtBounds
+                                if (to.isEmpty) {
+                                    alpha = 0f
+                                    return@graphicsLayer
+                                }
+                                val from = state.miniArtBounds
+                                if (!from.isEmpty) applySharedBounds(from, to, from.width / to.width, state.fraction)
+                            },
+                        title = Modifier
+                            .trackPanelBounds(state) { state.fullTitleBounds = it }
+                            .graphicsLayer {
+                                val fraction = state.fraction
+                                alpha = sharedTitleAlpha(fraction)
+                                val to = state.fullTitleBounds
+                                val from = state.miniTitleBounds
+                                if (!to.isEmpty && !from.isEmpty) applySharedBounds(from, to, titleStartScale, fraction)
+                            },
+                        content = Modifier.graphicsLayer { alpha = fullContentAlpha(state.fraction) }
+                    )
+                }
+                // Same insets Scaffold gave the Now Playing route before it moved into the panel.
+                Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
+                    full(transition)
+                }
             }
         }
     }
