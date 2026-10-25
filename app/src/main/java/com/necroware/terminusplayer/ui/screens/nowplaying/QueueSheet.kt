@@ -42,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -203,7 +204,8 @@ private fun QueueList(
     onRemove: (Int) -> Unit,
     onUndo: () -> Unit
 ) {
-    val listState = rememberLazyListState()
+    val initialTarget = (queue.currentPosition - 1).coerceAtLeast(0)
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialTarget)
     val rowPx = with(LocalDensity.current) { QueueRowHeight.toPx() }
     // Gesture callbacks outlive compositions, so they read the latest queue through these.
     val latestQueue by rememberUpdatedState(queue)
@@ -222,18 +224,48 @@ private fun QueueList(
     LaunchedEffect(queue.entries, dragKey) {
         if (dragKey == null) reordered = null
     }
+    var previousShuffle by remember { mutableStateOf(queue.shuffle) }
+    val shuffleJustToggled = previousShuffle != queue.shuffle
+    SideEffect {
+        previousShuffle = queue.shuffle
+    }
+
     val instant = motion.transition.isInstant || motion.transition.slideFraction == 0f
     val placementSpec: FiniteAnimationSpec<IntOffset> = remember(instant) {
         if (instant) snap() else spring(stiffness = Spring.StiffnessMediumLow, visibilityThreshold = IntOffset.VisibilityThreshold)
     }
+    val effectivePlacementSpec = if (instant || shuffleJustToggled) snap() else placementSpec
 
-    // Bring the current track into view when the sheet opens and when it changes.
+    // Open directly at the active track; only smooth-scroll on subsequent 1-track advances.
+    var hasOpened by remember { mutableStateOf(false) }
+    var previousCurrentPosition by remember { mutableIntStateOf(queue.currentPosition) }
+    var previousShuffleForScroll by remember { mutableStateOf(queue.shuffle) }
     val current = queue.currentPosition
-    LaunchedEffect(current) {
+    LaunchedEffect(current, queue.shuffle) {
         if (current < 0) return@LaunchedEffect
         val target = (current - 1).coerceAtLeast(0)
-        if (instant) listState.scrollToItem(target) else listState.animateScrollToItem(target)
+        val shuffleChanged = previousShuffleForScroll != queue.shuffle
+        previousShuffleForScroll = queue.shuffle
+
+        if (!hasOpened) {
+            hasOpened = true
+            previousCurrentPosition = current
+            listState.scrollToItem(target)
+        } else if (instant || shuffleChanged) {
+            previousCurrentPosition = current
+            listState.scrollToItem(target)
+        } else if (previousCurrentPosition != current) {
+            val prevPos = previousCurrentPosition
+            previousCurrentPosition = current
+            if (kotlin.math.abs(current - prevPos) <= 3) {
+                listState.animateScrollToItem(target)
+            } else {
+                listState.scrollToItem(target)
+            }
+        }
     }
+
+    var undoCounter by remember { mutableIntStateOf(0) }
 
     Column(Modifier.fillMaxSize()) {
         Text(
@@ -265,7 +297,10 @@ private fun QueueList(
                     text = "[ UNDO ]",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable(onClick = onUndo).padding(start = 12.dp)
+                    modifier = Modifier.clickable {
+                        undoCounter++
+                        onUndo()
+                    }.padding(start = 12.dp)
                 )
             }
         }
@@ -274,92 +309,94 @@ private fun QueueList(
             modifier = Modifier.weight(1f).nestedScroll(sheetScroll)
         ) {
             itemsIndexed(rows, key = { _, entry -> entry.key }) { position, entry ->
-                val dragging = entry.key == dragKey
-                val latestEntry by rememberUpdatedState(entry)
-                val dismiss = rememberSwipeToDismissBoxState(
-                    confirmValueChange = { value -> value == SwipeToDismissBoxValue.Settled || !dragging }
-                )
-                // Remove once the row has settled off-screen. confirmValueChange can be called more than
-                // once per swipe, so it must not remove (it removed two tracks on the S21 FE).
-                LaunchedEffect(dismiss.currentValue) {
-                    if (dismiss.currentValue != SwipeToDismissBoxValue.Settled) onRemove(latestEntry.index)
-                }
-                SwipeToDismissBox(
-                    state = dismiss,
-                    backgroundContent = {
-                        Box(
-                            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.error.copy(alpha = 0.25f)).padding(horizontal = 16.dp),
-                            contentAlignment = Alignment.CenterEnd
-                        ) {
-                            Text("[ REMOVE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-                        }
-                    },
-                    modifier = Modifier
-                        .then(if (dragging) Modifier.zIndex(1f).graphicsLayer { translationY = dragOffset } else Modifier.animateItemPlacement(placementSpec))
-                ) {
-                    QueueRow(
-                        entry = entry,
-                        number = position + 1,
-                        isCurrent = entry.index == queue.currentIndex,
-                        canReorder = queue.canReorder,
-                        dragging = dragging,
-                        onClick = { onPlay(entry.index) },
-                        handle = Modifier.pointerInput(entry.key) {
-                            detectDragGestures(
-                                onDragStart = {
-                                    // Not while the last drop is gliding or waiting for the player to confirm
-                                    // it: row positions would not match the player's queue yet.
-                                    val busy = reordered != null || settleJob?.isActive == true
-                                    val base = latestQueue.entries
-                                    val start = if (busy) -1 else base.indexOfFirst { it.key == entry.key }
-                                    if (start >= 0) {
-                                        reordered = base.toMutableStateList()
-                                        dragKey = entry.key
-                                        dragStart = start
-                                        dragPos = start
-                                        dragOffset = 0f
-                                    }
-                                },
-                                onDrag = { change, amount ->
-                                    change.consume()
-                                    val list = reordered
-                                    if (list != null && dragPos >= 0) {
-                                        dragOffset += amount.y
-                                        val steps = reorderSteps(dragOffset, rowPx)
-                                        if (steps != 0) {
-                                            val to = (dragPos + steps).coerceIn(0, list.lastIndex)
-                                            if (to != dragPos) {
-                                                list.add(to, list.removeAt(dragPos))
-                                                dragOffset -= (to - dragPos) * rowPx
-                                                dragPos = to
+                key(entry.key, undoCounter) {
+                    val dragging = entry.key == dragKey
+                    val latestEntry by rememberUpdatedState(entry)
+                    val dismiss = rememberSwipeToDismissBoxState(
+                        confirmValueChange = { value -> value == SwipeToDismissBoxValue.Settled || !dragging }
+                    )
+                    // Remove once the row has settled off-screen. confirmValueChange can be called more than
+                    // once per swipe, so it must not remove (it removed two tracks on the S21 FE).
+                    LaunchedEffect(dismiss.currentValue) {
+                        if (dismiss.currentValue != SwipeToDismissBoxValue.Settled) onRemove(latestEntry.index)
+                    }
+                    SwipeToDismissBox(
+                        state = dismiss,
+                        backgroundContent = {
+                            Box(
+                                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.error.copy(alpha = 0.25f)).padding(horizontal = 16.dp),
+                                contentAlignment = Alignment.CenterEnd
+                            ) {
+                                Text("[ REMOVE ]", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                            }
+                        },
+                        modifier = Modifier
+                            .then(if (dragging) Modifier.zIndex(1f).graphicsLayer { translationY = dragOffset } else Modifier.animateItemPlacement(effectivePlacementSpec))
+                    ) {
+                        QueueRow(
+                            entry = entry,
+                            number = position + 1,
+                            isCurrent = entry.index == queue.currentIndex,
+                            canReorder = queue.canReorder,
+                            dragging = dragging,
+                            onClick = { onPlay(entry.index) },
+                            handle = Modifier.pointerInput(entry.key) {
+                                detectDragGestures(
+                                    onDragStart = {
+                                        // Not while the last drop is gliding or waiting for the player to confirm
+                                        // it: row positions would not match the player's queue yet.
+                                        val busy = reordered != null || settleJob?.isActive == true
+                                        val base = latestQueue.entries
+                                        val start = if (busy) -1 else base.indexOfFirst { it.key == entry.key }
+                                        if (start >= 0) {
+                                            reordered = base.toMutableStateList()
+                                            dragKey = entry.key
+                                            dragStart = start
+                                            dragPos = start
+                                            dragOffset = 0f
+                                        }
+                                    },
+                                    onDrag = { change, amount ->
+                                        change.consume()
+                                        val list = reordered
+                                        if (list != null && dragPos >= 0) {
+                                            dragOffset += amount.y
+                                            val steps = reorderSteps(dragOffset, rowPx)
+                                            if (steps != 0) {
+                                                val to = (dragPos + steps).coerceIn(0, list.lastIndex)
+                                                if (to != dragPos) {
+                                                    list.add(to, list.removeAt(dragPos))
+                                                    dragOffset -= (to - dragPos) * rowPx
+                                                    dragPos = to
+                                                }
                                             }
                                         }
-                                    }
-                                },
-                                onDragEnd = {
-                                    val move = latestQueue.moveFor(dragStart, dragPos)
-                                    dragPos = -1
-                                    // Glide into the slot instead of snapping by up to half a row, and only
-                                    // then tell the player: applying the move makes Media3 resend the whole
-                                    // queue and the sheet rebuild, which stuttered the glide on long queues.
-                                    settleJob = scope.launch {
-                                        try {
-                                            animate(dragOffset, 0f, animationSpec = motion.panel.floatSpec) { value, _ -> dragOffset = value }
-                                        } finally {
-                                            move?.let { (from, to) -> latestOnMove(from, to) }
-                                            dragKey = null
+                                    },
+                                    onDragEnd = {
+                                        val move = latestQueue.moveFor(dragStart, dragPos)
+                                        dragPos = -1
+                                        // Glide into the slot instead of snapping by up to half a row, and only
+                                        // then tell the player: applying the move makes Media3 resend the whole
+                                        // queue and the sheet rebuild, touch-rebuilding can stutter long queues.
+                                        settleJob = scope.launch {
+                                            try {
+                                                animate(dragOffset, 0f, animationSpec = motion.panel.floatSpec) { value, _ -> dragOffset = value }
+                                            } finally {
+                                                move?.let { (from, to) -> latestOnMove(from, to) }
+                                                dragKey = null
+                                            }
                                         }
+                                    },
+                                    onDragCancel = {
+                                        reordered = null
+                                        dragKey = null
+                                        dragPos = -1
+                                        dragOffset = 0f
                                     }
-                                },
-                                onDragCancel = {
-                                    reordered = null
-                                    dragKey = null
-                                    dragPos = -1
-                                    dragOffset = 0f
-                                }
-                            )
-                        }
-                    )
+                                )
+                            }
+                        )
+                    }
                 }
             }
         }
