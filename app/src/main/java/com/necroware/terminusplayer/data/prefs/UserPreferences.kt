@@ -1,6 +1,7 @@
 package com.necroware.terminusplayer.data.prefs
 
 import androidx.compose.runtime.Immutable
+import com.squareup.moshi.JsonClass
 
 enum class ThemePresetId {
     TERMINAL,
@@ -88,13 +89,44 @@ data class LibrarySortOrder(
     val direction: SortDirection = SortDirection.ASC
 )
 
+enum class PreampMode { AUTO, MANUAL }
+
+const val PRESET_ID_FLAT = "built_in_flat"
+const val PRESET_ID_BASS = "built_in_bass"
+const val PRESET_ID_VOCAL = "built_in_vocal"
+const val PRESET_ID_TREBLE = "built_in_treble"
+const val PRESET_ID_LOUDNESS = "built_in_loudness"
+const val PRESET_ID_CUSTOM = "custom"
+
+@Immutable
+@JsonClass(generateAdapter = true)
+data class EqualizerPreset(
+    val id: String,
+    val name: String,
+    val gainsDb: List<Float>,
+    val isBuiltIn: Boolean = false
+)
+
+val BUILT_IN_PRESETS = listOf(
+    EqualizerPreset(PRESET_ID_FLAT, "Flat", listOf(0f, 0f, 0f, 0f, 0f), isBuiltIn = true),
+    EqualizerPreset(PRESET_ID_BASS, "Bass", listOf(6f, 4f, 0f, 0f, -1f), isBuiltIn = true),
+    EqualizerPreset(PRESET_ID_VOCAL, "Vocal", listOf(-2f, 0f, 3f, 2f, -1f), isBuiltIn = true),
+    EqualizerPreset(PRESET_ID_TREBLE, "Treble", listOf(-1f, 0f, 1f, 4f, 6f), isBuiltIn = true),
+    EqualizerPreset(PRESET_ID_LOUDNESS, "Loudness", listOf(5f, 2f, -2f, 2f, 5f), isBuiltIn = true)
+)
+
 /** 5-band graphic EQ, gains in dB clamped to [-12, 12]. Bands correspond to
  *  60Hz / 230Hz / 910Hz / 3.6kHz / 14kHz bell peaking filters in
  *  TerminusEqualizerAudioProcessor. */
 @Immutable
 data class EqualizerSettings(
     val enabled: Boolean = false,
-    val bandGainsDb: List<Int> = List(5) { 0 }
+    val bandGainsDb: List<Int> = List(5) { 0 },
+    val presets: List<EqualizerPreset> = BUILT_IN_PRESETS,
+    val activePresetId: String = PRESET_ID_CUSTOM,
+    val preampMode: PreampMode = PreampMode.AUTO,
+    val manualPreampDb: Float = 0f,
+    val outputDeviceAssignments: Map<String, String> = emptyMap()
 )
 
 @Immutable

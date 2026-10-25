@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import com.necroware.terminusplayer.data.network.SystemNetworkState
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -34,6 +36,11 @@ private object Keys {
     val SORT_DIRECTION = stringPreferencesKey("sort_direction")
     val EQ_ENABLED = booleanPreferencesKey("eq_enabled")
     val EQ_BAND_PREFIX = "eq_band_"
+    val EQ_PRESETS_JSON = stringPreferencesKey("eq_presets_json")
+    val EQ_ACTIVE_PRESET_ID = stringPreferencesKey("eq_active_preset_id")
+    val EQ_PREAMP_MODE = stringPreferencesKey("eq_preamp_mode")
+    val EQ_MANUAL_PREAMP_DB = androidx.datastore.preferences.core.floatPreferencesKey("eq_manual_preamp_db")
+    val EQ_OUTPUT_ASSIGNMENTS_JSON = stringPreferencesKey("eq_output_assignments_json")
     val CROSSFADE_ENABLED = booleanPreferencesKey("crossfade_enabled")
     val CROSSFADE_DURATION_MS = intPreferencesKey("crossfade_duration_ms")
     val PLAYBACK_ART_STYLE = stringPreferencesKey("playback_art_style")
@@ -70,6 +77,44 @@ private object Keys {
 }
 
 private fun eqBandKey(index: Int) = intPreferencesKey("${Keys.EQ_BAND_PREFIX}$index")
+
+private val moshiInstance: Moshi by lazy { Moshi.Builder().build() }
+private val presetsListType = Types.newParameterizedType(List::class.java, EqualizerPreset::class.java)
+private val presetsAdapter by lazy { moshiInstance.adapter<List<EqualizerPreset>>(presetsListType) }
+private val assignmentsMapType = Types.newParameterizedType(Map::class.java, String::class.java, String::class.java)
+private val assignmentsAdapter by lazy { moshiInstance.adapter<Map<String, String>>(assignmentsMapType) }
+
+internal fun decodePresets(json: String?, currentBands: List<Int>): List<EqualizerPreset> {
+    val decoded = if (!json.isNullOrBlank()) {
+        runCatching { presetsAdapter.fromJson(json) }.getOrNull()
+    } else null
+
+    if (decoded != null && decoded.isNotEmpty()) {
+        return decoded
+    }
+
+    // Migration of existing settings: create Custom preset with current bands
+    val customPreset = EqualizerPreset(
+        id = PRESET_ID_CUSTOM,
+        name = "Custom",
+        gainsDb = currentBands.map { it.toFloat() },
+        isBuiltIn = false
+    )
+    return BUILT_IN_PRESETS + customPreset
+}
+
+internal fun encodePresets(presets: List<EqualizerPreset>): String {
+    return presetsAdapter.toJson(presets)
+}
+
+internal fun decodeAssignments(json: String?): Map<String, String> {
+    if (json.isNullOrBlank()) return emptyMap()
+    return runCatching { assignmentsAdapter.fromJson(json) }.getOrNull() ?: emptyMap()
+}
+
+internal fun encodeAssignments(assignments: Map<String, String>): String {
+    return assignmentsAdapter.toJson(assignments)
+}
 
 data class ServerConnectionConfig(
     val serverUrl: String = "",
@@ -196,11 +241,126 @@ class UserPreferencesRepository @Inject constructor(
     }
 
     suspend fun setEqualizerBand(index: Int, gainDb: Int) {
-        dataStore.edit { it[eqBandKey(index)] = gainDb }
+        dataStore.edit { prefs ->
+            prefs[eqBandKey(index)] = gainDb
+            val currentGains = List(5) { i -> if (i == index) gainDb else (prefs[eqBandKey(i)] ?: 0) }
+            val currentPresets = decodePresets(prefs[Keys.EQ_PRESETS_JSON], currentGains).toMutableList()
+            val customIdx = currentPresets.indexOfFirst { it.id == PRESET_ID_CUSTOM }
+            val customPreset = EqualizerPreset(PRESET_ID_CUSTOM, "Custom", currentGains.map { it.toFloat() }, isBuiltIn = false)
+            if (customIdx >= 0) {
+                currentPresets[customIdx] = customPreset
+            } else {
+                currentPresets.add(customPreset)
+            }
+            prefs[Keys.EQ_PRESETS_JSON] = encodePresets(currentPresets)
+            prefs[Keys.EQ_ACTIVE_PRESET_ID] = PRESET_ID_CUSTOM
+        }
     }
 
     suspend fun setEqualizerBands(gainsDb: List<Int>) {
-        dataStore.edit { prefs -> gainsDb.forEachIndexed { index, gain -> prefs[eqBandKey(index)] = gain } }
+        dataStore.edit { prefs ->
+            gainsDb.forEachIndexed { index, gain -> prefs[eqBandKey(index)] = gain }
+            val currentPresets = decodePresets(prefs[Keys.EQ_PRESETS_JSON], gainsDb).toMutableList()
+            val customIdx = currentPresets.indexOfFirst { it.id == PRESET_ID_CUSTOM }
+            val customPreset = EqualizerPreset(PRESET_ID_CUSTOM, "Custom", gainsDb.map { it.toFloat() }, isBuiltIn = false)
+            if (customIdx >= 0) {
+                currentPresets[customIdx] = customPreset
+            } else {
+                currentPresets.add(customPreset)
+            }
+            prefs[Keys.EQ_PRESETS_JSON] = encodePresets(currentPresets)
+            prefs[Keys.EQ_ACTIVE_PRESET_ID] = PRESET_ID_CUSTOM
+        }
+    }
+
+    suspend fun selectEqualizerPreset(presetId: String) {
+        dataStore.edit { prefs ->
+            val eqBands = List(5) { index -> prefs[eqBandKey(index)] ?: 0 }
+            val presets = decodePresets(prefs[Keys.EQ_PRESETS_JSON], eqBands)
+            val selected = presets.firstOrNull { it.id == presetId } ?: return@edit
+            prefs[Keys.EQ_ACTIVE_PRESET_ID] = presetId
+            selected.gainsDb.forEachIndexed { index, gain ->
+                prefs[eqBandKey(index)] = gain.toInt()
+            }
+        }
+    }
+
+    suspend fun saveEqualizerPreset(name: String, gainsDb: List<Float>): EqualizerPreset {
+        val newId = "user_${System.currentTimeMillis()}"
+        val newPreset = EqualizerPreset(id = newId, name = name.trim().ifBlank { "User Preset" }, gainsDb = gainsDb, isBuiltIn = false)
+        dataStore.edit { prefs ->
+            val eqBands = List(5) { index -> prefs[eqBandKey(index)] ?: 0 }
+            val currentPresets = decodePresets(prefs[Keys.EQ_PRESETS_JSON], eqBands).toMutableList()
+            currentPresets.add(newPreset)
+            prefs[Keys.EQ_PRESETS_JSON] = encodePresets(currentPresets)
+            prefs[Keys.EQ_ACTIVE_PRESET_ID] = newId
+            gainsDb.forEachIndexed { index, gain ->
+                prefs[eqBandKey(index)] = gain.toInt()
+            }
+        }
+        return newPreset
+    }
+
+    suspend fun renameEqualizerPreset(presetId: String, newName: String): Boolean {
+        var renamed = false
+        dataStore.edit { prefs ->
+            val eqBands = List(5) { index -> prefs[eqBandKey(index)] ?: 0 }
+            val currentPresets = decodePresets(prefs[Keys.EQ_PRESETS_JSON], eqBands).toMutableList()
+            val index = currentPresets.indexOfFirst { it.id == presetId }
+            if (index >= 0 && !currentPresets[index].isBuiltIn) {
+                currentPresets[index] = currentPresets[index].copy(name = newName.trim().ifBlank { currentPresets[index].name })
+                prefs[Keys.EQ_PRESETS_JSON] = encodePresets(currentPresets)
+                renamed = true
+            }
+        }
+        return renamed
+    }
+
+    suspend fun deleteEqualizerPreset(presetId: String): Boolean {
+        var deleted = false
+        dataStore.edit { prefs ->
+            val eqBands = List(5) { index -> prefs[eqBandKey(index)] ?: 0 }
+            val currentPresets = decodePresets(prefs[Keys.EQ_PRESETS_JSON], eqBands).toMutableList()
+            val index = currentPresets.indexOfFirst { it.id == presetId }
+            if (index >= 0 && !currentPresets[index].isBuiltIn) {
+                currentPresets.removeAt(index)
+                prefs[Keys.EQ_PRESETS_JSON] = encodePresets(currentPresets)
+                if (prefs[Keys.EQ_ACTIVE_PRESET_ID] == presetId) {
+                    val fallback = currentPresets.firstOrNull { it.id == PRESET_ID_CUSTOM }
+                        ?: currentPresets.firstOrNull { it.id == PRESET_ID_FLAT }
+                        ?: currentPresets.first()
+                    prefs[Keys.EQ_ACTIVE_PRESET_ID] = fallback.id
+                    fallback.gainsDb.forEachIndexed { i, g -> prefs[eqBandKey(i)] = g.toInt() }
+                }
+                val assignments = decodeAssignments(prefs[Keys.EQ_OUTPUT_ASSIGNMENTS_JSON]).toMutableMap()
+                if (assignments.values.contains(presetId)) {
+                    val cleaned = assignments.filterValues { it != presetId }
+                    prefs[Keys.EQ_OUTPUT_ASSIGNMENTS_JSON] = encodeAssignments(cleaned)
+                }
+                deleted = true
+            }
+        }
+        return deleted
+    }
+
+    suspend fun setPreampMode(mode: PreampMode) {
+        dataStore.edit { it[Keys.EQ_PREAMP_MODE] = mode.name }
+    }
+
+    suspend fun setManualPreampDb(gainDb: Float) {
+        dataStore.edit { it[Keys.EQ_MANUAL_PREAMP_DB] = gainDb.coerceIn(-12f, 6f) }
+    }
+
+    suspend fun setOutputDevicePresetAssignment(deviceKey: String, presetId: String?) {
+        dataStore.edit { prefs ->
+            val assignments = decodeAssignments(prefs[Keys.EQ_OUTPUT_ASSIGNMENTS_JSON]).toMutableMap()
+            if (presetId != null) {
+                assignments[deviceKey] = presetId
+            } else {
+                assignments.remove(deviceKey)
+            }
+            prefs[Keys.EQ_OUTPUT_ASSIGNMENTS_JSON] = encodeAssignments(assignments)
+        }
     }
 
     suspend fun setCrossfadeEnabled(enabled: Boolean) {
@@ -332,6 +492,11 @@ class UserPreferencesRepository @Inject constructor(
         val visualizerStyle = this[Keys.VISUALIZER_STYLE]?.let { runCatching { VisualizerStyle.valueOf(it) }.getOrNull() }
             ?: defaults.visualizerStyle
         val eqBands = List(5) { index -> this[eqBandKey(index)] ?: 0 }
+        val presets = decodePresets(this[Keys.EQ_PRESETS_JSON], eqBands)
+        val activePresetId = this[Keys.EQ_ACTIVE_PRESET_ID] ?: if (eqBands.any { it != 0 }) PRESET_ID_CUSTOM else PRESET_ID_FLAT
+        val preampMode = this[Keys.EQ_PREAMP_MODE]?.let { runCatching { PreampMode.valueOf(it) }.getOrNull() } ?: PreampMode.AUTO
+        val manualPreampDb = this[Keys.EQ_MANUAL_PREAMP_DB] ?: 0f
+        val outputAssignments = decodeAssignments(this[Keys.EQ_OUTPUT_ASSIGNMENTS_JSON])
         val maxBitRate = this[Keys.MAX_BIT_RATE]
         val downloadMaxBitRate = this[Keys.DOWNLOAD_MAX_BIT_RATE]
 
@@ -341,7 +506,12 @@ class UserPreferencesRepository @Inject constructor(
             librarySortOrder = LibrarySortOrder(sortField, sortDirection),
             equalizer = EqualizerSettings(
                 enabled = this[Keys.EQ_ENABLED] ?: defaults.equalizer.enabled,
-                bandGainsDb = eqBands
+                bandGainsDb = eqBands,
+                presets = presets,
+                activePresetId = activePresetId,
+                preampMode = preampMode,
+                manualPreampDb = manualPreampDb,
+                outputDeviceAssignments = outputAssignments
             ),
             crossfade = CrossfadeSettings(
                 enabled = this[Keys.CROSSFADE_ENABLED] ?: defaults.crossfade.enabled,

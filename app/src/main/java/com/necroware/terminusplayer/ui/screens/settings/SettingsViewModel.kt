@@ -9,6 +9,7 @@ import com.necroware.terminusplayer.data.prefs.LibrarySortOrder
 import com.necroware.terminusplayer.data.prefs.MotionPreference
 import com.necroware.terminusplayer.data.prefs.PerformanceMode
 import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
+import com.necroware.terminusplayer.data.prefs.PreampMode
 import com.necroware.terminusplayer.data.prefs.SortDirection
 import com.necroware.terminusplayer.data.prefs.SortField
 import com.necroware.terminusplayer.data.prefs.ThemePresetId
@@ -111,6 +112,34 @@ class SettingsViewModel @Inject constructor(
 
     fun resetEqualizerBands() = viewModelScope.launch {
         preferencesRepository.setEqualizerBands(List(5) { 0 })
+    }
+
+    fun selectEqualizerPreset(presetId: String) = viewModelScope.launch {
+        preferencesRepository.selectEqualizerPreset(presetId)
+    }
+
+    fun saveEqualizerPreset(name: String, gainsDb: List<Float>) = viewModelScope.launch {
+        preferencesRepository.saveEqualizerPreset(name, gainsDb)
+    }
+
+    fun renameEqualizerPreset(presetId: String, newName: String) = viewModelScope.launch {
+        preferencesRepository.renameEqualizerPreset(presetId, newName)
+    }
+
+    fun deleteEqualizerPreset(presetId: String) = viewModelScope.launch {
+        preferencesRepository.deleteEqualizerPreset(presetId)
+    }
+
+    fun setPreampMode(mode: PreampMode) = viewModelScope.launch {
+        preferencesRepository.setPreampMode(mode)
+    }
+
+    fun setManualPreampDb(gainDb: Float) = viewModelScope.launch {
+        preferencesRepository.setManualPreampDb(gainDb)
+    }
+
+    fun setOutputDevicePresetAssignment(deviceKey: String, presetId: String?) = viewModelScope.launch {
+        preferencesRepository.setOutputDevicePresetAssignment(deviceKey, presetId)
     }
 
     fun setCrossfadeEnabled(enabled: Boolean) = viewModelScope.launch {

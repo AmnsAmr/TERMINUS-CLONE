@@ -6,6 +6,7 @@ import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
+import com.necroware.terminusplayer.data.prefs.PreampMode
 import java.nio.ByteBuffer
 import kotlin.math.exp
 import kotlin.math.pow
@@ -20,17 +21,24 @@ import kotlin.math.tanh
  */
 class EqualizerParameters(
     val enabled: Boolean = false,
-    val gainsDb: List<Float> = List(5) { 0f }
+    val gainsDb: List<Float> = List(5) { 0f },
+    val preampMode: PreampMode = PreampMode.AUTO,
+    val manualPreampDb: Float = 0f
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is EqualizerParameters) return false
-        return enabled == other.enabled && gainsDb == other.gainsDb
+        return enabled == other.enabled &&
+            gainsDb == other.gainsDb &&
+            preampMode == other.preampMode &&
+            manualPreampDb == other.manualPreampDb
     }
 
     override fun hashCode(): Int {
         var result = enabled.hashCode()
         result = 31 * result + gainsDb.hashCode()
+        result = 31 * result + preampMode.hashCode()
+        result = 31 * result + manualPreampDb.hashCode()
         return result
     }
 }
@@ -82,6 +90,15 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
                 if (g > maxBoost) maxBoost = g
             }
             return if (maxBoost > 0.0) -(maxBoost + AUTO_PREAMP_MARGIN_DB) else 0.0
+        }
+
+        fun targetPreGainDb(p: EqualizerParameters): Double {
+            if (!p.enabled) return 0.0
+            return if (p.preampMode == PreampMode.AUTO) {
+                autoPreGainDb(enabled = true, gainsDb = p.gainsDb)
+            } else {
+                p.manualPreampDb.toDouble()
+            }
         }
     }
 
@@ -184,7 +201,7 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
             recomputeCoefficientsForBand(k, activeGainsDb[k])
         }
 
-        activePreGainDb = autoPreGainDb(enabled, p.gainsDb)
+        activePreGainDb = targetPreGainDb(p)
         linPreEnd = 10.0.pow(activePreGainDb / 20.0)
         linPreStart = linPreEnd
         sampleInBlock = 0
@@ -252,8 +269,9 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
         for (k in 0 until BAND_COUNT) {
             if (activeGainsDb[k] != 0.0) return false
         }
-        // Verify target gains are also zero so we don't flat-skip during gain ramp onset
+        // Verify target gains and pre-gain are also zero so we don't flat-skip during gain ramp onset
         if (p.enabled) {
+            if (targetPreGainDb(p) != 0.0) return false
             for (k in 0 until BAND_COUNT) {
                 if (p.gainsDb.getOrElse(k) { 0f } != 0f) return false
             }
@@ -314,7 +332,7 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
 
         val enabled = p.enabled
         val targetGains = if (enabled) p.gainsDb else FLAT_GAINS
-        val targetPreGainDb = autoPreGainDb(enabled, p.gainsDb)
+        val targetPreGainDb = targetPreGainDb(p)
 
         for (frame in 0 until frameCount) {
             if (sampleInBlock == 0) {
@@ -322,7 +340,7 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
             }
 
             val preGainLin = linPreStart + (sampleInBlock.toDouble() / BLOCK_SIZE) * (linPreEnd - linPreStart)
-            val applyWaveshaper = activePreGainDb < WAVESHAPER_THRESHOLD_DB
+            val applyWaveshaper = activePreGainDb < WAVESHAPER_THRESHOLD_DB || p.preampMode == PreampMode.MANUAL
 
             for (c in 0 until channels) {
                 var x = if (isFloat) {

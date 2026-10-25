@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,11 +24,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,6 +64,11 @@ import com.necroware.terminusplayer.data.prefs.TerminalCursorBlink
 import com.necroware.terminusplayer.data.prefs.TerminalHaptics
 import com.necroware.terminusplayer.data.prefs.HudTelemetryMode
 import com.necroware.terminusplayer.data.prefs.PlaybackArtStyle
+import com.necroware.terminusplayer.data.prefs.EqualizerSettings
+import com.necroware.terminusplayer.data.prefs.EqualizerPreset
+import com.necroware.terminusplayer.data.prefs.PreampMode
+import com.necroware.terminusplayer.data.prefs.PRESET_ID_CUSTOM
+import com.necroware.terminusplayer.playback.AudioOutputDeviceManager
 import com.necroware.terminusplayer.ui.components.visualizer.WarpCycleIntervals
 import com.necroware.terminusplayer.ui.components.visualizer.WarpPresets
 import com.necroware.terminusplayer.ui.components.visualizer.warpPresetIndex
@@ -292,11 +301,17 @@ fun SettingsScreen(
                 motionPreference = effectiveMotionPreference
             ) {
                 EqualizerSection(
-                    enabled = prefs.equalizer.enabled,
-                    bandGains = prefs.equalizer.bandGainsDb,
+                    equalizer = prefs.equalizer,
                     onEnabledChange = viewModel::setEqualizerEnabled,
                     onBandChange = viewModel::setEqualizerBand,
-                    onReset = viewModel::resetEqualizerBands
+                    onReset = viewModel::resetEqualizerBands,
+                    onSelectPreset = viewModel::selectEqualizerPreset,
+                    onSavePreset = viewModel::saveEqualizerPreset,
+                    onRenamePreset = viewModel::renameEqualizerPreset,
+                    onDeletePreset = viewModel::deleteEqualizerPreset,
+                    onPreampModeChange = viewModel::setPreampMode,
+                    onManualPreampChange = viewModel::setManualPreampDb,
+                    onOutputDeviceAssignmentChange = viewModel::setOutputDevicePresetAssignment
                 )
             }
         }
@@ -627,14 +642,113 @@ private val EQ_BAND_LABELS = listOf("60", "230", "910", "3.6k", "14k")
 
 @Composable
 private fun EqualizerSection(
-    enabled: Boolean,
-    bandGains: List<Int>,
+    equalizer: EqualizerSettings,
     onEnabledChange: (Boolean) -> Unit,
     onBandChange: (Int, Int) -> Unit,
-    onReset: () -> Unit
+    onReset: () -> Unit,
+    onSelectPreset: (String) -> Unit,
+    onSavePreset: (String, List<Float>) -> Unit,
+    onRenamePreset: (String, String) -> Unit,
+    onDeletePreset: (String) -> Unit,
+    onPreampModeChange: (PreampMode) -> Unit,
+    onManualPreampChange: (Float) -> Unit,
+    onOutputDeviceAssignmentChange: (String, String?) -> Unit
 ) {
+    var showSaveDialog by remember { mutableStateOf(false) }
+    var newPresetName by remember { mutableStateOf("") }
+    var presetToRename by remember { mutableStateOf<EqualizerPreset?>(null) }
+    var renamePresetName by remember { mutableStateOf("") }
+    var presetToDelete by remember { mutableStateOf<EqualizerPreset?>(null) }
+
+    if (showSaveDialog) {
+        AlertDialog(
+            onDismissRequest = { showSaveDialog = false },
+            title = { Text("SAVE EQ PRESET", style = MaterialTheme.typography.titleSmall) },
+            text = {
+                Column {
+                    Text(
+                        "Enter a name for this custom preset:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = newPresetName,
+                        onValueChange = { newPresetName = it },
+                        singleLine = true,
+                        placeholder = { Text("e.g. Car Audio / Rock") },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val name = newPresetName.trim()
+                        if (name.isNotBlank()) {
+                            onSavePreset(name, equalizer.bandGainsDb.map { it.toFloat() })
+                            newPresetName = ""
+                            showSaveDialog = false
+                        }
+                    },
+                    enabled = newPresetName.isNotBlank()
+                ) { Text("SAVE") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSaveDialog = false }) { Text("CANCEL") }
+            }
+        )
+    }
+
+    presetToRename?.let { preset ->
+        AlertDialog(
+            onDismissRequest = { presetToRename = null },
+            title = { Text("RENAME PRESET", style = MaterialTheme.typography.titleSmall) },
+            text = {
+                OutlinedTextField(
+                    value = renamePresetName,
+                    onValueChange = { renamePresetName = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val name = renamePresetName.trim()
+                        if (name.isNotBlank()) {
+                            onRenamePreset(preset.id, name)
+                            presetToRename = null
+                        }
+                    },
+                    enabled = renamePresetName.isNotBlank()
+                ) { Text("RENAME") }
+            },
+            dismissButton = {
+                TextButton(onClick = { presetToRename = null }) { Text("CANCEL") }
+            }
+        )
+    }
+
+    presetToDelete?.let { preset ->
+        AlertDialog(
+            onDismissRequest = { presetToDelete = null },
+            title = { Text("DELETE PRESET", style = MaterialTheme.typography.titleSmall) },
+            text = { Text("Delete preset '${preset.name}'?", style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeletePreset(preset.id)
+                    presetToDelete = null
+                }) { Text("DELETE") }
+            },
+            dismissButton = {
+                TextButton(onClick = { presetToDelete = null }) { Text("CANCEL") }
+            }
+        )
+    }
+
     TerminalBorder(modifier = Modifier.fillMaxWidth()) {
-        Column {
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            // Header Row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -656,36 +770,221 @@ private fun EqualizerSection(
                         modifier = Modifier.clickable { onReset() }
                     )
                     TerminalToggleButton(
-                        checked = enabled,
-                        onToggle = { onEnabledChange(!enabled) }
+                        checked = equalizer.enabled,
+                        onToggle = { onEnabledChange(!equalizer.enabled) }
                     )
                 }
             }
 
-            EQ_BAND_LABELS.forEachIndexed { index, label ->
-                val gainDb = bandGains.getOrElse(index) { 0 }
-                Column(modifier = Modifier.padding(top = 12.dp)) {
+            // Presets Row
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "PRESETS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    TerminalActionText(
+                        text = "[ + SAVE AS NEW ]",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.clickable {
+                            newPresetName = ""
+                            showSaveDialog = true
+                        }
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    equalizer.presets.forEach { preset ->
+                        val isSelected = equalizer.activePresetId == preset.id
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.secondary.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                            ),
+                            modifier = Modifier.clickable { onSelectPreset(preset.id) }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = if (isSelected) "> ${preset.name.uppercase()}" else preset.name.uppercase(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (!preset.isBuiltIn && preset.id != PRESET_ID_CUSTOM) {
+                                    Text(
+                                        text = " ✎",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.clickable {
+                                            presetToRename = preset
+                                            renamePresetName = preset.name
+                                        }.padding(start = 4.dp)
+                                    )
+                                    Text(
+                                        text = " ✕",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.clickable {
+                                            presetToDelete = preset
+                                        }.padding(start = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 5 Band Sliders
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                EQ_BAND_LABELS.forEachIndexed { index, label ->
+                    val gainDb = equalizer.bandGainsDb.getOrElse(index) { 0 }
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "${label}Hz",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "${if (gainDb > 0) "+" else ""}${gainDb}dB",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        TerminalSlider(
+                            value = (gainDb + 12) / 24f,
+                            onValueChange = { fraction -> onBandChange(index, ((fraction * 24f) - 12f).toInt()) },
+                            originFraction = 0.5f,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
+
+            // Preamp Section
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "PREAMP",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TerminalActionText(
+                            text = if (equalizer.preampMode == PreampMode.AUTO) "[ > AUTO < ]" else "[ AUTO ]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (equalizer.preampMode == PreampMode.AUTO) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.clickable { onPreampModeChange(PreampMode.AUTO) }
+                        )
+                        TerminalActionText(
+                            text = if (equalizer.preampMode == PreampMode.MANUAL) "[ > MANUAL < ]" else "[ MANUAL ]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (equalizer.preampMode == PreampMode.MANUAL) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.clickable { onPreampModeChange(PreampMode.MANUAL) }
+                        )
+                    }
+                }
+
+                if (equalizer.preampMode == PreampMode.AUTO) {
+                    Text(
+                        text = "Auto-compensation active (-0.5 dB below max boost). Safety limiter idle.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    val manualPreamp = equalizer.manualPreampDb
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "${label}Hz",
+                            text = "Manual Pre-Gain",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = "${if (gainDb > 0) "+" else ""}${gainDb}dB",
+                            text = "${if (manualPreamp > 0) "+" else ""}${String.format(java.util.Locale.US, "%.1f", manualPreamp)}dB",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     TerminalSlider(
-                        value = (gainDb + 12) / 24f,
-                        onValueChange = { fraction -> onBandChange(index, ((fraction * 24f) - 12f).toInt()) },
-                        originFraction = 0.5f,
+                        value = ((manualPreamp + 12f) / 18f).coerceIn(0f, 1f),
+                        onValueChange = { fraction -> onManualPreampChange((fraction * 18f) - 12f) },
+                        originFraction = 12f / 18f,
                         modifier = Modifier.padding(top = 4.dp)
                     )
+                }
+            }
+
+            // Per-Output Auto-Switching Section
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "AUTO-SWITCH PER OUTPUT",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Assign presets to automatically activate when audio route changes:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                val devices = listOf(
+                    AudioOutputDeviceManager.DEVICE_ID_SPEAKER to "Built-in Speaker",
+                    AudioOutputDeviceManager.DEVICE_ID_WIRED to "Wired Headphones",
+                    AudioOutputDeviceManager.DEVICE_ID_USB to "USB Audio"
+                )
+
+                devices.forEach { (deviceKey, deviceName) ->
+                    val assignedPresetId = equalizer.outputDeviceAssignments[deviceKey]
+                    val assignedPresetName = equalizer.presets.firstOrNull { it.id == assignedPresetId }?.name ?: "Default / Unassigned"
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = deviceName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+
+                        TerminalActionText(
+                            text = "[ $assignedPresetName ]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (assignedPresetId != null) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.clickable {
+                                val allPresets = listOf(null) + equalizer.presets.map { it.id }
+                                val currentIdx = allPresets.indexOf(assignedPresetId)
+                                val nextIdx = (currentIdx + 1) % allPresets.size
+                                onOutputDeviceAssignmentChange(deviceKey, allPresets[nextIdx])
+                            }
+                        )
+                    }
                 }
             }
         }

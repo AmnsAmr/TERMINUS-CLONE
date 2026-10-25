@@ -37,6 +37,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -72,6 +73,7 @@ class MusicService : MediaSessionService() {
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + exceptionHandler)
 
     private val equalizerAudioProcessor = TerminusEqualizerAudioProcessor()
+    private val audioOutputDeviceManager by lazy { AudioOutputDeviceManager(this) }
     private var crossfadeSettings = CrossfadeSettings()
     private var fadeInJob: Job? = null
     private var fadeTickerJob: Job? = null
@@ -182,15 +184,44 @@ class MusicService : MediaSessionService() {
             }
         }
 
+        audioOutputDeviceManager.start()
+
         serviceScope.launch {
             var lastExcludedFolders: Set<String>? = null
-            preferencesRepository.preferences.collect { prefs ->
+            combine(preferencesRepository.preferences, audioOutputDeviceManager.currentOutputDevice) { prefs, device ->
+                prefs to device
+            }.collect { (prefs, device) ->
+                val assignedPresetId = prefs.equalizer.outputDeviceAssignments[device.id]
+                val effectivePreset = if (assignedPresetId != null) {
+                    prefs.equalizer.presets.firstOrNull { it.id == assignedPresetId }
+                } else {
+                    prefs.equalizer.presets.firstOrNull { it.id == prefs.equalizer.activePresetId }
+                }
+
+                val effectiveGainsDb = effectivePreset?.gainsDb ?: prefs.equalizer.bandGainsDb.map { it.toFloat() }
+                val effectivePresetName = effectivePreset?.name ?: "Custom"
+
                 equalizerAudioProcessor.setParameters(
                     EqualizerParameters(
                         enabled = prefs.equalizer.enabled,
-                        gainsDb = prefs.equalizer.bandGainsDb.map { it.toFloat() }
+                        gainsDb = effectiveGainsDb,
+                        preampMode = prefs.equalizer.preampMode,
+                        manualPreampDb = prefs.equalizer.manualPreampDb
                     )
                 )
+
+                val eqStatusLabel = if (prefs.equalizer.enabled) {
+                    "${effectivePresetName.uppercase()} (${device.displayName.uppercase()})"
+                } else {
+                    "OFF"
+                }
+
+                mediaSession?.setSessionExtras(android.os.Bundle().apply {
+                    putInt("audio_session_id", player.audioSessionId)
+                    putString("eq_status_label", eqStatusLabel)
+                    putString("eq_preset_name", effectivePresetName)
+                    putString("audio_output_device", device.displayName)
+                })
 
                 if (lastExcludedFolders != prefs.excludedFolders) {
                     lastExcludedFolders = prefs.excludedFolders
@@ -261,6 +292,7 @@ class MusicService : MediaSessionService() {
         fadeTickerJob?.cancel()
         savePositionJob?.cancel()
         qualityRefreshJob?.cancel()
+        audioOutputDeviceManager.stop()
         mediaSession?.run {
             player.release()
             release()

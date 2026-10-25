@@ -2,6 +2,7 @@ package com.necroware.terminusplayer.playback
 
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
+import com.necroware.terminusplayer.data.prefs.PreampMode
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -870,5 +871,112 @@ class TerminusEqualizerAudioProcessorTest {
             // Assert that DSP equalizer uses less than 5% of 1 CPU core (< 50 ms CPU per 1000 ms audio)
             assertTrue("Equalizer CPU usage should be well below 5% core ($cpuMsPerSecAudio ms/sec)", cpuMsPerSecAudio < 50.0)
         }
+    }
+
+    @Test
+    fun targetPreGainDbCalculatesAutoVsManualCorrectly() {
+        val autoBoostParams = EqualizerParameters(
+            enabled = true,
+            gainsDb = listOf(6f, 4f, 0f, 0f, -1f),
+            preampMode = PreampMode.AUTO,
+            manualPreampDb = 0f
+        )
+        // Auto with max boost 6 dB -> -(6.0 + 0.5) = -6.5 dB
+        assertEquals(-6.5, TerminusEqualizerAudioProcessor.targetPreGainDb(autoBoostParams), 0.001)
+
+        val autoCutParams = EqualizerParameters(
+            enabled = true,
+            gainsDb = listOf(-2f, -1f, 0f, -3f, -5f),
+            preampMode = PreampMode.AUTO,
+            manualPreampDb = 0f
+        )
+        // Auto with flat or cut -> 0.0 dB
+        assertEquals(0.0, TerminusEqualizerAudioProcessor.targetPreGainDb(autoCutParams), 0.001)
+
+        val manualBoostParams = EqualizerParameters(
+            enabled = true,
+            gainsDb = listOf(6f, 4f, 0f, 0f, -1f),
+            preampMode = PreampMode.MANUAL,
+            manualPreampDb = 3.5f
+        )
+        // Manual mode ignores boost and uses manualPreampDb
+        assertEquals(3.5, TerminusEqualizerAudioProcessor.targetPreGainDb(manualBoostParams), 0.001)
+
+        val disabledParams = EqualizerParameters(
+            enabled = false,
+            gainsDb = listOf(6f, 4f, 0f, 0f, -1f),
+            preampMode = PreampMode.MANUAL,
+            manualPreampDb = 3.5f
+        )
+        // Disabled -> 0.0 dB
+        assertEquals(0.0, TerminusEqualizerAudioProcessor.targetPreGainDb(disabledParams), 0.001)
+    }
+
+    @Test
+    fun manualPositivePreampKeepsLimiterActiveAndClampsSafely() {
+        val sampleRate = 44100
+        val processor = TerminusEqualizerAudioProcessor()
+        processor.setParameters(
+            EqualizerParameters(
+                enabled = true,
+                gainsDb = listOf(0f, 0f, 0f, 0f, 0f),
+                preampMode = PreampMode.MANUAL,
+                manualPreampDb = 6.0f // +6 dB boost
+            )
+        )
+        processor.configureAndFlush(AudioProcessor.AudioFormat(sampleRate, 1, C.ENCODING_PCM_FLOAT))
+
+        val frames = 1024
+        val inBuffer = ByteBuffer.allocateDirect(frames * 4).order(ByteOrder.LITTLE_ENDIAN)
+        // 0.9FS sine wave
+        for (i in 0 until frames) {
+            val s = (0.9 * sin(2.0 * Math.PI * 1000.0 * i / sampleRate)).toFloat()
+            inBuffer.putFloat(s)
+        }
+        inBuffer.flip()
+
+        processor.queueInput(inBuffer)
+        val out = processor.output
+
+        var maxSample = 0.0f
+        while (out.hasRemaining()) {
+            val sample = out.float
+            assertFalse("Sample must not be NaN", sample.isNaN())
+            assertFalse("Sample must not be Infinite", sample.isInfinite())
+            val absSample = abs(sample)
+            if (absSample > maxSample) maxSample = absSample
+            assertTrue("Sample must remain <= 1.0f due to tanh safety limiter (got $sample)", absSample <= 1.0f + 1e-4f)
+        }
+        // Since input was 0.9 and preamp was +6 dB (factor ~2.0), unconstrained would be ~1.8
+        // With tanh limiter, it should be between 0.95 and 1.0
+        assertTrue("Limiter should have compressed positive manual preamp to near ceiling (got $maxSample)", maxSample in 0.95f..1.0001f)
+    }
+
+    @Test
+    fun nonZeroManualPreampDoesNotBypassFlatProcessing() {
+        val processor = TerminusEqualizerAudioProcessor()
+        processor.setParameters(
+            EqualizerParameters(
+                enabled = true,
+                gainsDb = listOf(0f, 0f, 0f, 0f, 0f),
+                preampMode = PreampMode.MANUAL,
+                manualPreampDb = -6.0f // -6 dB attenuation
+            )
+        )
+        processor.configureAndFlush(AudioProcessor.AudioFormat(44100, 1, C.ENCODING_PCM_FLOAT))
+
+        val frames = 512
+        val inBuffer = ByteBuffer.allocateDirect(frames * 4).order(ByteOrder.LITTLE_ENDIAN)
+        for (i in 0 until frames) {
+            inBuffer.putFloat(1.0f)
+        }
+        inBuffer.flip()
+
+        processor.queueInput(inBuffer)
+        val out = processor.output
+        assertTrue("Output buffer should have been produced", out.hasRemaining())
+        val firstSample = out.float
+        // With -6dB gain, 1.0f is scaled down
+        assertTrue("Output should be attenuated, not bit-identical to 1.0f (got $firstSample)", firstSample < 0.99f)
     }
 }

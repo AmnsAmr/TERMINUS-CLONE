@@ -52,6 +52,7 @@ fun AudioMonitorCard(
     bufferRemainingSec: Long = 0L,
     serverPingMs: Long? = null,
     visualizerStyle: VisualizerStyle = VisualizerStyle.BARS,
+    eqStatusLabel: String = "",
     /** Live spectrum; read only while [visualizerActive]. */
     spectrum: State<SpectrumFrame> = remember { mutableStateOf(SpectrumFrame.Silent) },
     /** Playing, visible, FULL motion and optional work allowed. */
@@ -132,6 +133,9 @@ fun AudioMonitorCard(
                 MonitorRow("session", if (audioSessionId > 0) "#$audioSessionId" else "—", channelLabel)
                 MonitorRow("buffer", "+${bufferRemainingSec}s", "size: $sizeLabel")
                 MonitorRow("server ping", serverPingMs?.let { "${it}ms" } ?: "OFFLINE / LOCAL", "VOL ${readout.volumePercent}%")
+                if (eqStatusLabel.isNotBlank()) {
+                    MonitorRow("eq", eqStatusLabel, "")
+                }
                 MonitorRow("device", readout.audioDevice, "CPU: ${readout.cpuPercent}%")
             } else {
                 val bitDepthText = if (bitDepthLabel.isBlank() || bitDepthLabel == "—") "bit: —" else "bit: $bitDepthLabel"
@@ -146,6 +150,9 @@ fun AudioMonitorCard(
                         .background(MaterialTheme.colorScheme.outline)
                 )
 
+                if (eqStatusLabel.isNotBlank()) {
+                    MonitorRow("eq", eqStatusLabel, "")
+                }
                 MonitorRow("device", readout.audioDevice, "VOL ${readout.volumePercent}%")
                 MonitorRow("cpu", "${readout.cpuPercent}%", "")
             }

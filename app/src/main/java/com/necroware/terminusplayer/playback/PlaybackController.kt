@@ -78,6 +78,9 @@ data class NowPlayingState(
     val bitrateKbps: Int = -1,
     val channelCount: Int = 2,
     val audioSessionId: Int = -1,
+    val eqStatusLabel: String = "OFF",
+    val eqPresetName: String = "Flat",
+    val audioOutputDeviceName: String = "Speaker",
     val sizeBytes: Long = 0L,
     val isConnected: Boolean = false,
     val connectionError: String? = null,
@@ -136,9 +139,15 @@ class PlaybackController @Inject constructor(
 
         override fun onExtrasChanged(controller: MediaController, extras: android.os.Bundle) {
             val sessionId = extras.getInt("audio_session_id", -1)
-            if (sessionId > 0) {
-                _state.value = _state.value.copy(audioSessionId = sessionId)
-            }
+            val eqStatus = extras.getString("eq_status_label")
+            val presetName = extras.getString("eq_preset_name")
+            val outputDevice = extras.getString("audio_output_device")
+            _state.value = _state.value.copy(
+                audioSessionId = if (sessionId > 0) sessionId else _state.value.audioSessionId,
+                eqStatusLabel = eqStatus ?: _state.value.eqStatusLabel,
+                eqPresetName = presetName ?: _state.value.eqPresetName,
+                audioOutputDeviceName = outputDevice ?: _state.value.audioOutputDeviceName
+            )
         }
     }
 
@@ -239,10 +248,16 @@ class PlaybackController @Inject constructor(
                 controller = connectedController
                 connectedController.addListener(listener)
                 val initialSessionId = connectedController.sessionExtras.getInt("audio_session_id", -1)
+                val initialEqStatus = connectedController.sessionExtras.getString("eq_status_label")
+                val initialPreset = connectedController.sessionExtras.getString("eq_preset_name")
+                val initialDevice = connectedController.sessionExtras.getString("audio_output_device")
                 _state.value = _state.value.copy(
                     isConnected = true,
                     connectionError = null,
-                    audioSessionId = if (initialSessionId > 0) initialSessionId else _state.value.audioSessionId
+                    audioSessionId = if (initialSessionId > 0) initialSessionId else _state.value.audioSessionId,
+                    eqStatusLabel = initialEqStatus ?: _state.value.eqStatusLabel,
+                    eqPresetName = initialPreset ?: _state.value.eqPresetName,
+                    audioOutputDeviceName = initialDevice ?: _state.value.audioOutputDeviceName
                 )
                 updateAnchor(connectedController)
                 updateFromController()
