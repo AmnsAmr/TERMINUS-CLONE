@@ -126,3 +126,16 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
 }
+
+// Hilt mirrors the KSP classpath into hiltJavaCompile's annotationProcessorPath.
+// Exclude moshi-kotlin-codegen from Java annotation processing to prevent the legacy Kapt deprecation warning.
+tasks.withType<JavaCompile>().configureEach {
+    if (name.startsWith("hiltJavaCompile")) {
+        doFirst {
+            options.annotationProcessorPath = options.annotationProcessorPath?.filter { file ->
+                !file.name.startsWith("moshi-kotlin-codegen")
+            }
+        }
+    }
+}
+
