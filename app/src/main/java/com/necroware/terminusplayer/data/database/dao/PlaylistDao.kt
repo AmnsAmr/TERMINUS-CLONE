@@ -33,6 +33,12 @@ data class PlaylistSongForSync(
     val syncedToServer: Boolean
 )
 
+data class PlaylistTrackArt(
+    val playlistId: String,
+    val artworkUri: String?,
+    val uriString: String
+)
+
 @Dao
 interface PlaylistDao {
 
@@ -56,6 +62,17 @@ interface PlaylistDao {
         """
     )
     fun observePlaylists(): Flow<List<PlaylistWithCount>>
+
+    @Query(
+        """
+        SELECT playlist_songs.playlistId as playlistId, songs.artworkUri as artworkUri, songs.uriString as uriString
+        FROM playlist_songs
+        INNER JOIN songs ON songs.remoteId = playlist_songs.songId
+        WHERE playlist_songs.position < 10
+        ORDER BY playlist_songs.playlistId, playlist_songs.position ASC
+        """
+    )
+    fun observePlaylistTrackArt(): Flow<List<PlaylistTrackArt>>
 
     @Insert
     suspend fun insertPlaylist(playlist: PlaylistEntity)

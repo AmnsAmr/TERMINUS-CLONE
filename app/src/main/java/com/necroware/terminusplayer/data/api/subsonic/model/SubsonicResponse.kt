@@ -49,6 +49,7 @@ data class PlaylistResponse(
     @Json(name = "songCount") val songCount: Int? = null,
     @Json(name = "owner") val owner: String? = null,
     @Json(name = "public") val isPublic: Boolean? = null,
+    @Json(name = "coverArt") val coverArt: String? = null,
     @Json(name = "entry") val entries: List<PlaylistEntryResponse>? = null
 )
 

@@ -41,8 +41,29 @@ class PlaylistsViewModel @Inject constructor(
     val publishingPlaylistIds = _publishingPlaylistIds.asStateFlow()
     private val _downloadDialogState = MutableStateFlow(PlaylistDownloadDialogState())
     val downloadDialogState = _downloadDialogState.asStateFlow()
+    private val _quickMixArt = MutableStateFlow<Map<PlaylistKind, List<String>>>(emptyMap())
+    val quickMixArt = _quickMixArt.asStateFlow()
 
-    init { refreshRemotePlaylists() }
+    init {
+        refreshRemotePlaylists()
+        loadQuickMixArt()
+    }
+
+    private fun loadQuickMixArt() = viewModelScope.launch {
+        try {
+            val liked = repository.getLikedSongs().take(4)
+                .map { it.artworkUri?.takeIf { u -> u.isNotBlank() } ?: it.uriString }
+            val recent = repository.getRecentlyPlayed(4)
+                .map { it.artworkUri?.takeIf { u -> u.isNotBlank() } ?: it.uriString }
+            val mostPlayed = repository.getMostPlayed(4)
+                .map { it.artworkUri?.takeIf { u -> u.isNotBlank() } ?: it.uriString }
+            _quickMixArt.value = mapOf(
+                PlaylistKind.LIKED to liked,
+                PlaylistKind.RECENT to recent,
+                PlaylistKind.MOST_PLAYED to mostPlayed
+            )
+        } catch (_: Exception) {}
+    }
 
     fun refreshRemotePlaylists() = viewModelScope.launch {
         try {

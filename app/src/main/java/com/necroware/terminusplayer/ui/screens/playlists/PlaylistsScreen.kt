@@ -1,7 +1,11 @@
 package com.necroware.terminusplayer.ui.screens.playlists
 
+import com.necroware.terminusplayer.ui.components.PlaylistArt
 import com.necroware.terminusplayer.ui.components.TerminalActionText
 import com.necroware.terminusplayer.ui.components.TerminalToggleButton
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -64,6 +68,7 @@ fun PlaylistsScreen(
     val publishingPlaylistIds by viewModel.publishingPlaylistIds.collectAsStateWithLifecycle()
     val downloadDialogState by viewModel.downloadDialogState.collectAsStateWithLifecycle()
     val account by viewModel.accountInfo.collectAsStateWithLifecycle()
+    val quickMixArt by viewModel.quickMixArt.collectAsStateWithLifecycle()
     var showCreateDialog by remember { mutableStateOf(false) }
     var showOtherUsers by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
@@ -141,13 +146,33 @@ fun PlaylistsScreen(
         ) { pair ->
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                 pair.forEach { kind ->
+                    var itemArtBounds by remember(kind.name) { mutableStateOf<Rect?>(null) }
+                    var itemTitleBounds by remember(kind.name) { mutableStateOf<Rect?>(null) }
                     TerminalBorder(
-                        modifier = Modifier.weight(1f).clickable { onPlaylistClick(kind) }
+                        modifier = Modifier.weight(1f).clickable {
+                            PlaylistMotionState.recordOrigin(kind.name, itemArtBounds, itemTitleBounds)
+                            onPlaylistClick(kind)
+                        }
                     ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(">_", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                            Text(kind.title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
-                            Text("SMART PLAYLIST", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            PlaylistArt(
+                                songArtUris = quickMixArt[kind].orEmpty(),
+                                size = 44.dp,
+                                modifier = Modifier.onGloballyPositioned { if (it.isAttached) itemArtBounds = it.boundsInRoot() }
+                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    kind.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    modifier = Modifier.onGloballyPositioned { if (it.isAttached) itemTitleBounds = it.boundsInRoot() }
+                                )
+                                Text("SMART PLAYLIST", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
@@ -203,28 +228,51 @@ fun PlaylistsScreen(
             items(sortedPlaylists, key = { it.id }, contentType = { "playlist_item" }) { playlist ->
                 val belongsToOtherUser = isOtherUserPlaylist(playlist)
                 var expanded by remember(playlist.id) { mutableStateOf(false) }
+                var itemArtBounds by remember(playlist.id) { mutableStateOf<Rect?>(null) }
+                var itemTitleBounds by remember(playlist.id) { mutableStateOf<Rect?>(null) }
                 TerminalBorder(
-                    modifier = Modifier.fillMaxWidth().clickable { onCustomPlaylistClick(playlist.id) }
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        PlaylistMotionState.recordOrigin(playlist.id, itemArtBounds, itemTitleBounds)
+                        onCustomPlaylistClick(playlist.id)
+                    }
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(playlist.name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 1)
-                            Text(
-                                text = buildString {
-                                    append("${playlist.songCount} tracks")
-                                    append(if (playlist.isRemote) "  ·  Navidrome" else "  ·  On device")
-                                    if (belongsToOtherUser) append("  ·  by ${playlist.ownerUsername}")
-                                    if (playlist.serverPlaylistMissing) append("  ·  SERVER DELETED · KEEP LOCAL")
-                                    else if (playlist.hasSyncConflict) append("  ·  SYNC CONFLICT · RESOLVE")
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (playlist.hasSyncConflict) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            PlaylistArt(
+                                serverArtUri = playlist.serverPlaylistId?.let { "terminus://pl-$it" },
+                                songArtUris = playlist.previewArtworkUris,
+                                size = 56.dp,
+                                modifier = Modifier.onGloballyPositioned { if (it.isAttached) itemArtBounds = it.boundsInRoot() }
                             )
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    playlist.name,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    modifier = Modifier.onGloballyPositioned { if (it.isAttached) itemTitleBounds = it.boundsInRoot() }
+                                )
+                                Text(
+                                    text = buildString {
+                                        append("${playlist.songCount} tracks")
+                                        append(if (playlist.isRemote) "  ·  Navidrome" else "  ·  On device")
+                                        if (belongsToOtherUser) append("  ·  by ${playlist.ownerUsername}")
+                                        if (playlist.serverPlaylistMissing) append("  ·  SERVER DELETED · KEEP LOCAL")
+                                        else if (playlist.hasSyncConflict) append("  ·  SYNC CONFLICT · RESOLVE")
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (playlist.hasSyncConflict) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
                         }
                         Box {
                             IconButton(onClick = { expanded = true }) {

@@ -83,7 +83,9 @@ data class Playlist(
     val ownerUsername: String? = null,
     val isRemote: Boolean = false,
     val hasSyncConflict: Boolean = false,
-    val serverPlaylistMissing: Boolean = false
+    val serverPlaylistMissing: Boolean = false,
+    val serverPlaylistId: String? = null,
+    val previewArtworkUris: List<String> = emptyList()
 )
 
 data class PlaylistAccountInfo(

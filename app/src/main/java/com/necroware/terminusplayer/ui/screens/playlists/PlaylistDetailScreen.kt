@@ -1,7 +1,11 @@
 package com.necroware.terminusplayer.ui.screens.playlists
 
+import com.necroware.terminusplayer.ui.components.PlaylistArt
 import com.necroware.terminusplayer.ui.components.TerminalActionText
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +24,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,7 +33,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -93,11 +103,35 @@ fun PlaylistDetailScreen(
         }
     }
 
+    val originArt = remember { PlaylistMotionState.originArtBounds }
+    val originTitle = remember { PlaylistMotionState.originTitleBounds }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            PlaylistMotionState.clear()
+        }
+    }
+
+    val transitionAnim = remember { Animatable(if (originArt != null || originTitle != null) 0f else 1f) }
+
+    LaunchedEffect(Unit) {
+        if (originArt != null || originTitle != null) {
+            transitionAnim.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+            )
+        }
+    }
+
+    var toArtBounds by remember { mutableStateOf<Rect?>(null) }
+    var toTitleBounds by remember { mutableStateOf<Rect?>(null) }
+
     var selectedSongIds by remember(playlistIdentity) { mutableStateOf<Set<String>>(emptySet()) }
     val haptic = LocalHapticFeedback.current
-    val sortedSongs = remember(state.songs, sortField, sortAscending) {
-        if (sortField == "PLAYLIST_ORDER") state.songs else stableSortedList(
-            state.songs,
+    val activeSongList = state.songs
+    val sortedSongs = remember(activeSongList, sortField, sortAscending) {
+        if (sortField == "PLAYLIST_ORDER") activeSongList else stableSortedList(
+            activeSongList,
             descending = !sortAscending,
             comparator = when (sortField) {
                 "TITLE" -> compareBy(String.CASE_INSENSITIVE_ORDER, Song::title)
@@ -130,7 +164,8 @@ fun PlaylistDetailScreen(
         if (selectedSongIds != selectedIds) selectedSongIds = selectedIds
     }
     val listState = rememberLazyListState()
-    val playlistHeaderItems = 4 + (if (actionMessage != null) 1 else 0) + (if (currentPlaylist?.hasSyncConflict == true) 1 else 0)
+    val playlistHeaderItems = 4 + (if (actionMessage != null) 1 else 0) +
+        (if (currentPlaylist?.hasSyncConflict == true) 1 else 0)
     val songIndexByKey = remember(filteredSongs) {
         filteredSongs.mapIndexed { index, song -> "track-$index-${song.id}" to index }.toMap()
     }
@@ -155,22 +190,82 @@ fun PlaylistDetailScreen(
         }
 
         item {
-            Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                TerminalActionText(
-                    text = "[ ${state.title} ]",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onBackground
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val serverArtUri = (currentPlaylist?.serverPlaylistId ?: state.currentPlaylistId?.removePrefix("server:"))
+                    ?.let { "terminus://pl-$it" }
+                val songArtUris = remember(state.songs) {
+                    state.songs.mapNotNull { it.artworkUri?.takeIf { u -> u.isNotBlank() } ?: it.uriString.takeIf { u -> u.isNotBlank() } }.distinct().take(4)
+                }
+                PlaylistArt(
+                    serverArtUri = serverArtUri,
+                    songArtUris = songArtUris,
+                    size = 80.dp,
+                    modifier = Modifier
+                        .onGloballyPositioned { coords ->
+                            if (coords.isAttached) toArtBounds = coords.boundsInRoot()
+                        }
+                        .graphicsLayer {
+                            val from = originArt
+                            val to = toArtBounds
+                            val fraction = transitionAnim.value
+                            if (from != null && to != null && !from.isEmpty && !to.isEmpty && fraction < 1f) {
+                                transformOrigin = TransformOrigin(0f, 0f)
+                                val startScale = from.width / to.width
+                                val scale = startScale + (1f - startScale) * fraction
+                                scaleX = scale
+                                scaleY = scale
+                                translationX = (from.left - to.left) * (1f - fraction)
+                                translationY = (from.top - to.top) * (1f - fraction)
+                            }
+                        }
                 )
-                TerminalActionText(
-                    text = if (isSearchOpen && searchQuery.isNotBlank()) {
-                        "[ ${filteredSongs.size} / ${state.songs.size} tracks ]"
-                    } else {
-                        "[ ${state.songs.size} tracks ]"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    TerminalActionText(
+                        text = "[ ${state.title} ]",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        modifier = Modifier
+                            .onGloballyPositioned { coords ->
+                                if (coords.isAttached) toTitleBounds = coords.boundsInRoot()
+                            }
+                            .graphicsLayer {
+                                val from = originTitle
+                                val to = toTitleBounds
+                                val fraction = transitionAnim.value
+                                if (from != null && to != null && !from.isEmpty && !to.isEmpty && fraction < 1f) {
+                                    transformOrigin = TransformOrigin(0f, 0f)
+                                    val startScale = (from.height / to.height).coerceIn(0.4f, 1f)
+                                    val scale = startScale + (1f - startScale) * fraction
+                                    scaleX = scale
+                                    scaleY = scale
+                                    translationX = (from.left - to.left) * (1f - fraction)
+                                    translationY = (from.top - to.top) * (1f - fraction)
+                                }
+                            }
+                    )
+                    TerminalActionText(
+                        text = if (isSearchOpen && searchQuery.isNotBlank()) {
+                            "[ ${filteredSongs.size} / ${activeSongList.size} tracks ]"
+                        } else {
+                            "[ ${activeSongList.size} tracks ]"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    if (!state.isOnline) {
+                        Text(
+                            text = "[ OFFLINE · LOCAL TRACKS ONLY ]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                }
             }
         }
 
@@ -258,23 +353,20 @@ fun PlaylistDetailScreen(
                                 color = MaterialTheme.colorScheme.secondary,
                                 modifier = Modifier.clickable { showDownloadPrompt = true }
                             )
-                        } else if (plan.serverSongs.isNotEmpty()) {
-                            Text(
-                                text = if (plan.unresolvedTrackCount > 0 || plan.unavailableCount > 0) {
-                                    "! SERVER ENTRIES NEED CHECKING"
-                                } else "✓ OFFLINE · OPTIONS",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = if (plan.unresolvedTrackCount > 0 || plan.unavailableCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary,
-                                modifier = if (plan.unresolvedTrackCount > 0 || plan.unavailableCount > 0) {
-                                    Modifier
-                                } else Modifier.clickable { showDownloadPrompt = true }
-                            )
-                        } else if (plan.unresolvedTrackCount > 0) {
-                            Text("! ENTRIES NEED VERIFYING", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                         } else if (plan.unavailableCount > 0) {
-                            Text("! ${plan.unavailableCount} TRACKS UNAVAILABLE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                            Text(
+                                "! ${plan.unavailableCount} TRACKS UNAVAILABLE",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.clickable { showDownloadPrompt = true }
+                            )
                         } else if (sortedSongs.isNotEmpty()) {
-                            Text("✓ AVAILABLE OFFLINE", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
+                            Text(
+                                text = "✓ AVAILABLE OFFLINE",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.tertiary,
+                                modifier = Modifier.clickable { showDownloadPrompt = true }
+                            )
                         }
                     }
                 }
@@ -337,45 +429,46 @@ fun PlaylistDetailScreen(
             contentType = { _, _ -> "playlist_song_row" }
         ) { index, song ->
             LibrarySongRow(
-                        song = song,
-                        isSelected = song.id in selectedIds,
-                        isCurrentlyPlaying = song.id == currentPlayingSongId,
-                        searchQuery = searchQuery,
-                        onClick = {
-                            selectedSongIds = if (selectedIds.isNotEmpty()) {
-                                toggleSelection(selectedIds, song.id)
-                            } else {
-                                viewModel.playFrom(song, filteredSongs, index)
-                                onOpenPlayer?.invoke()
-                                selectedSongIds
-                            }
-                        },
-                        onLongClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            selectedSongIds = selectedIds + song.id
-                        },
-                        onLike = { viewModel.toggleLike(song) },
-                        onAddToPlaylist = { playlistSong = song },
-                        onPlayNext = { viewModel.playNext(song) },
-                        transferStatus = transferStatuses[song.id],
-                        onUpload = if (
-                            song.providerId == "local" && song.navidromeId.isNullOrBlank() && transferStatuses[song.id] == null
-                        ) {
-                            { viewModel.uploadSong(song) }
-                        } else null,
-                        onDownload = if (song.id in downloadableSongIds && transferStatuses[song.id] == null) {
-                            { viewModel.downloadSong(song) }
-                        } else null,
-                        onRetryTransfer = if (transferStatuses[song.id]?.canRetry == true) {
-                            { viewModel.retryTransfer(song) }
-                        } else null,
-                        onResolveUploadMatch = if (
-                            song.providerId == "local" && song.navidromeId.isNullOrBlank() &&
-                            transferStatuses[song.id]?.state in setOf("SUCCESS", "ALREADY_EXISTS")
-                        ) {
-                            { viewModel.requestUploadMatchResolution(song) }
-                        } else null
-                    )
+                song = song,
+                isSelected = song.id in selectedIds,
+                isCurrentlyPlaying = song.id == currentPlayingSongId,
+                isScrollInProgress = listState.isScrollInProgress,
+                searchQuery = searchQuery,
+                onClick = {
+                    selectedSongIds = if (selectedIds.isNotEmpty()) {
+                        toggleSelection(selectedIds, song.id)
+                    } else {
+                        viewModel.playFrom(song, filteredSongs, index)
+                        onOpenPlayer?.invoke()
+                        selectedSongIds
+                    }
+                },
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        selectedSongIds = selectedIds + song.id
+                    },
+                    onLike = { viewModel.toggleLike(song) },
+                    onAddToPlaylist = { playlistSong = song },
+                    onPlayNext = { viewModel.playNext(song) },
+                    transferStatus = transferStatuses[song.id],
+                    onUpload = if (
+                        song.providerId == "local" && song.navidromeId.isNullOrBlank() && transferStatuses[song.id] == null
+                    ) {
+                        { viewModel.uploadSong(song) }
+                    } else null,
+                    onDownload = if ((song.id in downloadableSongIds || (song.providerId == "navidrome" && song.downloadedUri.isNullOrBlank())) && transferStatuses[song.id] == null) {
+                        { viewModel.downloadSong(song) }
+                    } else null,
+                    onRetryTransfer = if (transferStatuses[song.id]?.canRetry == true) {
+                        { viewModel.retryTransfer(song) }
+                    } else null,
+                    onResolveUploadMatch = if (
+                        song.providerId == "local" && song.navidromeId.isNullOrBlank() &&
+                        transferStatuses[song.id]?.state in setOf("SUCCESS", "ALREADY_EXISTS")
+                    ) {
+                        { viewModel.requestUploadMatchResolution(song) }
+                    } else null
+                )
         }
       }
       if (shouldShowFastScroll(filteredSongs.size)) {
@@ -571,7 +664,6 @@ fun PlaylistDetailScreen(
                                 Text(
                                     when {
                                         plan.downloadableSongs.isNotEmpty() -> "${plan.downloadableSongs.size} tracks are missing offline; ${plan.alreadyOfflineCount} are already available."
-                                        plan.unresolvedTrackCount > 0 -> "${plan.unresolvedTrackCount} playlist entries are not represented in the cache. Refresh while online to confirm them."
                                         plan.unavailableCount > 0 -> "${plan.unavailableCount} tracks have no readable local file or usable server source."
                                         else -> "All available tracks are already offline."
                                     },

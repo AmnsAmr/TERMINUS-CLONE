@@ -34,7 +34,8 @@ data class PlaylistDetailUiState(
     val currentPlaylistId: String? = null,
     val emptyMessage: String = "",
     val songs: List<Song> = emptyList(),
-    val offlineAvailability: PlaylistOfflineAvailability = PlaylistOfflineAvailability.Checking
+    val offlineAvailability: PlaylistOfflineAvailability = PlaylistOfflineAvailability.Checking,
+    val isOnline: Boolean = true
 )
 
 @Immutable
@@ -90,46 +91,60 @@ class PlaylistDetailViewModel @Inject constructor(
             if (resolvedPlaylistId != null) {
                 val cachedSongs = repository.getCachedSongsForPlaylist(resolvedPlaylistId)
                 val name = repository.getPlaylistName(resolvedPlaylistId)
-                val remoteTrackCount = repository.getRemotePlaylistSongCount(resolvedPlaylistId)
                 _uiState.value = PlaylistDetailUiState(
-                    isLoading = cachedSongs.isEmpty() && (remoteTrackCount > 0 || remotePlaylistId != null),
+                    isLoading = cachedSongs.isEmpty(),
                     kind = null,
                     title = name,
                     currentPlaylistId = resolvedPlaylistId,
-                    emptyMessage = when {
-                        remotePlaylistId != null && remoteTrackCount > 0 -> "[ connect to the server to fetch these tracks ]"
-                        remotePlaylistId != null -> "[ this server playlist has no tracks ]"
-                        else -> "[ nothing matched when this was imported ]"
-                    },
+                    emptyMessage = "[ this playlist has no tracks ]",
                     songs = cachedSongs,
                     offlineAvailability = PlaylistOfflineAvailability.Checking
                 )
 
                 if (cachedSongs.isNotEmpty()) {
-                    checkOfflineAvailability(resolvedPlaylistId, cachedSongs, remoteTrackCount)
+                    checkOfflineAvailability(resolvedPlaylistId, cachedSongs, cachedSongs.size)
                 }
                 viewModelScope.launch {
-                    val refreshError = try {
-                        repository.refreshPlaylistSongsFromServer(resolvedPlaylistId)
-                        null
+                    val serverSongs = try {
+                        repository.getServerPlaylistSongs(resolvedPlaylistId)
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
-                    } catch (e: Exception) {
-                        e
+                    } catch (_: Exception) {
+                        null
                     }
-                    val refreshedSongs = repository.getCachedSongsForPlaylist(resolvedPlaylistId)
-                    val refreshedCount = repository.getRemotePlaylistSongCount(resolvedPlaylistId)
+
                     val current = _uiState.value
                     if (current.currentPlaylistId == resolvedPlaylistId) {
-                        _uiState.value = current.copy(
-                            isLoading = false,
-                            songs = refreshedSongs,
-                            errorMessage = if (refreshedSongs.isEmpty() && refreshedCount > 0 && refreshError != null) {
-                                "Could not refresh this playlist: ${refreshError.message ?: "server unavailable"}"
-                            } else null,
-                            offlineAvailability = PlaylistOfflineAvailability.Checking
-                        )
-                        checkOfflineAvailability(resolvedPlaylistId, refreshedSongs, refreshedCount)
+                        if (serverSongs != null && serverSongs.isNotEmpty()) {
+                            val merged = mergeServerAndLocalSongs(cachedSongs, serverSongs)
+                            _uiState.value = current.copy(
+                                isLoading = false,
+                                songs = merged,
+                                isOnline = true,
+                                errorMessage = null
+                            )
+                            checkOfflineAvailability(resolvedPlaylistId, merged, merged.size)
+                        } else if (serverSongs == null) {
+                            val localOnly = cachedSongs.filter { song ->
+                                song.providerId == "local" || !song.downloadedUri.isNullOrBlank()
+                            }
+                            val displaySongs = if (localOnly.isNotEmpty()) localOnly else cachedSongs
+                            _uiState.value = current.copy(
+                                isLoading = false,
+                                songs = displaySongs,
+                                isOnline = false,
+                                errorMessage = null
+                            )
+                            checkOfflineAvailability(resolvedPlaylistId, displaySongs, displaySongs.size)
+                        } else {
+                            _uiState.value = current.copy(
+                                isLoading = false,
+                                songs = cachedSongs,
+                                isOnline = true,
+                                errorMessage = null
+                            )
+                            checkOfflineAvailability(resolvedPlaylistId, cachedSongs, cachedSongs.size)
+                        }
                     }
                 }
             } else {
@@ -197,20 +212,8 @@ class PlaylistDetailViewModel @Inject constructor(
         val songIds = current.songs.map { it.id }
         val requestId = ++offlineCheckRequestId
         _uiState.value = current.copy(offlineAvailability = PlaylistOfflineAvailability.Checking)
-        val expectedCount = try {
-            playlistId?.let { repository.getRemotePlaylistSongCount(it) } ?: current.songs.size
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            if (requestId == offlineCheckRequestId && _uiState.value.currentPlaylistId == playlistId && _uiState.value.songs.map { it.id } == songIds) {
-                _uiState.value = _uiState.value.copy(
-                    offlineAvailability = PlaylistOfflineAvailability.Failed(e.message ?: "Could not check playlist tracks.")
-                )
-            }
-            return@launch
-        }
         if (requestId == offlineCheckRequestId && _uiState.value.currentPlaylistId == playlistId && _uiState.value.songs.map { it.id } == songIds) {
-            checkOfflineAvailability(playlistId, current.songs, expectedCount)
+            checkOfflineAvailability(playlistId, current.songs, current.songs.size)
         }
     }
 
@@ -232,10 +235,7 @@ class PlaylistDetailViewModel @Inject constructor(
             }
             _uiState.value = current.copy(offlineAvailability = PlaylistOfflineAvailability.Checking)
             val refreshedPlan = try {
-                val expectedTrackCount = current.currentPlaylistId
-                    ?.let { repository.getRemotePlaylistSongCount(it) }
-                    ?.coerceAtLeast(current.songs.size)
-                    ?: current.songs.size
+                val expectedTrackCount = current.songs.size
                 repository.getPlaylistDownloadPlan(current.songs, expectedTrackCount)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -255,7 +255,6 @@ class PlaylistDetailViewModel @Inject constructor(
             val songs = if (force) refreshedPlan.serverSongs else refreshedPlan.downloadableSongs
             if (songs.isEmpty()) {
                 _actionMessage.value = when {
-                    refreshedPlan.unresolvedTrackCount > 0 -> "${refreshedPlan.unresolvedTrackCount} playlist entries are not loaded yet; refresh while online before downloading them."
                     refreshedPlan.unavailableCount > 0 -> "No downloadable tracks are available; ${refreshedPlan.unavailableCount} tracks have no local or server source."
                     refreshedPlan.alreadyOfflineCount == current.songs.size && current.songs.isNotEmpty() -> "All tracks in this playlist are already available offline."
                     else -> "No tracks in this playlist are available for download."
@@ -516,6 +515,43 @@ class PlaylistDetailViewModel @Inject constructor(
             _actionMessage.value = "Could not keep local playlist: ${e.message ?: "Unknown error"}"
         }
     }
+}
+
+internal fun mergeServerAndLocalSongs(cachedSongs: List<Song>, serverSongs: List<Song>): List<Song> {
+    val localByNavidromeId = cachedSongs.filter { !it.navidromeId.isNullOrBlank() }
+        .associateBy { it.navidromeId.orEmpty() }
+    val localByRemoteId = cachedSongs.filter { it.providerId == "navidrome" }
+        .associateBy { it.providerRemoteId }
+    val localById = cachedSongs.associateBy { it.id }
+    val localByKey = cachedSongs.associateBy {
+        "${it.title.trim().lowercase()}|${it.artist.trim().lowercase()}"
+    }
+
+    val matchedLocalIds = mutableSetOf<String>()
+
+    val merged = serverSongs.map { serverSong ->
+        val localMatch = localByRemoteId[serverSong.providerRemoteId]
+            ?: localByNavidromeId[serverSong.providerRemoteId]
+            ?: localById[serverSong.id]
+            ?: localByKey["${serverSong.title.trim().lowercase()}|${serverSong.artist.trim().lowercase()}"]
+
+        if (localMatch != null) {
+            matchedLocalIds.add(localMatch.id)
+            serverSong.copy(
+                id = localMatch.id,
+                downloadedUri = localMatch.downloadedUri ?: serverSong.downloadedUri,
+                isLiked = localMatch.isLiked || serverSong.isLiked,
+                artworkUri = serverSong.artworkUri ?: localMatch.artworkUri
+            )
+        } else {
+            serverSong
+        }
+    }.toMutableList()
+
+    val unmatchedLocal = cachedSongs.filter { it.id !in matchedLocalIds }
+    merged.addAll(unmatchedLocal)
+
+    return merged
 }
 
 internal fun parsePlaylistKind(rawArg: String): PlaylistKind? =

@@ -1474,19 +1474,72 @@ class MusicRepository @Inject constructor(
     // ---- Custom playlists ------------------------------------------------
 
     fun observeCustomPlaylists(): Flow<List<Playlist>> =
-        playlistDao.observePlaylists().map { rows ->
+        playlistDao.observePlaylists().combine(playlistDao.observePlaylistTrackArt()) { rows, artEntries ->
+            val artByPlaylist = artEntries.groupBy { it.playlistId }.mapValues { (_, entries) ->
+                entries.map { it.artworkUri?.takeIf { u -> u.isNotBlank() } ?: it.uriString }.distinct().take(4)
+            }
             rows.map { row ->
                 Playlist(
                     id = row.id,
                     name = row.name,
                     songCount = row.songCount,
                     ownerUsername = row.ownerUsername,
-                        isRemote = row.ownership == PlaylistEntity.OWNERSHIP_SERVER,
-                        hasSyncConflict = row.hasSyncConflict,
-                        serverPlaylistMissing = row.serverPlaylistMissing
+                    isRemote = row.ownership == PlaylistEntity.OWNERSHIP_SERVER,
+                    hasSyncConflict = row.hasSyncConflict,
+                    serverPlaylistMissing = row.serverPlaylistMissing,
+                    serverPlaylistId = row.serverPlaylistId,
+                    previewArtworkUris = artByPlaylist[row.id].orEmpty()
                 )
             }
         }
+
+    /** Fetches the live playlist from the Navidrome server for side-by-side comparison without mutating local state. */
+    suspend fun getServerPlaylistSongs(playlistId: String): List<Song> = withContext(Dispatchers.IO) {
+        val serverId = if (playlistId.startsWith(SERVER_PLAYLIST_PREFIX)) {
+            playlistId.removePrefix(SERVER_PLAYLIST_PREFIX)
+        } else {
+            playlistDao.getPlaylist(playlistId)?.serverPlaylistId
+        } ?: return@withContext emptyList()
+
+        val (user, token, salt) = subsonicCredentials()
+        val response = subsonicApi.getPlaylist(serverId, user, token, salt)
+        if (response.response.status != "ok") throw IOException(response.response.error?.message ?: "Could not load playlist from server")
+        val remote = response.response.playlist ?: return@withContext emptyList()
+        val entries = remote.entries.orEmpty()
+        if (entries.isEmpty()) return@withContext emptyList()
+
+        val entryIds = entries.map { it.id }.distinct()
+        val existingSongs = entryIds.chunked(400).flatMap { songDao.getByNavidromeIds(it) }
+        val serverSongsById = existingSongs
+            .filter { it.providerId == "navidrome" }
+            .associateBy { it.providerRemoteId }
+        val localSongsByServerId = existingSongs
+            .filter { it.providerId == "local" && !it.navidromeId.isNullOrBlank() }
+            .groupBy { it.navidromeId.orEmpty() }
+        val likedIds = likedSongDao.observeLikedIds().first().toHashSet()
+
+        entries.map { entry ->
+            val localMatch = localSongsByServerId[entry.id].orEmpty().singleOrNull()
+            val existingServer = serverSongsById[entry.id]
+            val entity = localMatch ?: existingServer ?: SongEntity(
+                remoteId = namespacedSongId("navidrome", entry.id),
+                providerId = "navidrome",
+                providerRemoteId = entry.id,
+                title = entry.title?.takeIf { it.isNotBlank() } ?: entry.id,
+                artist = entry.artist?.takeIf { it.isNotBlank() } ?: "Unknown Artist",
+                album = entry.album?.takeIf { it.isNotBlank() } ?: "Unknown Album",
+                albumId = entry.albumId.orEmpty(),
+                duration = (entry.duration?.toLong() ?: 0L) * 1000L,
+                uriString = "terminus://${entry.id}",
+                dateAdded = System.currentTimeMillis(),
+                trackNumber = entry.track ?: 0,
+                year = entry.year ?: 0,
+                folderPath = entry.path.orEmpty(),
+                sizeBytes = entry.size ?: 0L
+            )
+            entity.toSong(isLiked = entity.remoteId in likedIds)
+        }
+    }
 
     suspend fun getSongsForPlaylist(playlistId: String): List<Song> {
         try {
