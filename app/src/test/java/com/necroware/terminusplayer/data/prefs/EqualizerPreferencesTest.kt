@@ -188,4 +188,72 @@ class EqualizerPreferencesTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun setEqualizerBandUpdatesCustomPresetAndActiveId() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val store = PreferenceDataStoreFactory.create(scope = scope) {
+                temporaryFolder.newFolder().resolve("eq_band_edit.preferences_pb")
+            }
+            val repository = UserPreferencesRepository(store)
+
+            // Select built-in preset first
+            repository.selectEqualizerPreset(PRESET_ID_BASS)
+            var prefs = repository.preferences.first()
+            assertEquals(PRESET_ID_BASS, prefs.equalizer.activePresetId)
+
+            // Edit band 0 to +8 dB
+            repository.setEqualizerBand(0, 8)
+            prefs = repository.preferences.first()
+
+            // activePresetId must automatically switch to Custom
+            assertEquals(PRESET_ID_CUSTOM, prefs.equalizer.activePresetId)
+            assertEquals(8, prefs.equalizer.bandGainsDb[0])
+
+            // Custom preset must reflect the updated band
+            val customPreset = prefs.equalizer.presets.firstOrNull { it.id == PRESET_ID_CUSTOM }
+            assertNotNull(customPreset)
+            assertEquals(8f, customPreset?.gainsDb?.get(0))
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun customPresetTakesPrecedenceWhenDeviceAssignmentExists() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val store = PreferenceDataStoreFactory.create(scope = scope) {
+                temporaryFolder.newFolder().resolve("eq_precedence.preferences_pb")
+            }
+            val repository = UserPreferencesRepository(store)
+
+            val deviceId = "builtin_speaker"
+            // Device has an assigned preset (FLAT)
+            repository.setOutputDevicePresetAssignment(deviceId, PRESET_ID_FLAT)
+
+            // User moves slider to +7 dB on band 1
+            repository.setEqualizerBand(1, 7)
+            val prefs = repository.preferences.first()
+
+            assertEquals(PRESET_ID_CUSTOM, prefs.equalizer.activePresetId)
+            assertEquals(PRESET_ID_FLAT, prefs.equalizer.outputDeviceAssignments[deviceId])
+
+            // Verify precedence policy (matching MusicService logic)
+            val assignedPresetId = prefs.equalizer.outputDeviceAssignments[deviceId]
+            val effectivePreset = if (prefs.equalizer.activePresetId == PRESET_ID_CUSTOM) {
+                prefs.equalizer.presets.firstOrNull { it.id == PRESET_ID_CUSTOM }
+            } else {
+                prefs.equalizer.presets.firstOrNull { it.id == prefs.equalizer.activePresetId }
+                    ?: assignedPresetId?.let { id -> prefs.equalizer.presets.firstOrNull { it.id == id } }
+            }
+
+            assertNotNull(effectivePreset)
+            assertEquals(PRESET_ID_CUSTOM, effectivePreset?.id)
+            assertEquals(7f, effectivePreset?.gainsDb?.get(1))
+        } finally {
+            scope.cancel()
+        }
+    }
 }

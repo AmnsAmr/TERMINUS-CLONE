@@ -48,6 +48,7 @@ import androidx.compose.ui.platform.testTag
 import com.necroware.terminusplayer.ui.TestTags
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -984,6 +985,8 @@ private fun EqualizerSection(
         )
     }
 
+    val isEnabled = equalizer.enabled
+
     TerminalBorder(modifier = Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
             // Header Row
@@ -992,11 +995,23 @@ private fun EqualizerSection(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "5-BAND EQ",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "5-BAND EQ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (!isEnabled) {
+                        Text(
+                            text = "[OFF]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+                        )
+                    }
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1005,11 +1020,14 @@ private fun EqualizerSection(
                         text = "[RESET] ",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.clickable { onReset() }
+                        modifier = Modifier.clickable {
+                            if (!isEnabled) onEnabledChange(true)
+                            onReset()
+                        }
                     )
                     TerminalToggleButton(
-                        checked = equalizer.enabled,
-                        onToggle = { onEnabledChange(!equalizer.enabled) }
+                        checked = isEnabled,
+                        onToggle = { onEnabledChange(!isEnabled) }
                     )
                 }
             }
@@ -1051,7 +1069,10 @@ private fun EqualizerSection(
                                 1.dp,
                                 if (isSelected) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
                             ),
-                            modifier = Modifier.clickable { onSelectPreset(preset.id) }
+                            modifier = Modifier.clickable {
+                                if (!isEnabled) onEnabledChange(true)
+                                onSelectPreset(preset.id)
+                            }
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -1088,7 +1109,10 @@ private fun EqualizerSection(
             }
 
             // 5 Band Sliders
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.graphicsLayer { alpha = if (isEnabled) 1.0f else 0.55f }
+            ) {
                 EQ_BAND_LABELS.forEachIndexed { index, label ->
                     val gainDb = equalizer.bandGainsDb.getOrElse(index) { 0 }
                     Column {
@@ -1109,7 +1133,10 @@ private fun EqualizerSection(
                         }
                         TerminalSlider(
                             value = (gainDb + 12) / 24f,
-                            onValueChange = { fraction -> onBandChange(index, ((fraction * 24f) - 12f).toInt()) },
+                            onValueChange = { fraction ->
+                                if (!isEnabled) onEnabledChange(true)
+                                onBandChange(index, ((fraction * 24f) - 12f).toInt())
+                            },
                             originFraction = 0.5f,
                             modifier = Modifier.padding(top = 4.dp)
                         )

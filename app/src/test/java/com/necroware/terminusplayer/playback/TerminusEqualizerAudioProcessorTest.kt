@@ -80,6 +80,24 @@ class TerminusEqualizerAudioProcessorTest {
         return out
     }
 
+    private fun processShortBuffer(
+        processor: TerminusEqualizerAudioProcessor,
+        samples: ShortArray
+    ): ShortArray {
+        val byteBuffer = ByteBuffer.allocateDirect(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+        for (s in samples) byteBuffer.putShort(s)
+        byteBuffer.flip()
+
+        processor.queueInput(byteBuffer)
+        val output = processor.output
+        output.order(ByteOrder.LITTLE_ENDIAN)
+        val result = ShortArray(output.remaining() / 2)
+        for (i in result.indices) {
+            result[i] = output.short
+        }
+        return result
+    }
+
     private fun processFloatBuffer(
         processor: TerminusEqualizerAudioProcessor,
         samples: FloatArray
@@ -978,5 +996,83 @@ class TerminusEqualizerAudioProcessorTest {
         val firstSample = out.float
         // With -6dB gain, 1.0f is scaled down
         assertTrue("Output should be attenuated, not bit-identical to 1.0f (got $firstSample)", firstSample < 0.99f)
+    }
+
+    @Test
+    fun eachBandGainChangeModifiesOutputWhenEnabled() {
+        val sampleRate = 48000
+        val count = 2400
+        val freqs = TerminusEqualizerAudioProcessor.BAND_FREQUENCIES
+        for (band in 0 until TerminusEqualizerAudioProcessor.BAND_COUNT) {
+            val processor = TerminusEqualizerAudioProcessor()
+            val gains = MutableList(5) { 0f }
+            gains[band] = 6.0f // +6 dB on this specific band
+            processor.setParameters(EqualizerParameters(enabled = true, gainsDb = gains, preampMode = PreampMode.MANUAL, manualPreampDb = 0f))
+            processor.configureAndFlush(AudioProcessor.AudioFormat(sampleRate, 1, C.ENCODING_PCM_FLOAT))
+
+            val inSamples = FloatArray(count) { i -> (0.2f * sin(2.0 * Math.PI * freqs[band] * i / sampleRate)).toFloat() }
+            val outSamples = processFloatBuffer(processor, inSamples)
+
+            var maxIn = 0f
+            var maxOut = 0f
+            for (i in count / 2 until count) {
+                if (abs(inSamples[i]) > maxIn) maxIn = abs(inSamples[i])
+                if (abs(outSamples[i]) > maxOut) maxOut = abs(outSamples[i])
+            }
+            assertTrue("Band $band output should be boosted (in=$maxIn, out=$maxOut)", maxOut > maxIn * 1.4f)
+        }
+    }
+
+    @Test
+    fun disabledEqualizerProducesExactBitIdenticalOutput() {
+        val processor = TerminusEqualizerAudioProcessor()
+        // High boost settings, but master toggle disabled
+        processor.setParameters(EqualizerParameters(enabled = false, gainsDb = listOf(12f, 12f, 12f, 12f, 12f)))
+        processor.configureAndFlush(AudioProcessor.AudioFormat(44100, 2, C.ENCODING_PCM_16BIT))
+
+        val inShorts = ShortArray(1024) { i -> (i * 30).toShort() }
+        val outShorts = processShortBuffer(processor, inShorts)
+        assertArrayEquals("Disabled equalizer must return bit-identical 16-bit PCM", inShorts, outShorts)
+
+        // Also verify float PCM
+        processor.configureAndFlush(AudioProcessor.AudioFormat(44100, 1, C.ENCODING_PCM_FLOAT))
+        val inFloats = FloatArray(512) { i -> (i / 512f) }
+        val outFloats = processFloatBuffer(processor, inFloats)
+        assertArrayEquals("Disabled equalizer must return bit-identical float PCM", inFloats, outFloats, 0.0f)
+    }
+
+    @Test
+    fun zeroGainSettingsProduceExactBitIdenticalOutput() {
+        val processor = TerminusEqualizerAudioProcessor()
+        processor.setParameters(EqualizerParameters(enabled = true, gainsDb = listOf(0f, 0f, 0f, 0f, 0f), preampMode = PreampMode.AUTO))
+        processor.configureAndFlush(AudioProcessor.AudioFormat(48000, 2, C.ENCODING_PCM_16BIT))
+
+        val inShorts = ShortArray(1024) { i -> (sin(i.toDouble()) * 20000.0).toInt().toShort() }
+        val outShorts = processShortBuffer(processor, inShorts)
+        assertArrayEquals("Zero-gain auto-preamp must return bit-identical 16-bit PCM", inShorts, outShorts)
+    }
+
+    @Test
+    fun parameterUpdatesMidStreamTransitionSmoothly() {
+        val sampleRate = 48000
+        val processor = TerminusEqualizerAudioProcessor()
+        processor.setParameters(EqualizerParameters(enabled = true, gainsDb = listOf(0f, 0f, 0f, 0f, 0f)))
+        processor.configureAndFlush(AudioProcessor.AudioFormat(sampleRate, 1, C.ENCODING_PCM_FLOAT))
+
+        // Feed initial block with flat EQ
+        val block1 = FloatArray(1024) { (0.2f * sin(2.0 * Math.PI * 60.0 * it / sampleRate)).toFloat() }
+        val out1 = processFloatBuffer(processor, block1)
+
+        // Switch parameters mid-stream to heavy bass boost
+        processor.setParameters(EqualizerParameters(enabled = true, gainsDb = listOf(12f, 0f, 0f, 0f, 0f)))
+        val block2 = FloatArray(2048) { (0.2f * sin(2.0 * Math.PI * 60.0 * (it + 1024) / sampleRate)).toFloat() }
+        val out2 = processFloatBuffer(processor, block2)
+
+        // Verify no NaNs or Infinities and output is stable
+        for (s in out1 + out2) {
+            assertFalse("Sample must not be NaN", s.isNaN())
+            assertFalse("Sample must not be Infinite", s.isInfinite())
+            assertTrue("Sample must not clip above 1.0f", abs(s) <= 1.0f)
+        }
     }
 }

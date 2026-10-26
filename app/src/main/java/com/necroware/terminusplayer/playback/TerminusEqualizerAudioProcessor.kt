@@ -54,6 +54,7 @@ class EqualizerParameters(
 class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
 
     companion object {
+        private const val TAG = "TerminusEqualizer"
         val BAND_FREQUENCIES = doubleArrayOf(60.0, 230.0, 910.0, 3600.0, 14000.0)
         val BAND_QS = doubleArrayOf(0.8, 1.0, 1.0, 1.0, 0.8)
         const val BAND_COUNT = 5
@@ -137,6 +138,15 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
     // Block smoothing factor
     private var alphaBlock = 0.0
     private var sampleInBlock = 0
+    private var lastFlatSkip: Boolean? = null
+    private var diagnosticBufferCount = 0
+
+    private fun logDebug(msg: String) {
+        try {
+            android.util.Log.i("EQ_DIAG", msg)
+        } catch (_: Throwable) {
+        }
+    }
 
     /**
      * Samples the safety limiter has reshaped since construction. Written only by the audio thread and
@@ -151,6 +161,7 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
      * atomically by the audio thread per queueInput call.
      */
     fun setParameters(p: EqualizerParameters) {
+        logDebug("setParameters: enabled=${p.enabled}, gains=${p.gainsDb}, preampMode=${p.preampMode}, manualPreampDb=${p.manualPreampDb}")
         parameters = p
     }
 
@@ -173,6 +184,8 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
 
         val rate = inputAudioFormat.sampleRate
         val channels = inputAudioFormat.channelCount
+
+        logDebug("onConfigure: sampleRate=$rate, channels=$channels, encoding=$encoding (isFloat=${encoding == C.ENCODING_PCM_FLOAT})")
 
         z1 = Array(channels) { DoubleArray(BAND_COUNT) }
         z2 = Array(channels) { DoubleArray(BAND_COUNT) }
@@ -222,6 +235,7 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
         encoding = C.ENCODING_INVALID
         z1 = Array(1) { DoubleArray(BAND_COUNT) }
         z2 = Array(1) { DoubleArray(BAND_COUNT) }
+        lastFlatSkip = null
     }
 
     private fun clearDelayStates() {
@@ -309,14 +323,23 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
         if (remaining == 0) return
 
         val p = parameters
+        val flatSkip = canFlatSkip(p)
+
+        if (flatSkip != lastFlatSkip) {
+            lastFlatSkip = flatSkip
+            logDebug("[PROC_BYPASS_STATE] flatSkip=$flatSkip, enabled=${p.enabled}, activeGains=${activeGainsDb.contentToString()}, preGainDb=$activePreGainDb")
+        }
 
         // Bit-identical flat-skip bypass
-        if (canFlatSkip(p)) {
+        if (flatSkip) {
             clearDelayStates()
             sampleInBlock = 0
             val outputBuffer = replaceOutputBuffer(remaining)
             outputBuffer.put(inputBuffer)
             outputBuffer.flip()
+            if (diagnosticBufferCount++ % 40 == 0) {
+                logDebug("[PROC_BYPASS] Audio passed bit-identically (flatSkip=true, enabled=${p.enabled}, targetGains=${p.gainsDb}, activeGains=${activeGainsDb.contentToString()}, preGain=$activePreGainDb, targetPreGain=${targetPreGainDb(p)})")
+            }
             return
         }
 
@@ -334,6 +357,11 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
         val targetGains = if (enabled) p.gainsDb else FLAT_GAINS
         val targetPreGainDb = targetPreGainDb(p)
 
+        var sumSqIn = 0.0
+        var sumSqOut = 0.0
+        var peakIn = 0.0
+        var peakOut = 0.0
+
         for (frame in 0 until frameCount) {
             if (sampleInBlock == 0) {
                 advanceBlock(targetGains, targetPreGainDb)
@@ -348,6 +376,11 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
                 } else {
                     inputBuffer.short.toDouble() / 32768.0
                 }
+
+                val inVal = x
+                val absIn = Math.abs(inVal)
+                if (absIn > peakIn) peakIn = absIn
+                sumSqIn += inVal * inVal
 
                 x *= preGainLin
 
@@ -377,6 +410,11 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
                     limiterEngagedSamples++
                 }
 
+                val outVal = x
+                val absOut = Math.abs(outVal)
+                if (absOut > peakOut) peakOut = absOut
+                sumSqOut += outVal * outVal
+
                 if (isFloat) {
                     outputBuffer.putFloat(x.toFloat())
                 } else {
@@ -392,5 +430,16 @@ class TerminusEqualizerAudioProcessor : BaseAudioProcessor() {
         }
 
         outputBuffer.flip()
+
+        if (diagnosticBufferCount++ % 40 == 0) {
+            val totalSamples = frameCount * channels
+            val inRms = Math.sqrt(sumSqIn / totalSamples)
+            val outRms = Math.sqrt(sumSqOut / totalSamples)
+            val ratio = if (inRms > 1e-7) outRms / inRms else 1.0
+            val pcmType = if (isFloat) "FLOAT" else "PCM_16"
+            logDebug("[PROC_AUDIO] type=$pcmType, frames=$frameCount, inRMS=%.4f, outRMS=%.4f, ratio=%.4f, inPeak=%.4f, outPeak=%.4f, enabled=${p.enabled}, gains=${p.gainsDb}".format(
+                inRms, outRms, ratio, peakIn, peakOut
+            ))
+        }
     }
 }

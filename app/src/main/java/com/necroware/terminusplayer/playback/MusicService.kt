@@ -19,6 +19,7 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.necroware.terminusplayer.MainActivity
 import com.necroware.terminusplayer.data.prefs.CrossfadeSettings
+import com.necroware.terminusplayer.data.prefs.PRESET_ID_CUSTOM
 import com.necroware.terminusplayer.data.prefs.UserPreferencesRepository
 import com.necroware.terminusplayer.data.repository.MusicRepository
 import com.necroware.terminusplayer.data.repository.StatsRepository
@@ -84,6 +85,7 @@ class MusicService : MediaSessionService() {
 
     private val analyticsListener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            android.util.Log.i("EQ_DIAG", "[EVENT] onMediaItemTransition: title='${mediaItem?.mediaMetadata?.title}', id='${mediaItem?.mediaId}', reason=$reason")
             flushCurrentTrack(completedAtEnd = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO)
             startTracking(mediaItem?.mediaMetadata, mediaItem?.mediaId)
             if (crossfadeSettings.enabled && reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
@@ -92,12 +94,14 @@ class MusicService : MediaSessionService() {
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
+            android.util.Log.i("EQ_DIAG", "[EVENT] onPlaybackStateChanged: state=$playbackState (1=IDLE, 2=BUFFERING, 3=READY, 4=ENDED)")
             if (playbackState == Player.STATE_ENDED) {
                 flushCurrentTrack(completedAtEnd = true)
             }
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            android.util.Log.i("EQ_DIAG", "[EVENT] onIsPlayingChanged: isPlaying=$isPlaying")
             audioSpectrum.setPlaying(isPlaying)
             activePlayTracker.onIsPlayingChanged(
                 isPlaying = isPlaying,
@@ -122,24 +126,35 @@ class MusicService : MediaSessionService() {
         val mediaSourceFactory = androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this, extractorsFactory)
             .setDataSourceFactory(dataSourceFactory)
 
-        // Same audio sink Media3 builds by default, plus a pass-through tee that feeds the
-        // visualizer spectrum. The tee copies samples unchanged, so output is bit-identical.
+        // In Media3 1.4.0, DefaultAudioSink.configure() omits custom AudioProcessorChain processors
+        // (including equalizerAudioProcessor and TeeAudioProcessor) when float output is enabled and
+        // the track uses high-resolution PCM (24-bit/32-bit FLAC/WAV or float).
+        // Disabling float output on DefaultAudioSink forces Media3's internal ToInt16PcmAudioProcessor
+        // to convert decoded PCM to 16-bit integer format prior to the processor chain, guaranteeing that
+        // our DSP equalizer and spectrum visualizer are always retained in the active playback pipeline.
         val renderersFactory = object : DefaultRenderersFactory(this) {
             override fun buildAudioSink(
                 context: android.content.Context,
                 enableFloatOutput: Boolean,
                 enableAudioTrackPlaybackParams: Boolean
-            ): AudioSink = DefaultAudioSink.Builder(context)
-                .setEnableFloatOutput(enableFloatOutput)
-                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                .setAudioProcessors(arrayOf(equalizerAudioProcessor, TeeAudioProcessor(audioSpectrum)))
-                .build()
+            ): AudioSink {
+                android.util.Log.i(
+                    "EQ_DIAG",
+                    "[INIT] DefaultRenderersFactory.buildAudioSink() CALLED! eqProcessor=${equalizerAudioProcessor.hashCode()}, tee=${audioSpectrum.hashCode()}"
+                )
+                return DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(false)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .setAudioProcessors(arrayOf(equalizerAudioProcessor, TeeAudioProcessor(audioSpectrum)))
+                    .build()
+            }
         }
 
         player = ExoPlayer.Builder(this, renderersFactory)
             .setMediaSourceFactory(mediaSourceFactory)
             .setHandleAudioBecomingNoisy(true)
             .build()
+        android.util.Log.i("EQ_DIAG", "[INIT] ExoPlayer created: hash=${player.hashCode()}")
         
         player.preloadConfiguration = ExoPlayer.PreloadConfiguration(10_000_000L)
         player.addListener(analyticsListener)
@@ -186,20 +201,53 @@ class MusicService : MediaSessionService() {
 
         audioOutputDeviceManager.start()
 
-        serviceScope.launch {
+        mainScope.launch {
             var lastExcludedFolders: Set<String>? = null
+            var lastOutputDeviceId: String? = null
+            var lastAssignedPresetIdForDevice: String? = null
+
             combine(preferencesRepository.preferences, audioOutputDeviceManager.currentOutputDevice) { prefs, device ->
                 prefs to device
             }.collect { (prefs, device) ->
-                val assignedPresetId = prefs.equalizer.outputDeviceAssignments[device.id]
-                val effectivePreset = if (assignedPresetId != null) {
-                    prefs.equalizer.presets.firstOrNull { it.id == assignedPresetId }
+                val currentDeviceId = device.id
+                val assignedPresetId = prefs.equalizer.outputDeviceAssignments[currentDeviceId]
+
+                val isRouteChanged = lastOutputDeviceId != null && lastOutputDeviceId != currentDeviceId
+                val isAssignmentChanged = lastOutputDeviceId == currentDeviceId &&
+                    lastAssignedPresetIdForDevice != assignedPresetId
+
+                if (assignedPresetId != null && (isRouteChanged || isAssignmentChanged)) {
+                    lastOutputDeviceId = currentDeviceId
+                    lastAssignedPresetIdForDevice = assignedPresetId
+                    android.util.Log.d(
+                        "MusicService",
+                        "Device route/assignment changed: auto-selecting assigned preset '$assignedPresetId' for device '${device.displayName}' ($currentDeviceId)"
+                    )
+                    preferencesRepository.selectEqualizerPreset(assignedPresetId)
+                    return@collect
+                }
+                lastOutputDeviceId = currentDeviceId
+                lastAssignedPresetIdForDevice = assignedPresetId
+
+                // Precedence policy:
+                // 1. If activePresetId is PRESET_ID_CUSTOM, manual slider editing takes top precedence.
+                // 2. Otherwise, if the active preset is found in presets, use that active preset.
+                // 3. Fallback to device assignment (if set) or raw band gains.
+                val effectivePreset = if (prefs.equalizer.activePresetId == PRESET_ID_CUSTOM) {
+                    prefs.equalizer.presets.firstOrNull { it.id == PRESET_ID_CUSTOM }
                 } else {
                     prefs.equalizer.presets.firstOrNull { it.id == prefs.equalizer.activePresetId }
+                        ?: assignedPresetId?.let { id -> prefs.equalizer.presets.firstOrNull { it.id == id } }
                 }
 
                 val effectiveGainsDb = effectivePreset?.gainsDb ?: prefs.equalizer.bandGainsDb.map { it.toFloat() }
                 val effectivePresetName = effectivePreset?.name ?: "Custom"
+                val effectivePresetId = effectivePreset?.id ?: prefs.equalizer.activePresetId
+
+                android.util.Log.i(
+                    "EQ_DIAG",
+                    "[FLOW] Preferences updated: enabled=${prefs.equalizer.enabled}, preset=$effectivePresetName ($effectivePresetId), gains=$effectiveGainsDb, device=${device.displayName} ($currentDeviceId), assignedPresetId=$assignedPresetId"
+                )
 
                 equalizerAudioProcessor.setParameters(
                     EqualizerParameters(
@@ -225,16 +273,13 @@ class MusicService : MediaSessionService() {
 
                 if (lastExcludedFolders != prefs.excludedFolders) {
                     lastExcludedFolders = prefs.excludedFolders
-                    val excludedFolders = prefs.excludedFolders
-                    mainScope.launch { removeExcludedLocalItems(excludedFolders) }
+                    removeExcludedLocalItems(prefs.excludedFolders)
                 }
 
                 val crossfadeChanged = crossfadeSettings != prefs.crossfade
                 crossfadeSettings = prefs.crossfade
                 if (crossfadeChanged) {
-                    mainScope.launch {
-                        if (prefs.crossfade.enabled) startFadeTicker() else stopFading()
-                    }
+                    if (prefs.crossfade.enabled) startFadeTicker() else stopFading()
                 }
             }
         }
@@ -269,6 +314,56 @@ class MusicService : MediaSessionService() {
         }
 
         startSavePositionTicker()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action
+        if (action != null && action.startsWith("com.necroware.terminusplayer.TEST_EQ_")) {
+            serviceScope.launch {
+                when (action) {
+                    "com.necroware.terminusplayer.TEST_EQ_PLAY_TONE" -> {
+                        android.util.Log.i("EQ_DIAG", "[TEST_CMD] Playing 60Hz test tone in repeat mode")
+                        withContext(Dispatchers.Main) {
+                            val uri = android.net.Uri.parse("file:///sdcard/Music/test_tone_60hz.wav")
+                            val item = MediaItem.Builder()
+                                .setMediaId("test:60hz")
+                                .setUri(uri)
+                                .setMediaMetadata(
+                                    MediaMetadata.Builder()
+                                        .setTitle("60Hz Diagnostic Tone")
+                                        .setArtist("Terminus Diagnostic")
+                                        .build()
+                                )
+                                .build()
+                            player.setMediaItem(item)
+                            player.repeatMode = Player.REPEAT_MODE_ONE
+                            player.prepare()
+                            player.play()
+                        }
+                    }
+                    "com.necroware.terminusplayer.TEST_EQ_A" -> {
+                        android.util.Log.i("EQ_DIAG", "[TEST_CMD] Executing Config A: EQ Disabled")
+                        preferencesRepository.setEqualizerEnabled(false)
+                    }
+                    "com.necroware.terminusplayer.TEST_EQ_B" -> {
+                        android.util.Log.i("EQ_DIAG", "[TEST_CMD] Executing Config B: EQ Enabled, 0 dB all bands")
+                        preferencesRepository.setEqualizerEnabled(true)
+                        preferencesRepository.setEqualizerBands(listOf(0, 0, 0, 0, 0))
+                    }
+                    "com.necroware.terminusplayer.TEST_EQ_C" -> {
+                        android.util.Log.i("EQ_DIAG", "[TEST_CMD] Executing Config C: EQ Enabled, Band 0 = +12 dB, others = 0 dB")
+                        preferencesRepository.setEqualizerEnabled(true)
+                        preferencesRepository.setEqualizerBands(listOf(12, 0, 0, 0, 0))
+                    }
+                    "com.necroware.terminusplayer.TEST_EQ_D" -> {
+                        android.util.Log.i("EQ_DIAG", "[TEST_CMD] Executing Config D: EQ Enabled, Band 0 = -12 dB, others = 0 dB")
+                        preferencesRepository.setEqualizerEnabled(true)
+                        preferencesRepository.setEqualizerBands(listOf(-12, 0, 0, 0, 0))
+                    }
+                }
+            }
+        }
+        return super.onStartCommand(intent, flags, startId)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
